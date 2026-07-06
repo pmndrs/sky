@@ -1,116 +1,174 @@
-import {
-	Quaternion,
-	SphereGeometry,
-	Vector3
-} from 'three/webgpu';
+import { Quaternion, SphereGeometry, Vector3 } from 'three/webgpu'
 
-const DEFAULT_ORIGIN_NORMAL = new Vector3( 0, 1, 0 );
-const DEFAULT_BEARING_REFERENCE = new Vector3( 0, 0, 1 );
-const LOCAL_UP = new Vector3( 0, 1, 0 );
+const DEFAULT_ORIGIN_NORMAL = new Vector3(0, 1, 0)
+const DEFAULT_BEARING_REFERENCE = new Vector3(0, 0, 1)
+const LOCAL_UP = new Vector3(0, 1, 0)
+
+interface CameraLike {
+  position: Vector3
+}
+
+interface PlanetLookAtTargetOptions {
+  position: Vector3
+  planetCenter: Vector3
+  bottomRadiusM: number
+  distanceM: number
+  bearingReference?: Vector3
+}
+
+interface ClampCameraOptions {
+  camera: CameraLike
+  target?: Vector3 | null
+  planetCenter: Vector3
+  bottomRadiusM: number
+  minAltitudeM: number
+}
+
+interface PlanetSurfaceFrameOptions {
+  planetCenter: Vector3
+  bottomRadiusM: number
+  distanceM: number
+  bearingRad: number
+  altitudeM?: number
+  originNormal?: Vector3
+  bearingReference?: Vector3
+}
+
+interface PlanetSurfacePatchOptions {
+  bottomRadiusM: number
+  patchRadiusM: number
+  patchAltitudeM?: number
+  radialSegments?: number
+  angularSegments?: number
+}
+
+interface PlaceObjectOptions {
+  planetCenter: Vector3
+  bottomRadiusM: number
+  distanceM: number
+  bearingRad: number
+  heightM?: number
+  baseOffsetM?: number
+  originNormal?: Vector3
+  bearingReference?: Vector3
+}
+
+interface PlanetCameraFrame {
+  altitudeM: number
+  up: Vector3
+  positionKm: Vector3
+  viewHeightKm: number
+}
+
+interface PlanetSurfaceFrame {
+  normal: Vector3
+  position: Vector3
+}
+
+interface PlaceableObject {
+  position: Vector3
+  quaternion: Quaternion
+}
 
 /**
  * Altitude above a spherical planet surface in scene metres.
  */
-export function getPlanetAltitudeM( position, planetCenter, bottomRadiusM ) {
-
-	return position.distanceTo( planetCenter ) - bottomRadiusM;
-
+export function getPlanetAltitudeM(position: Vector3, planetCenter: Vector3, bottomRadiusM: number): number {
+  return position.distanceTo(planetCenter) - bottomRadiusM
 }
 
 /**
  * Camera state in the atmosphere frame used by the Hillaire shaders.
  */
-export function getPlanetCameraFrame( position, planetCenter, bottomRadiusM ) {
+export function getPlanetCameraFrame(
+  position: Vector3,
+  planetCenter: Vector3,
+  bottomRadiusM: number,
+): PlanetCameraFrame {
+  const relativeM = position.clone().sub(planetCenter)
+  const radiusM = relativeM.length()
+  const altitudeM = radiusM - bottomRadiusM
+  const up = radiusM > 1e-6 ? relativeM.clone().divideScalar(radiusM) : DEFAULT_ORIGIN_NORMAL.clone()
+  const positionKm = relativeM.multiplyScalar(0.001)
 
-	const relativeM = position.clone().sub( planetCenter );
-	const radiusM = relativeM.length();
-	const altitudeM = radiusM - bottomRadiusM;
-	const up = radiusM > 1e-6 ? relativeM.clone().divideScalar( radiusM ) : DEFAULT_ORIGIN_NORMAL.clone();
-	const positionKm = relativeM.multiplyScalar( 0.001 );
-
-	return {
-		altitudeM,
-		up,
-		positionKm,
-		viewHeightKm: positionKm.length()
-	};
-
+  return {
+    altitudeM,
+    up,
+    positionKm,
+    viewHeightKm: positionKm.length(),
+  }
 }
 
 /**
  * Tangent-facing target far enough away for planet-scale camera controls.
  */
-export function getPlanetLookAtTarget( {
-	position,
-	planetCenter,
-	bottomRadiusM,
-	distanceM,
-	bearingReference = DEFAULT_BEARING_REFERENCE
-} ) {
+export function getPlanetLookAtTarget({
+  position,
+  planetCenter,
+  bottomRadiusM,
+  distanceM,
+  bearingReference = DEFAULT_BEARING_REFERENCE,
+}: PlanetLookAtTargetOptions): Vector3 {
+  const frame = getPlanetCameraFrame(position, planetCenter, bottomRadiusM)
+  let forward = bearingReference.clone().projectOnPlane(frame.up)
+  if (forward.lengthSq() < 1e-10) forward = new Vector3(1, 0, 0).projectOnPlane(frame.up)
+  forward.normalize()
 
-	const frame = getPlanetCameraFrame( position, planetCenter, bottomRadiusM );
-	let forward = bearingReference.clone().projectOnPlane( frame.up );
-	if ( forward.lengthSq() < 1e-10 ) forward = new Vector3( 1, 0, 0 ).projectOnPlane( frame.up );
-	forward.normalize();
-
-	return position.clone().add( forward.multiplyScalar( distanceM ) );
-
+  return position.clone().add(forward.multiplyScalar(distanceM))
 }
 
 /**
  * Keep the camera above the ground shell and move its target by the same offset
  * so the current view direction is preserved.
  */
-export function clampCameraToMinAltitude( {
-	camera,
-	target = null,
-	planetCenter,
-	bottomRadiusM,
-	minAltitudeM
-} ) {
+export function clampCameraToMinAltitude({
+  camera,
+  target = null,
+  planetCenter,
+  bottomRadiusM,
+  minAltitudeM,
+}: ClampCameraOptions): number {
+  const frame = getPlanetCameraFrame(camera.position, planetCenter, bottomRadiusM)
+  if (frame.altitudeM >= minAltitudeM) return frame.altitudeM
 
-	const frame = getPlanetCameraFrame( camera.position, planetCenter, bottomRadiusM );
-	if ( frame.altitudeM >= minAltitudeM ) return frame.altitudeM;
+  const correction = frame.up.multiplyScalar(minAltitudeM - frame.altitudeM)
+  camera.position.add(correction)
+  if (target) target.add(correction)
 
-	const correction = frame.up.multiplyScalar( minAltitudeM - frame.altitudeM );
-	camera.position.add( correction );
-	if ( target ) target.add( correction );
-
-	return minAltitudeM;
-
+  return minAltitudeM
 }
 
 /**
  * Spherical surface point from a distance/bearing around an origin normal.
  * Distances are metres along the surface, not flat X/Z offsets.
  */
-export function getPlanetSurfaceFrame( {
-	planetCenter,
-	bottomRadiusM,
-	distanceM,
-	bearingRad,
-	altitudeM = 0,
-	originNormal = DEFAULT_ORIGIN_NORMAL,
-	bearingReference = DEFAULT_BEARING_REFERENCE
-} ) {
+export function getPlanetSurfaceFrame({
+  planetCenter,
+  bottomRadiusM,
+  distanceM,
+  bearingRad,
+  altitudeM = 0,
+  originNormal = DEFAULT_ORIGIN_NORMAL,
+  bearingReference = DEFAULT_BEARING_REFERENCE,
+}: PlanetSurfaceFrameOptions): PlanetSurfaceFrame {
+  const originUp = originNormal.clone().normalize()
+  let east = bearingReference.clone().cross(originUp)
+  if (east.lengthSq() < 1e-10) east = new Vector3(1, 0, 0).cross(originUp)
+  east.normalize()
 
-	const originUp = originNormal.clone().normalize();
-	let east = bearingReference.clone().cross( originUp );
-	if ( east.lengthSq() < 1e-10 ) east = new Vector3( 1, 0, 0 ).cross( originUp );
-	east.normalize();
+  const north = originUp.clone().cross(east).normalize()
+  const tangent = north
+    .multiplyScalar(Math.cos(bearingRad))
+    .add(east.multiplyScalar(Math.sin(bearingRad)))
+    .normalize()
+  const angularDistance = distanceM / bottomRadiusM
+  const normal = originUp
+    .multiplyScalar(Math.cos(angularDistance))
+    .add(tangent.multiplyScalar(Math.sin(angularDistance)))
+    .normalize()
+  const position = planetCenter.clone().add(normal.clone().multiplyScalar(bottomRadiusM + altitudeM))
 
-	const north = originUp.clone().cross( east ).normalize();
-	const tangent = north.multiplyScalar( Math.cos( bearingRad ) )
-		.add( east.multiplyScalar( Math.sin( bearingRad ) ) )
-		.normalize();
-	const angularDistance = distanceM / bottomRadiusM;
-	const normal = originUp.multiplyScalar( Math.cos( angularDistance ) )
-		.add( tangent.multiplyScalar( Math.sin( angularDistance ) ) )
-		.normalize();
-	const position = planetCenter.clone().add( normal.clone().multiplyScalar( bottomRadiusM + altitudeM ) );
-
-	return { normal, position };
-
+  return { normal, position }
 }
 
 /**
@@ -121,54 +179,53 @@ export function getPlanetSurfaceFrame( {
  * keeps the local visual/collision surface close to the mathematical shell
  * without turning the whole planet into a multi-million-triangle mesh.
  */
-export function createPlanetSurfacePatchGeometry( {
-	bottomRadiusM,
-	patchRadiusM,
-	patchAltitudeM = 0,
-	radialSegments = 96,
-	angularSegments = 192
-} ) {
-
-	const thetaLength = Math.min( Math.PI, patchRadiusM / bottomRadiusM );
-	return new SphereGeometry(
-		bottomRadiusM + patchAltitudeM,
-		angularSegments,
-		radialSegments,
-		0,
-		Math.PI * 2,
-		0,
-		thetaLength
-	);
-
+export function createPlanetSurfacePatchGeometry({
+  bottomRadiusM,
+  patchRadiusM,
+  patchAltitudeM = 0,
+  radialSegments = 96,
+  angularSegments = 192,
+}: PlanetSurfacePatchOptions): SphereGeometry {
+  const thetaLength = Math.min(Math.PI, patchRadiusM / bottomRadiusM)
+  return new SphereGeometry(
+    bottomRadiusM + patchAltitudeM,
+    angularSegments,
+    radialSegments,
+    0,
+    Math.PI * 2,
+    0,
+    thetaLength,
+  )
 }
 
 /**
  * Place an object on the planet shell and align its local +Y to local up.
  */
-export function placeObjectOnPlanetSurface( object, {
-	planetCenter,
-	bottomRadiusM,
-	distanceM,
-	bearingRad,
-	heightM = 0,
-	baseOffsetM = heightM * 0.5,
-	originNormal,
-	bearingReference
-} ) {
+export function placeObjectOnPlanetSurface(
+  object: PlaceableObject,
+  {
+    planetCenter,
+    bottomRadiusM,
+    distanceM,
+    bearingRad,
+    heightM = 0,
+    baseOffsetM = heightM * 0.5,
+    originNormal,
+    bearingReference,
+  }: PlaceObjectOptions,
+): PlanetSurfaceFrame {
+  const frame = getPlanetSurfaceFrame({
+    planetCenter,
+    bottomRadiusM,
+    distanceM,
+    bearingRad,
+    altitudeM: baseOffsetM,
+    originNormal,
+    bearingReference,
+  })
 
-	const frame = getPlanetSurfaceFrame( {
-		planetCenter,
-		bottomRadiusM,
-		distanceM,
-		bearingRad,
-		altitudeM: baseOffsetM,
-		originNormal,
-		bearingReference
-	} );
+  object.position.copy(frame.position)
+  object.quaternion.copy(new Quaternion().setFromUnitVectors(LOCAL_UP, frame.normal))
 
-	object.position.copy( frame.position );
-	object.quaternion.copy( new Quaternion().setFromUnitVectors( LOCAL_UP, frame.normal ) );
-
-	return frame;
-
+  return frame
 }

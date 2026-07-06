@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>04 — Live SebH-core sky (Mode B)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      Mode B — live SkyAtmosphereMesh in main scene + AP haze.<br />
+      Sky updates per-frame from current camera; cube re-bake only on sun change (IBL).
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { pass, uniform } from 'three/tsl'
+
+      import { SkyAtmosphereBaker } from '@sky/sky/SkyAtmosphereBaker'
+      import { createHazeOutputNode } from '@sky/sky/HazePostProcess'
+      import { createStartGate, logStage } from '@sky/demo/startGate'
+
+      const debugMode = new URLSearchParams(window.location.search).get('debug')
+
+      const gate = createStartGate({
+        label: 'Start Mode B demo',
+        stages: [
+          'create WebGPU renderer',
+          'renderer.init()',
+          'baker (LUTs + cube + AP)',
+          'build main scene with live sky',
+          'set up haze post-process',
+          'render loop',
+        ],
+      })
+
+      gate.run(async ({ markStage }) => {
+        markStage(0, 'running')
+        const renderer = new THREE.WebGPURenderer({ antialias: false })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = 0.5
+        renderer.inspector = new Inspector()
+        document.body.appendChild(renderer.domElement)
+        markStage(1, 'running')
+
+        await logStage('renderer.init()', () => renderer.init())
+        markStage(2, 'running')
+
+        // Far plane large enough to enclose the planet sphere when viewed
+        // from altitude. Earth radius ≈ 6.36 Mm so 20 Mm is comfortable.
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 20_000_000)
+        camera.position.set(0, 200, 0)
+        camera.lookAt(0, 200, 1000)
+
+        const baker = await logStage('SkyAtmosphereBaker', async () => {
+          const b = new SkyAtmosphereBaker(renderer, { cubeSize: 256, enableAerialPerspective: true })
+          b.setSun({ elevation: 8, azimuth: 0 })
+          b.setCamera(camera)
+          b.update()
+          await b.updateAerialPerspective()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return b
+        })
+        markStage(3, 'running')
+
+        const scene = new THREE.Scene()
+
+        // Mode B — add the live sky mesh directly into the main scene.
+        // Sky-View LUT is sampled per-pixel against the current camera; sun
+        // disc is visible (cube bake still hides it during its temporary
+        // pass). No `scene.background = baker.texture` here.
+        const skyMesh = baker.createSkyMesh()
+        scene.add(skyMesh)
+
+        // IBL still flows from the cube bake → PMREM, refreshed only on
+        // sun / atmosphere change.
+        scene.environment = baker.environmentTexture
+
+        // Planet sphere instead of a flat plane — locally indistinguishable
+        // from a flat plane (curvature radius is enormous), but from
+        // altitude shows correct planetary curvature instead of a
+        // hard-edged tile cutoff. Centred at (0, -bottomRadius_m, 0)
+        // so the surface sits at y = 0, matching `cameraAltitude` =
+        // camera.position.y. Same coordinate convention as before.
+        const bottomRadiusM = baker.atmosphereParams.bottomRadius * 1000
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x6a6055, roughness: 0.95, metalness: 0.0 })
+        const ground = new THREE.Mesh(new THREE.SphereGeometry(bottomRadiusM, 128, 64), groundMat)
+        ground.position.y = -bottomRadiusM
+        scene.add(ground)
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 4.0)
+        scene.add(sunLight)
+
+        const sunVec = new THREE.Vector3()
+        const updateSunLight = () => {
+          sunVec.copy(baker._sunVec).multiplyScalar(50000)
+          sunLight.position.copy(sunVec)
+          sunLight.target.position.set(0, 0, 0)
+        }
+        updateSunLight()
+
+        const mountainGeom = new THREE.ConeGeometry(1, 1, 12)
+        const mountainMat = new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 0.9 })
+        for (let i = 1; i <= 12; i++) {
+          const dist = i * 2000
+          const angle = ((i % 4) - 1.5) * 0.4
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 400 + Math.random() * 400
+          m.scale.set(600, h, 600)
+          m.position.set(Math.sin(angle) * dist, h / 2, Math.cos(angle) * dist)
+          scene.add(m)
+        }
+        for (let i = 0; i < 6; i++) {
+          const dist = 30000 + i * 8000
+          const angle = (i - 2.5) * 0.15
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 1500
+          m.scale.set(1500, h, 1500)
+          m.position.set(Math.sin(angle) * dist, h / 2, Math.cos(angle) * dist)
+          scene.add(m)
+        }
+
+        const controls = new OrbitControls(camera, renderer.domElement)
+        controls.target.set(0, 200, 1000)
+        controls.enableDamping = true
+        controls.minDistance = 10
+        controls.maxDistance = 50000
+
+        markStage(4, 'running')
+
+        const scenePass = pass(scene, camera)
+        const luminanceScaleU = baker.sky.luminanceScale
+        const invProjU = uniform(camera.projectionMatrixInverse.clone())
+        const hazeStrengthU = uniform(1.0)
+
+        const renderPipeline = new THREE.RenderPipeline(renderer)
+        renderPipeline.outputNode = createHazeOutputNode({
+          scenePass,
+          aerialPerspectiveTexture: baker.aerialPerspectiveTexture,
+          luminanceScale: luminanceScaleU,
+          invProjUniform: invProjU,
+          hazeStrength: hazeStrengthU,
+          debugMode,
+        })
+
+        const gui = renderer.inspector.createParameters('Atmosphere')
+        const eff = {
+          sunElevation: 8,
+          sunAzimuth: 0,
+          cameraAltitude: 200,
+          exposure: 0.5,
+          hazeStrength: 1.0,
+          hazeOn: true,
+        }
+        gui.add(eff, 'sunElevation', -5, 90, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        gui.add(eff, 'sunAzimuth', -180, 180, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        gui.add(eff, 'cameraAltitude', 1, 500000, 1).onChange(() => {
+          const dy = eff.cameraAltitude - camera.position.y
+          camera.position.y = eff.cameraAltitude
+          controls.target.y += dy
+          controls.update()
+        })
+        gui.add(eff, 'exposure', 0, 2, 0.01).onChange(() => {
+          renderer.toneMappingExposure = eff.exposure
+        })
+        gui.add(eff, 'hazeStrength', 0, 3, 0.01).onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+        gui.add(eff, 'hazeOn').onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+
+        window.addEventListener('resize', () => {
+          camera.aspect = window.innerWidth / window.innerHeight
+          camera.updateProjectionMatrix()
+          renderer.setSize(window.innerWidth, window.innerHeight)
+        })
+
+        markStage(5, 'running')
+
+        renderer.setAnimationLoop(async () => {
+          controls.update()
+
+          baker.setCamera(camera)
+          invProjU.value.copy(camera.projectionMatrixInverse)
+
+          try {
+            baker.update()
+          } catch (err) {
+            console.error('[animate] baker.update() failed:', err)
+            renderer.setAnimationLoop(null)
+            return
+          }
+
+          await baker.updateAerialPerspective()
+
+          if (scene.environment !== baker.environmentTexture) {
+            scene.environment = baker.environmentTexture
+          }
+
+          await renderPipeline.renderAsync()
+        })
+      })
+    </script>
+  </body>
+</html>

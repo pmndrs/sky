@@ -1,32 +1,43 @@
 import {
-	RenderTarget,
-	HalfFloatType,
-	LinearFilter,
-	ClampToEdgeWrapping,
-	NodeMaterial,
-	QuadMesh,
-	RendererUtils
-} from 'three/webgpu';
-import {
-	Fn,
-	uv,
-	vec3,
-	vec4,
-	float,
-	exp,
-	sqrt,
-	max
-} from 'three/tsl';
+  RenderTarget,
+  HalfFloatType,
+  LinearFilter,
+  ClampToEdgeWrapping,
+  NodeMaterial,
+  QuadMesh,
+  RendererUtils,
+} from 'three/webgpu'
+import { Fn, uv, vec3, vec4, float, exp, sqrt, max } from 'three/tsl'
 
 import {
-	computeScatteringAbsorption,
-	raySphereIntersectNearest,
-	uvToTransmittanceLutParams
-} from '../shaders/atmosphere.tsl.js';
-import { LUT_RESOLUTIONS } from './resolutions.js';
+  computeScatteringAbsorption,
+  raySphereIntersectNearest,
+  uvToTransmittanceLutParams,
+} from '../../backends/tsl/atmosphere.tsl'
+import { transmittanceLutColorNode } from '../../backends/wgsl/luts'
+import { LUT_RESOLUTIONS } from '../../core/resolutions'
 
-const _quadMesh = /*@__PURE__*/ new QuadMesh();
-let _rendererState;
+const _quadMesh = /*@__PURE__*/ new QuadMesh()
+let _rendererState: any
+
+interface Resolution2D {
+  width: number
+  height: number
+}
+
+/**
+ * Shader-authoring backend. `'auto'` (default) picks WGSL on the WebGPU backend
+ * and TSL on WebGL. `'tsl'` / `'wgsl'` force one — used by the parity harness
+ * and the `?core=` example convention. Forcing `'tsl'` on WebGPU is valid (TSL
+ * transpiles to WGSL); that's exactly how parity is measured.
+ */
+type ShaderBackend = 'auto' | 'tsl' | 'wgsl'
+
+interface TransmittanceLUTOptions {
+  resolution?: Resolution2D
+  atmosphereUniforms?: any
+  backend?: ShaderBackend
+}
 
 /**
  * Bruneton / Hillaire Transmittance LUT.
@@ -42,127 +53,132 @@ let _rendererState;
  * accumulation — no in-scattered luminance, no transmittance-to-sun sample).
  */
 export class TransmittanceLUT {
+  renderer: any
+  resolution: Resolution2D
+  atmosphereUniforms: any
+  backend: ShaderBackend
+  renderTarget: RenderTarget
+  material: any
 
-	constructor( renderer, { resolution = LUT_RESOLUTIONS.transmittance, atmosphereUniforms } = {} ) {
+  constructor(
+    renderer: any,
+    { resolution = LUT_RESOLUTIONS.transmittance, atmosphereUniforms, backend = 'auto' }: TransmittanceLUTOptions = {},
+  ) {
+    if (!atmosphereUniforms) throw new Error('TransmittanceLUT: atmosphereUniforms is required')
 
-		if ( ! atmosphereUniforms ) throw new Error( 'TransmittanceLUT: atmosphereUniforms is required' );
+    this.renderer = renderer
+    this.resolution = { ...resolution }
+    this.atmosphereUniforms = atmosphereUniforms
+    this.backend = backend
 
-		this.renderer = renderer;
-		this.resolution = { ...resolution };
-		this.atmosphereUniforms = atmosphereUniforms;
+    this.renderTarget = new RenderTarget(resolution.width, resolution.height, {
+      type: HalfFloatType,
+      minFilter: LinearFilter,
+      magFilter: LinearFilter,
+      wrapS: ClampToEdgeWrapping,
+      wrapT: ClampToEdgeWrapping,
+      generateMipmaps: false,
+      depthBuffer: false,
+    })
+    this.renderTarget.texture.name = 'TransmittanceLUT'
 
-		this.renderTarget = new RenderTarget( resolution.width, resolution.height, {
-			type: HalfFloatType,
-			minFilter: LinearFilter,
-			magFilter: LinearFilter,
-			wrapS: ClampToEdgeWrapping,
-			wrapT: ClampToEdgeWrapping,
-			generateMipmaps: false,
-			depthBuffer: false
-		} );
-		this.renderTarget.texture.name = 'TransmittanceLUT';
+    this.material = new NodeMaterial()
+    this.material.name = 'TransmittanceLUT'
+    this.material.colorNode = this._buildColorNode()
+  }
 
-		this.material = new NodeMaterial();
-		this.material.name = 'TransmittanceLUT';
-		this.material.colorNode = this._buildColorNode();
+  get texture() {
+    return this.renderTarget.texture
+  }
 
-	}
+  _buildColorNode() {
+    const params = this.atmosphereUniforms
 
-	get texture() {
+    // Backend selection (WGSL_CORE_PLAN.md, seam 1). On the WebGPU backend the
+    // whole LUT pixel runs the shared WGSL core (real for-loop, no .toVar()
+    // unroll). WebGL keeps the TSL authoring below as the fallback. Both are
+    // numerically identical — verified by examples/parity/10-transmittance-lut.
+    const isWebGPU = (this.renderer as any).backend?.isWebGPUBackend === true
+    const useWGSL = this.backend === 'wgsl' || (this.backend === 'auto' && isWebGPU)
+    if (useWGSL) {
+      return vec4(transmittanceLutColorNode(uv(), params), float(1.0))
+    }
 
-		return this.renderTarget.texture;
+    const SAMPLE_COUNT = 40
+    const SAMPLE_SEGMENT_T = 0.3 // Matches Hillaire: mid-segment offset for accuracy
 
-	}
+    return Fn(() => {
+      const lutUv = uv()
+      const { viewHeight, viewZenithCosAngle } = uvToTransmittanceLutParams(lutUv, params)
 
-	_buildColorNode() {
+      // World position lies on +Y, ray in YZ-plane (matches Hillaire's layout —
+      // he uses +Z up but the math is identical; we keep Y up to align with the
+      // rest of the three.js scene conventions).
+      const worldPos = vec3(float(0.0), viewHeight, float(0.0))
+      const sinZ = sqrt(max(float(0.0), float(1.0).sub(viewZenithCosAngle.mul(viewZenithCosAngle))))
+      const worldDir = vec3(sinZ, viewZenithCosAngle, float(0.0))
 
-		const params = this.atmosphereUniforms;
-		const SAMPLE_COUNT = 40;
-		const SAMPLE_SEGMENT_T = 0.3; // Matches Hillaire: mid-segment offset for accuracy
+      const earthO = vec3(0.0, 0.0, 0.0)
 
-		return Fn( () => {
+      // Distance to atmosphere boundary (top sphere) and, if we'd hit the
+      // ground first, stop there instead. Mirrors the opening of
+      // IntegrateScatteredLuminance.
+      const tBottom = raySphereIntersectNearest(worldPos, worldDir, earthO, params.bottomRadius)
+      const tTop = raySphereIntersectNearest(worldPos, worldDir, earthO, params.topRadius)
 
-			const lutUv = uv();
-			const { viewHeight, viewZenithCosAngle } = uvToTransmittanceLutParams( lutUv, params );
+      // tMax: 0 if miss-miss; else min of the two positive hits (ground shortcut
+      // when pointing down); else just tTop.
+      const tMaxIfNoBottom = tTop.lessThan(0.0).select(float(0.0), tTop)
+      const tMaxIfBoth = tTop.greaterThan(0.0).select(tTop.min(tBottom), tBottom)
+      const tMax = tBottom.lessThan(0.0).select(tMaxIfNoBottom, tMaxIfBoth).toVar()
 
-			// World position lies on +Y, ray in YZ-plane (matches Hillaire's layout —
-			// he uses +Z up but the math is identical; we keep Y up to align with the
-			// rest of the three.js scene conventions).
-			const worldPos = vec3( float( 0.0 ), viewHeight, float( 0.0 ) );
-			const sinZ = sqrt( max( float( 0.0 ), float( 1.0 ).sub( viewZenithCosAngle.mul( viewZenithCosAngle ) ) ) );
-			const worldDir = vec3( sinZ, viewZenithCosAngle, float( 0.0 ) );
+      const opticalDepth = vec3(0.0, 0.0, 0.0).toVar()
+      const tPrev = float(0.0).toVar()
+      const tCur = float(0.0).toVar()
 
-			const earthO = vec3( 0.0, 0.0, 0.0 );
+      // Hillaire's fixed-step integrator with mid-step (SampleSegmentT = 0.3):
+      //     t = tMax * (s + 0.3) / SampleCount
+      //     dt = t - tPrev
+      //     opticalDepth += extinction(P) * dt
+      // Unrolled at shader build time since SAMPLE_COUNT is a JS constant.
+      for (let s = 0; s < SAMPLE_COUNT; s++) {
+        const newT = tMax.mul(float(s + SAMPLE_SEGMENT_T).div(float(SAMPLE_COUNT)))
+        const dt = newT.sub(tPrev)
+        tCur.assign(newT)
 
-			// Distance to atmosphere boundary (top sphere) and, if we'd hit the
-			// ground first, stop there instead. Mirrors the opening of
-			// IntegrateScatteredLuminance.
-			const tBottom = raySphereIntersectNearest( worldPos, worldDir, earthO, params.bottomRadius );
-			const tTop = raySphereIntersectNearest( worldPos, worldDir, earthO, params.topRadius );
+        const P = worldPos.add(worldDir.mul(tCur))
+        const height = P.length().sub(params.bottomRadius)
 
-			// tMax: 0 if miss-miss; else min of the two positive hits (ground shortcut
-			// when pointing down); else just tTop.
-			const tMaxIfNoBottom = tTop.lessThan( 0.0 ).select( float( 0.0 ), tTop );
-			const tMaxIfBoth = tTop.greaterThan( 0.0 ).select( tTop.min( tBottom ), tBottom );
-			const tMax = tBottom.lessThan( 0.0 ).select( tMaxIfNoBottom, tMaxIfBoth ).toVar();
+        const medium = computeScatteringAbsorption(height, params)
+        opticalDepth.addAssign(medium.extinction.mul(dt))
 
-			const opticalDepth = vec3( 0.0, 0.0, 0.0 ).toVar();
-			const tPrev = float( 0.0 ).toVar();
-			const tCur = float( 0.0 ).toVar();
+        tPrev.assign(newT)
+      }
 
-			// Hillaire's fixed-step integrator with mid-step (SampleSegmentT = 0.3):
-			//     t = tMax * (s + 0.3) / SampleCount
-			//     dt = t - tPrev
-			//     opticalDepth += extinction(P) * dt
-			// Unrolled at shader build time since SAMPLE_COUNT is a JS constant.
-			for ( let s = 0; s < SAMPLE_COUNT; s ++ ) {
+      const transmittance = exp(opticalDepth.negate())
+      return vec4(transmittance, float(1.0))
+    })()
+  }
 
-				const newT = tMax.mul( float( s + SAMPLE_SEGMENT_T ).div( float( SAMPLE_COUNT ) ) );
-				const dt = newT.sub( tPrev );
-				tCur.assign( newT );
+  /**
+   * Execute the fragment pass into the render target. Cheap to call repeatedly —
+   * the atmosphere uniforms are bound by reference, so each call uses whatever
+   * is currently in `atmosphereUniforms`.
+   */
+  render() {
+    const renderer = this.renderer
+    _rendererState = RendererUtils.resetRendererState(renderer, _rendererState)
 
-				const P = worldPos.add( worldDir.mul( tCur ) );
-				const height = P.length().sub( params.bottomRadius );
+    renderer.setRenderTarget(this.renderTarget)
+    _quadMesh.material = this.material
+    _quadMesh.name = 'TransmittanceLUT'
+    _quadMesh.render(renderer)
 
-				const medium = computeScatteringAbsorption( height, params );
-				opticalDepth.addAssign( medium.extinction.mul( dt ) );
+    RendererUtils.restoreRendererState(renderer, _rendererState)
+  }
 
-				tPrev.assign( newT );
-
-			}
-
-			const transmittance = exp( opticalDepth.negate() );
-			return vec4( transmittance, float( 1.0 ) );
-
-		} )();
-
-	}
-
-	/**
-	 * Execute the fragment pass into the render target. Cheap to call repeatedly —
-	 * the atmosphere uniforms are bound by reference, so each call uses whatever
-	 * is currently in `atmosphereUniforms`.
-	 */
-	render() {
-
-		const renderer = this.renderer;
-		_rendererState = RendererUtils.resetRendererState( renderer, _rendererState );
-
-		renderer.setRenderTarget( this.renderTarget );
-		_quadMesh.material = this.material;
-		_quadMesh.name = 'TransmittanceLUT';
-		_quadMesh.render( renderer );
-
-		RendererUtils.restoreRendererState( renderer, _rendererState );
-
-	}
-
-	dispose() {
-
-		this.renderTarget.dispose();
-		this.material.dispose();
-
-	}
-
+  dispose() {
+    this.renderTarget.dispose()
+    this.material.dispose()
+  }
 }
-

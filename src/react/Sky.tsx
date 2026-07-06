@@ -1,8 +1,32 @@
-import { useEffect, useMemo } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import type { ReactNode } from 'react'
+import { useEffect, useMemo } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
 
-import { Sky as VanillaSky } from '../Sky.js';
-import { SkyContext } from './SkyContext.js';
+import { Sky as VanillaSky } from '../Sky'
+import { SkyContext } from './SkyContext'
+
+export interface SkyProps {
+  preset?: string
+  quality?: string
+  cubeSize?: number
+  atmosphere?: any
+  enableAerialPerspective?: boolean
+  apKmPerSlice?: number
+  mirrorBelowHorizon?: boolean
+  exposure?: number
+  north?: any
+  sunDisc?: boolean
+  timeOfDay?: number
+  latitude?: number
+  dayOfYear?: number
+  sunDirection?: any
+  turbidity?: number
+  groundAlbedo?: any
+  hazeStrength?: number
+  hazePolicy?: any
+  hazeAltitudeBlend?: any
+  children?: ReactNode
+}
 
 /**
  * `<Sky>` — mounts a vanilla `Sky` instance against the active R3F renderer
@@ -26,163 +50,122 @@ import { SkyContext } from './SkyContext.js';
  * `<AutoHaze />` and call `sky.applyHaze` from your own
  * `useRenderPipeline` callback (use `useSky()` to grab the instance).
  */
-export function Sky( {
-	preset = 'earth',
-	quality = 'medium',
-	cubeSize = 256,
-	atmosphere,
-	enableAerialPerspective = true,
-	apKmPerSlice = 8.0,
-	mirrorBelowHorizon = false,
-	exposure = 40,
-	north = '+Z',
-	sunDisc = true,
-	timeOfDay,
-	latitude,
-	dayOfYear,
-	sunDirection,
-	turbidity,
-	groundAlbedo,
-	hazeStrength,
-	hazePolicy,
-	hazeAltitudeBlend,
-	children
-} ) {
+export function Sky({
+  preset = 'earth',
+  quality = 'medium',
+  cubeSize = 256,
+  atmosphere,
+  enableAerialPerspective = true,
+  apKmPerSlice = 8.0,
+  mirrorBelowHorizon = false,
+  exposure = 40,
+  north = '+Z',
+  sunDisc = true,
+  timeOfDay,
+  latitude,
+  dayOfYear,
+  sunDirection,
+  turbidity,
+  groundAlbedo,
+  hazeStrength,
+  hazePolicy,
+  hazeAltitudeBlend,
+  children,
+}: SkyProps) {
+  const renderer = useThree((s) => s.gl)
+  const scene = useThree((s) => s.scene)
 
-	const renderer = useThree( ( s ) => s.gl );
-	const scene = useThree( ( s ) => s.scene );
+  const sky = useMemo(() => {
+    return new VanillaSky(renderer, {
+      preset,
+      quality,
+      cubeSize,
+      atmosphere,
+      enableAerialPerspective,
+      apKmPerSlice,
+      mirrorBelowHorizon,
+      exposure,
+      north,
+      sunDisc,
+      timeOfDay,
+      latitude,
+      dayOfYear,
+      sunDirection,
+      turbidity,
+      groundAlbedo,
+    })
 
-	const sky = useMemo( () => {
+    // Reconstruct only on options that affect LUT layout / cube target sizing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderer, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice])
 
-		return new VanillaSky( renderer, {
-			preset,
-			quality,
-			cubeSize,
-			atmosphere,
-			enableAerialPerspective,
-			apKmPerSlice,
-			mirrorBelowHorizon,
-			exposure,
-			north,
-			sunDisc,
-			timeOfDay,
-			latitude,
-			dayOfYear,
-			sunDirection,
-			turbidity,
-			groundAlbedo
-		} );
+  useEffect(() => {
+    sky.attach(scene)
+    return () => {
+      sky.detach()
+      sky.dispose()
+    }
+  }, [sky, scene])
 
-		// Reconstruct only on options that affect LUT layout / cube target sizing.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [ renderer, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice ] );
+  useEffect(() => {
+    if (typeof timeOfDay === 'number') sky.setTimeOfDay(timeOfDay)
+  }, [sky, timeOfDay])
 
-	useEffect( () => {
+  useEffect(() => {
+    if (typeof latitude === 'number') sky.setLatitude(latitude)
+  }, [sky, latitude])
 
-		sky.attach( scene );
-		return () => {
+  useEffect(() => {
+    if (typeof dayOfYear === 'number') sky.setDayOfYear(dayOfYear)
+  }, [sky, dayOfYear])
 
-			sky.detach();
-			sky.dispose();
+  useEffect(() => {
+    if (sunDirection) sky.setSunDirection(sunDirection)
+  }, [sky, sunDirection])
 
-		};
+  useEffect(() => {
+    sky.setExposure(exposure)
+  }, [sky, exposure])
 
-	}, [ sky, scene ] );
+  useEffect(() => {
+    sky.setSunDisc(sunDisc)
+  }, [sky, sunDisc])
 
-	useEffect( () => {
+  useEffect(() => {
+    sky.setNorth(north)
+  }, [sky, north])
 
-		if ( typeof timeOfDay === 'number' ) sky.setTimeOfDay( timeOfDay );
+  useEffect(() => {
+    if (typeof turbidity === 'number') sky.setTurbidity(turbidity)
+  }, [sky, turbidity])
 
-	}, [ sky, timeOfDay ] );
+  useEffect(() => {
+    if (groundAlbedo != null) sky.setGroundAlbedo(groundAlbedo)
+  }, [sky, groundAlbedo])
 
-	useEffect( () => {
+  useEffect(() => {
+    if (atmosphere) sky.setAtmosphere(atmosphere)
+  }, [sky, atmosphere])
 
-		if ( typeof latitude === 'number' ) sky.setLatitude( latitude );
+  useEffect(() => {
+    sky.setMirrorBelowHorizon(!!mirrorBelowHorizon)
+  }, [sky, mirrorBelowHorizon])
 
-	}, [ sky, latitude ] );
+  useEffect(() => {
+    if (typeof hazeStrength === 'number') sky.setHazeStrength(hazeStrength)
+  }, [sky, hazeStrength])
 
-	useEffect( () => {
+  useEffect(() => {
+    if (hazePolicy) sky.setHazePolicy(hazePolicy)
+  }, [sky, hazePolicy])
 
-		if ( typeof dayOfYear === 'number' ) sky.setDayOfYear( dayOfYear );
+  useEffect(() => {
+    if (hazeAltitudeBlend) sky.setHazeAltitudeBlend(hazeAltitudeBlend)
+  }, [sky, hazeAltitudeBlend])
 
-	}, [ sky, dayOfYear ] );
+  useFrame((state) => {
+    sky.update(state.camera)
+  })
 
-	useEffect( () => {
-
-		if ( sunDirection ) sky.setSunDirection( sunDirection );
-
-	}, [ sky, sunDirection ] );
-
-	useEffect( () => {
-
-		sky.setExposure( exposure );
-
-	}, [ sky, exposure ] );
-
-	useEffect( () => {
-
-		sky.setSunDisc( sunDisc );
-
-	}, [ sky, sunDisc ] );
-
-	useEffect( () => {
-
-		sky.setNorth( north );
-
-	}, [ sky, north ] );
-
-	useEffect( () => {
-
-		if ( typeof turbidity === 'number' ) sky.setTurbidity( turbidity );
-
-	}, [ sky, turbidity ] );
-
-	useEffect( () => {
-
-		if ( groundAlbedo != null ) sky.setGroundAlbedo( groundAlbedo );
-
-	}, [ sky, groundAlbedo ] );
-
-	useEffect( () => {
-
-		if ( atmosphere ) sky.setAtmosphere( atmosphere );
-
-	}, [ sky, atmosphere ] );
-
-	useEffect( () => {
-
-		sky.setMirrorBelowHorizon( !! mirrorBelowHorizon );
-
-	}, [ sky, mirrorBelowHorizon ] );
-
-	useEffect( () => {
-
-		if ( typeof hazeStrength === 'number' ) sky.setHazeStrength( hazeStrength );
-
-	}, [ sky, hazeStrength ] );
-
-	useEffect( () => {
-
-		if ( hazePolicy ) sky.setHazePolicy( hazePolicy );
-
-	}, [ sky, hazePolicy ] );
-
-	useEffect( () => {
-
-		if ( hazeAltitudeBlend ) sky.setHazeAltitudeBlend( hazeAltitudeBlend );
-
-	}, [ sky, hazeAltitudeBlend ] );
-
-	useFrame( ( state ) => {
-
-		sky.update( state.camera );
-
-	} );
-
-	return (
-		<SkyContext.Provider value={sky}>
-			{children}
-		</SkyContext.Provider>
-	);
-
+  return <SkyContext.Provider value={sky}>{children}</SkyContext.Provider>
 }

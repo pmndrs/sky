@@ -1,0 +1,25 @@
+{
+  "name": "@pmndrs/sky-example-react",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@pmndrs/sky": "workspace:*",
+    "@react-three/fiber": "^10.0.0-alpha.2",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "three": "0.184.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.8",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.0"
+  }
+}

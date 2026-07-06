@@ -1,11 +1,12 @@
-//* Dependencies ==============================
+# Dependencies
 node_modules/
 
-//* Build Output ==============================
+# Build output
 dist/
 coverage/
+*.tsbuildinfo
 
-//* Logs =====================================
+# Logs
 logs/
 *.log
 npm-debug.log*
@@ -13,17 +14,16 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-//* Environment Files ========================
+# Environment files
 .env
 .env.*
 !.env.example
 
-//* OS / Editor Files ========================
+# OS / editor files
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
 
-//* TypeScript ===============================
-*.tsbuildinfo
+# Local resources (not distributed)
 resources/egsr2020.pdf

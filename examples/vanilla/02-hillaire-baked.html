@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>02 — Hillaire LUT-baked sky (Phase 1b)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">Phase 1b — Hillaire LUT-baked sky + SkySun + reflective SkyGround</div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { Sky } from '@sky/Sky'
+      import { createDemoScene } from '@sky/demo/createDemoScene'
+      import { createAtmosphereGui } from '@sky/demo/sunGui'
+      import { createStartGate, logStage } from '@sky/demo/startGate'
+
+      const gate = createStartGate({
+        label: 'Start Hillaire bake',
+        stages: [
+          'create WebGPU renderer',
+          'renderer.init()',
+          'sky: LUTs + cube + PMREM (first bake)',
+          'build demo scene + ground + sun',
+          'render loop',
+        ],
+      })
+
+      gate.run(async ({ markStage }) => {
+        markStage(0, 'running')
+        const renderer = new THREE.WebGPURenderer({ antialias: true })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = 0.5
+        renderer.shadowMap.enabled = true
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap
+        renderer.inspector = new Inspector()
+        document.body.appendChild(renderer.domElement)
+        markStage(1, 'running')
+
+        await logStage('renderer.init()', () => renderer.init())
+        markStage(2, 'running')
+
+        const sky = await logStage('Sky construct + first update()', async () => {
+          const s = new Sky(renderer, {
+            cubeSize: 256,
+            sunDirection: { elevation: 15, azimuth: 180 },
+            sunDisc: true,
+            enableAerialPerspective: false,
+          })
+          s.baker.update()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return s
+        })
+        markStage(3, 'running')
+
+        // Demo scene gives us camera + the showcase spheres. Drop its
+        // matte ground — SkyGround owns the floor now.
+        const demo = createDemoScene(sky.baker)
+        const scene = demo.scene
+        const camera = demo.camera
+        scene.remove(demo.meshes.ground)
+        demo.meshes.ground.geometry.dispose()
+        demo.meshes.ground.material.dispose()
+
+        sky.attach(scene)
+
+        const ground = sky
+          .createGround({
+            mode: 'plane',
+            size: 50000,
+            color: 0x222222,
+            roughness: 0.4,
+            reflective: true,
+            blur: 2,
+          })
+          .attach(scene)
+
+        const skySun = sky
+          .createSun({
+            intensity: 4.0,
+            castShadow: true,
+            shadowCamera: { left: -8, right: 8, top: 8, bottom: -8, near: 1, far: 200 },
+          })
+          .attach(scene)
+
+        demo.meshes.mirror.castShadow = true
+        demo.meshes.pbr.castShadow = true
+        ground.mesh.receiveShadow = true
+
+        const controls = new OrbitControls(camera, renderer.domElement)
+        controls.target.set(0, 1.5, 0)
+        controls.minDistance = 4
+        controls.maxDistance = 40
+        controls.update()
+
+        createAtmosphereGui({ renderer, baker: sky.baker, scene })
+
+        window.addEventListener('resize', () => {
+          camera.aspect = window.innerWidth / window.innerHeight
+          camera.updateProjectionMatrix()
+          renderer.setSize(window.innerWidth, window.innerHeight)
+        })
+        markStage(4, 'running')
+
+        renderer.setAnimationLoop(() => {
+          try {
+            sky.update(camera)
+          } catch (err) {
+            console.error('[animate] sky.update() failed:', err)
+            renderer.setAnimationLoop(null)
+            return
+          }
+
+          controls.update()
+          renderer.render(scene, camera)
+        })
+
+        // Expose for in-browser debugging via chrome-devtools-mcp.
+        window.sky = sky
+        window.skySun = skySun
+        window.skyGround = ground
+        window.scene = scene
+      })
+    </script>
+  </body>
+</html>

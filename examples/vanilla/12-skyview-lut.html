@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>12 — Sky-View LUT (Phase 1b scratchpad)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #111;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 8px 12px;
+        background: rgba(0, 0, 0, 0.65);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-width: 680px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #info b {
+        color: #9cf;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <b>Phase 1b scratchpad — Sky-View LUT</b><br />
+      Pre-integrated sky radiance as seen from ground. Non-linear V squashes the horizon into the middle of the
+      texture.<br />
+      Sun elevation ~15°. Linear-light, no tone mapping.
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Fn, texture, uv, vec4 } from 'three/tsl'
+
+      import { EARTH } from '@sky/core/AtmosphereParams'
+      import { createAtmosphereUniforms } from '@sky/sky/AtmosphereUniforms'
+      import { TransmittanceLUT } from '@sky/sky/luts/TransmittanceLUT'
+      import { MultiScatterLUT } from '@sky/sky/luts/MultiScatterLUT'
+      import { SkyViewLUT } from '@sky/sky/luts/SkyViewLUT'
+      import { createStartGate, logStage } from '@sky/demo/startGate'
+
+      const gate = createStartGate({
+        label: 'Start SkyView LUT build',
+        stages: [
+          'create WebGPU renderer',
+          'renderer.init()',
+          'build Transmittance LUT',
+          'build Multi-Scatter LUT',
+          'build Sky-View LUT',
+          'render loop',
+        ],
+      })
+
+      gate.run(async ({ markStage }) => {
+        markStage(0, 'running')
+        const renderer = new THREE.WebGPURenderer({ antialias: false })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.NoToneMapping
+        renderer.outputColorSpace = THREE.NoColorSpace
+        document.body.appendChild(renderer.domElement)
+        markStage(1, 'running')
+
+        await logStage('renderer.init()', () => renderer.init())
+        markStage(2, 'running')
+
+        const atmosphereUniforms = createAtmosphereUniforms(EARTH)
+
+        const transLut = await logStage('TransmittanceLUT build+render', async () => {
+          const lut = new TransmittanceLUT(renderer, { atmosphereUniforms })
+          lut.render()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return lut
+        })
+        markStage(3, 'running')
+
+        const msLut = await logStage('MultiScatterLUT build+render', async () => {
+          const lut = new MultiScatterLUT(renderer, {
+            atmosphereUniforms,
+            transmittanceLUT: transLut,
+          })
+          lut.render()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return lut
+        })
+        markStage(4, 'running')
+
+        const elevDeg = 15.0
+        const elevRad = (elevDeg * Math.PI) / 180
+        const sunDir = new THREE.Vector3(Math.cos(elevRad), 0.0, Math.sin(elevRad)).normalize()
+
+        const svLut = await logStage('SkyViewLUT build+render', async () => {
+          const lut = new SkyViewLUT(renderer, {
+            atmosphereUniforms,
+            transmittanceLUT: transLut,
+            multiScatterLUT: msLut,
+            sunDirection: sunDir,
+          })
+          lut.render()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return lut
+        })
+        markStage(5, 'running')
+
+        const displayScene = new THREE.Scene()
+        const displayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+
+        const displayMat = new THREE.NodeMaterial()
+        displayMat.colorNode = Fn(() => {
+          const u = uv()
+          // LUT stores ILLUMINANCE_IS_ONE-normalized values (~1e-3 to 5e-2
+          // range). Multiply by 40 here so the gradient is actually visible
+          // on screen — matches the SkyAtmosphereMesh's default luminanceScale.
+          const rgb = texture(svLut.texture, u).rgb.mul(40.0)
+          return vec4(rgb, 1.0)
+        })()
+
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), displayMat)
+        displayScene.add(plane)
+
+        window.addEventListener('resize', () => {
+          renderer.setSize(window.innerWidth, window.innerHeight)
+        })
+
+        renderer.setAnimationLoop(() => {
+          renderer.render(displayScene, displayCam)
+        })
+      })
+    </script>
+  </body>
+</html>

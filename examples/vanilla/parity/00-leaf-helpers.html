@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>parity 00 — leaf helpers (WGSL core vs TSL twin)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #111;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 8px 12px;
+        background: rgba(0, 0, 0, 0.7);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-width: 560px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #info b {
+        color: #9cf;
+      }
+      #verdict {
+        font-size: 14px;
+        font-weight: bold;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <b>Phase 0 parity — WGSL core vs TSL twin</b><br />
+      Four horizontal bands (bottom→top): <b>rayleighPhase</b>, <b>miePhaseCS</b>, <b>hgPhase</b>,
+      <b>raySphereIntersectNearest</b>. X sweeps the parameter (cosθ ∈ [−1,1] for phases; ray zenith for the sphere
+      test).<br />
+      <b>Green</b> = the function value (liveness + shape). <b>Red</b> = |WGSL − TSL| × 500. A correct port shows green
+      gradients and <i>zero red</i>. The raw per-pixel diff is read back from a float target for a numeric verdict.<br />
+      <span id="verdict">running…</span>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Fn, uv, vec3, vec4, float, normalize, sin, cos, acos, clamp, floor, select } from 'three/tsl'
+
+      // TSL twin (the WebGL-fallback authoring)
+      import {
+        rayleighPhase as rayleighTSL,
+        miePhaseCS as mieTSL,
+        hgPhase as hgTSL,
+        raySphereIntersectNearest as raySphereTSL,
+      } from '@sky/backends/tsl/atmosphere.tsl'
+
+      // WGSL core, wrapped via wgslFn (the WebGPU authoring)
+      import {
+        rayleighPhase as rayleighWGSL,
+        miePhaseCS as mieWGSL,
+        hgPhase as hgWGSL,
+        raySphereIntersectNearest as raySphereWGSL,
+      } from '@sky/backends/wgsl/atmosphere'
+
+      let renderer, displayScene, displayCam
+
+      init()
+
+      // Shared color node: green = value, red = amplified diff, ALPHA = raw diff
+      // (unamplified, for numeric readback).
+      function buildParityNode() {
+        return Fn(() => {
+          const u = uv()
+          const cosT = u.x.mul(2.0).sub(1.0)
+          const g = float(0.8)
+
+          // A unit-scale ray-sphere config so distances are O(1) and absolute
+          // float diffs stay tiny — parity is about the two implementations
+          // agreeing, not physical values.
+          const zenith = acos(clamp(cosT, float(-1.0), float(1.0)))
+          const rd = normalize(vec3(sin(zenith), cos(zenith), float(0.0)))
+          const ro = vec3(float(0.0), float(0.5), float(0.0))
+          const center = vec3(float(0.0), float(0.0), float(0.0))
+          const radius = float(1.0)
+
+          // TSL twin
+          const rT = rayleighTSL(cosT)
+          const mT = mieTSL(cosT, g)
+          const hT = hgTSL(cosT, g)
+          const sT = raySphereTSL(ro, rd, center, radius)
+
+          // WGSL core (named-arg call convention)
+          const rW = rayleighWGSL({ cosTheta: cosT })
+          const mW = mieWGSL({ cosTheta: cosT, g })
+          const hW = hgWGSL({ cosTheta: cosT, g })
+          const sW = raySphereWGSL({ ro, rd, center, radius })
+
+          // Band select (0 bottom → 3 top).
+          const band = floor(u.y.mul(4.0))
+          const valT = select(
+            band.lessThan(1.0),
+            rT,
+            select(band.lessThan(2.0), mT, select(band.lessThan(3.0), hT, sT)),
+          )
+          const valW = select(
+            band.lessThan(1.0),
+            rW,
+            select(band.lessThan(2.0), mW, select(band.lessThan(3.0), hW, sW)),
+          )
+
+          const diff = valW.sub(valT).abs()
+          const valNorm = valT.div(valT.abs().add(1.0)).mul(0.5).add(0.5)
+
+          // red = amplified diff (visual mismatch), green = value (liveness),
+          // blue = RAW diff for numeric readback (alpha is forced opaque by the
+          // material, so it can't carry data).
+          const red = diff.mul(500.0).clamp(0.0, 1.0)
+          return vec4(red, valNorm, diff, 1.0)
+        })()
+      }
+
+      async function init() {
+        renderer = new THREE.WebGPURenderer({ antialias: false })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.NoToneMapping
+        renderer.outputColorSpace = THREE.NoColorSpace
+        document.body.appendChild(renderer.domElement)
+
+        await renderer.init()
+
+        const mat = new THREE.NodeMaterial()
+        mat.colorNode = buildParityNode()
+
+        displayScene = new THREE.Scene()
+        displayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+        displayScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat))
+
+        // --- numeric parity readback into a float target ---
+        await runParityReadback(mat)
+
+        window.addEventListener('resize', onResize)
+        renderer.setAnimationLoop(() => renderer.render(displayScene, displayCam))
+      }
+
+      async function runParityReadback(mat) {
+        const W = 256
+        const H = 256
+        const rt = new THREE.RenderTarget(W, H, {
+          type: THREE.FloatType,
+          minFilter: THREE.NearestFilter,
+          magFilter: THREE.NearestFilter,
+          depthBuffer: false,
+        })
+        const scene = new THREE.Scene()
+        const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+        scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat))
+
+        renderer.setRenderTarget(rt)
+        renderer.render(scene, cam)
+        renderer.setRenderTarget(null)
+
+        const buf = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H)
+
+        let maxDiff = 0
+        let maxAt = 0
+        for (let i = 2; i < buf.length; i += 4) {
+          const d = buf[i] // blue channel = raw diff
+          if (d > maxDiff) {
+            maxDiff = d
+            maxAt = (i - 2) / 4
+          }
+        }
+        // Which band did the worst pixel fall in?
+        const py = Math.floor(maxAt / W)
+        const bandIdx = Math.min(3, Math.floor((py / H) * 4))
+        const bandNames = ['rayleighPhase', 'miePhaseCS', 'hgPhase', 'raySphereIntersectNearest']
+
+        const THRESH = 1e-4
+        const pass = maxDiff <= THRESH
+        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — maxDiff=${maxDiff.toExponential(3)} (thresh ${THRESH.toExponential(0)}), worst band=${bandNames[bandIdx]}`
+        console.log(`[parity] ${msg}`)
+        const el = document.getElementById('verdict')
+        el.textContent = msg
+        el.style.color = pass ? '#7f7' : '#f77'
+
+        rt.dispose()
+      }
+
+      function onResize() {
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      }
+    </script>
+  </body>
+</html>

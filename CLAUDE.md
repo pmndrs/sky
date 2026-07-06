@@ -35,7 +35,7 @@ fresh output RT, so dispose the previous one before reassigning.
 ### LUTs use `ILLUMINANCE_IS_ONE` — consumer must scale
 
 Hillaire's integrator passes `globalL = 1.0`, so the LUTs store sky response
-*per unit sun illuminance* — raw values are 0.001-0.04 and render as black
+_per unit sun illuminance_ — raw values are 0.001-0.04 and render as black
 without scaling. `SkyAtmosphereMesh.luminanceScale` (default 40) multiplies
 the SkyView sample at composite time. The standalone LUT debug pages
 (`examples/11`, `12`) apply the same 40× factor in their display shaders.
@@ -57,8 +57,10 @@ appears tilted on the mirror sphere, this is the first place to look.**
 ### Dev workflow with chrome-devtools-mcp
 
 `chrome-devtools-mcp` is wired up at user scope. The standard loop is:
-1. `npm run dev` (background) — Vite on port 5173
+
+1. `pnpm --filter @pmndrs/sky-example-vanilla dev` (background) — Vite on port 5173
 2. `mcp__chrome-devtools__navigate_page` to the example URL
+   (e.g. `http://localhost:5173/03-aerial-perspective.html`)
 3. `mcp__chrome-devtools__evaluate_script` with `() => document.querySelector('button')?.click()` to trigger the start gate
 4. `mcp__chrome-devtools__wait_for` on a known text marker (`"MS :"`,
    `"FPS"`, etc.) to know when render finished
@@ -80,8 +82,9 @@ level and returns a garbage averaged value. This shows up identically
 in the AP RGB even before any compositing happens.
 
 **Fix:** force level-0 sampling explicitly:
+
 ```js
-const ap = texture3D( apTex, vec3( u, w ) ).level( 0 );
+const ap = texture3D(apTex, vec3(u, w)).level(0)
 ```
 
 Bisecting this took multiple wrong turns (MSAA, ray-distance metric,
@@ -106,12 +109,13 @@ test: if rotation changes the fringe, you have a distance-metric bug.
 
 **Fix:** reconstruct per-pixel ray direction from the inverse projection
 matrix and divide:
+
 ```js
-const ndc2 = vec2(uv.x*2-1, uv.y*2-1);
-const clipFar = vec4(ndc2, 1, 1);
-const rayDirView = (invProj * clipFar).xyz / w;
-const cosFromAxis = abs(rayDirView.normalize().z);
-const distAlongRayM = abs(viewZ) / cosFromAxis;
+const ndc2 = vec2(uv.x * 2 - 1, uv.y * 2 - 1)
+const clipFar = vec4(ndc2, 1, 1)
+const rayDirView = (invProj * clipFar).xyz / w
+const cosFromAxis = abs(rayDirView.normalize().z)
+const distAlongRayM = abs(viewZ) / cosFromAxis
 ```
 
 ### AP underground-froxel correction (the real fix for the horizon cliff)
@@ -120,18 +124,20 @@ SebH's `RenderCameraVolumePS` (RenderSkyRayMarching.hlsl ~668-680) does
 something the obvious port skips: when a froxel's endpoint falls below
 the planet surface, push it back up onto the ground shell, recompute
 `worldDir`, and recompute `tMax`. **Without this**, voxels that point
-behind the horizon integrate through *invalid medium* (rock), producing
+behind the horizon integrate through _invalid medium_ (rock), producing
 a hard alpha cliff at the horizon and a visible black band in
 `?debug=ap-alpha`.
 
 **Fix in `AerialPerspectiveLUT.js`:**
+
 ```js
-const newWorldPos = camPosKm.add(worldDir * tMax);
-const belowGround = length(newWorldPos) <= bottomR + PLANET_RADIUS_OFFSET;
-const groundedPos = normalize(newWorldPos) * (bottomR + PLANET_RADIUS_OFFSET + 0.001);
-worldDir.assign(select(belowGround, normalize(groundedPos - camPosKm), worldDir));
-tMax.assign(select(belowGround, length(groundedPos - camPosKm), tMax));
+const newWorldPos = camPosKm.add(worldDir * tMax)
+const belowGround = length(newWorldPos) <= bottomR + PLANET_RADIUS_OFFSET
+const groundedPos = normalize(newWorldPos) * (bottomR + PLANET_RADIUS_OFFSET + 0.001)
+worldDir.assign(select(belowGround, normalize(groundedPos - camPosKm), worldDir))
+tMax.assign(select(belowGround, length(groundedPos - camPosKm), tMax))
 ```
+
 Then pass the corrected `worldDir` and `tMax` into both
 `moveToTopAtmosphere` and `integrateScatteredLuminance`. With this
 applied, the AP / Sky-View boundary matches well enough that the
@@ -148,9 +154,11 @@ A workaround was added in `HazePostProcess.js`: when `skyCube` is
 supplied, the post-process samples the cube background at the fragment's
 world ray direction and blends the composite toward it weighted by
 `apA`:
+
 ```js
-composited = mix(composited, skyAtDirection, apA);
+composited = mix(composited, skyAtDirection, apA)
 ```
+
 This closes any residual AP/Sky-View mismatch by leaning on the cube as
 "the sky behind this surface."
 
@@ -192,14 +200,14 @@ behind it and the fringe vanishes naturally. This matches real-world
 photography of distant peaks.
 
 (Original MSAA hypothesis kept here for posterity: MSAA + a
-post-process that reads single-sample depth *can* produce edge
+post-process that reads single-sample depth _can_ produce edge
 artifacts, but it wasn't this case. If you re-enable MSAA, you may
 still want FXAA after the haze composite to avoid that distinct issue.)
 
 ### SkyView LUT degrades near top of atmosphere — raymarch fallback above topRadius
 
 The Sky-View LUT's horizon-packed V parameterization assumes the camera is
-*inside* the atmosphere and the planet horizon dominates the view. As the
+_inside_ the atmosphere and the planet horizon dominates the view. As the
 camera approaches `topRadius` (atmosphere boundary at ~100 km altitude),
 the horizon angle collapses — most V texels get crammed into a thin
 equatorial band. Visible symptom: concentric rings / banding on the sky
@@ -237,27 +245,46 @@ errors.**
 
 ## File map
 
+Three-layer split (see WGSL_CORE_PLAN.md). `core/` is renderer-agnostic,
+`backends/` holds the two shader authorings, `sky/` is the three integration.
+
 ```
-src/sky/
-├── SkyAtmosphereBaker.js   public API (setSun, setAtmosphereParams, update)
-├── SkyAtmosphereMesh.js    visible sky, samples SkyView LUT
-├── AtmosphereParams.js     EARTH defaults + mergeAtmosphereParams
-├── AtmosphereUniforms.js   create/updateAtmosphereUniforms (TSL uniform bundle)
-├── shaders/atmosphere.tsl.js   density, phases, ray-sphere, UV remaps
-├── luts/
-│   ├── resolutions.js      LUT_RESOLUTIONS (override-able defaults)
-│   ├── TransmittanceLUT.js 256×64, on atmos change
-│   ├── MultiScatterLUT.js  32×32, on atmos change
-│   └── SkyViewLUT.js       192×108, on sun OR atmos change
-└── legacy/SkyMesh.js       Preetham (unused by baker v1, kept for reference)
+src/
+├── core/                       renderer-agnostic (no TSL/renderer logic; still
+│   │                           references three's Vector3 type — see plan doc)
+│   ├── AtmosphereParams.js     EARTH defaults + mergeAtmosphereParams
+│   ├── resolutions.js          LUT_RESOLUTIONS (override-able defaults)
+│   └── wgsl/atmosphere.wgsl.js WGSL math source chunks (source of truth on WebGPU)
+├── backends/
+│   ├── tsl/atmosphere.tsl.js   TSL math — WebGL fallback + hand-sync reference
+│   └── wgsl/atmosphere.js      wgslFn wrappers over core/wgsl (WebGPU-via-three)
+├── sky/
+│   ├── SkyAtmosphereBaker.js   public API (setSun, setAtmosphereParams, update)
+│   ├── SkyAtmosphereMesh.js    visible sky, samples SkyView LUT
+│   ├── AtmosphereUniforms.js   create/updateAtmosphereUniforms (TSL uniform bundle)
+│   ├── luts/
+│   │   ├── TransmittanceLUT.js 256×64, on atmos change
+│   │   ├── MultiScatterLUT.js  32×32, on atmos change
+│   │   └── SkyViewLUT.js       192×108, on sun OR atmos change
+│   └── legacy/SkyMesh.js       Preetham (unused by baker v1, kept for reference)
 
 examples/
 ├── 01-legacy-baked.html    full demo scene (mirror + ground + PBR sphere)
 ├── 02-hillaire-baked.html  same scene, separate page (currently identical)
 ├── 10-transmittance-lut.html  fullscreen TLUT view + readback
 ├── 11-multiscatter-lut.html   TLUT|MS split + ?debug=<mode> bisection
-└── 12-skyview-lut.html        fullscreen SkyView LUT view (40× scaled)
+├── 12-skyview-lut.html        fullscreen SkyView LUT view (40× scaled)
+└── parity/                    WGSL-core vs TSL-twin numeric parity harness
+    ├── 00-leaf-helpers.html   phases, ray-sphere
+    └── 01-uv-maps.html        SkyView UV maps, spherical dir
 ```
+
+Dev server: the demos are now a workspace app under `examples/vanilla/` — run
+`pnpm --filter @pmndrs/sky-example-vanilla dev` (Vite on 5173). Root `pnpm dev`
+is `unbuild --stub` (library dev), NOT the examples. Demos import the library
+via the `@pmndrs/sky` (public) and `@sky/*` (deep internals) Vite aliases →
+`src/`. The React demo lives in `examples/react/` (see its README — currently
+blocked on r3f-canary/three-webgpu build interop).
 
 ## Reference repos
 

@@ -4,7 +4,7 @@
 
 We want a production-quality atmospheric sky in Three.js using TSL on the WebGPU renderer, modeled after Sébastien Hillaire's "A Scalable and Production Ready Sky and Atmosphere Rendering Technique" (EGSR 2020, shipped in Unreal Engine). The existing Three.js [`SkyMesh.js`](../../../../../Documents/GitHub/homefig/SebH-TSL-Sky/resources/SkyMesh.js) uses Preetham — analytic, cheap, but visually limited (poor twilight, no multi-scatter, no ground-shadow band, no aerial perspective, no planetary views).
 
-**Architecture (user-specified):** a *split-scene bake-first* design. A dedicated sky scene owns the atmosphere; a `CubeCamera` writes it into a `CubeRenderTarget`; the main scene uses that cube texture as `scene.environment` + `scene.background`. This deliberately trades view-dependent effects (aerial perspective, sun-motion parallax) for PBR reflections and near-zero runtime cost. Re-bakes happen only when sun or atmosphere params change.
+**Architecture (user-specified):** a _split-scene bake-first_ design. A dedicated sky scene owns the atmosphere; a `CubeCamera` writes it into a `CubeRenderTarget`; the main scene uses that cube texture as `scene.environment` + `scene.background`. This deliberately trades view-dependent effects (aerial perspective, sun-motion parallax) for PBR reflections and near-zero runtime cost. Re-bakes happen only when sun or atmosphere params change.
 
 **Phase 1 goal:** Ground-based sky rendered correctly and baked into a cube target, delivered in two sub-steps:
 
@@ -19,13 +19,13 @@ Aerial perspective, per-frame LUT updates, high-altitude / space views, volumetr
 
 Three distinct raymarch contexts in Hillaire's pipeline. Conflating them is the usual source of confusion.
 
-| Context | What marches | Output | Cadence |
-|---|---|---|---|
-| **LUT generation** | rays through atmosphere math, inside a fullscreen fragment pass writing into a RenderTarget | the LUT textures | on sun / param change (for our baked use case) |
-| **Sky shading** | nothing — sample Sky-View LUT by direction | sky-pixel color | per sky pixel |
-| **Aerial perspective LUT generation** *(phase 2)* | camera-frustum froxel rays through atmosphere math | AP 3D LUT RGB + alpha | per frame while camera moves |
-| **Aerial perspective on geometry** *(phase 2)* | usually nothing — sample AP 3D LUT by depth-reconstructed world position | haze blended onto scene pixels | per scene pixel, post-process |
-| **Planet-scale AP fallback** *(phase 3 bridge)* | camera-to-surface ray for pixels outside AP coverage, or when a debug/quality policy forces it | finite-path inscatter + transmittance | per scene pixel, post-process |
+| Context                                           | What marches                                                                                   | Output                                | Cadence                                        |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------- |
+| **LUT generation**                                | rays through atmosphere math, inside a fullscreen fragment pass writing into a RenderTarget    | the LUT textures                      | on sun / param change (for our baked use case) |
+| **Sky shading**                                   | nothing — sample Sky-View LUT by direction                                                     | sky-pixel color                       | per sky pixel                                  |
+| **Aerial perspective LUT generation** _(phase 2)_ | camera-frustum froxel rays through atmosphere math                                             | AP 3D LUT RGB + alpha                 | per frame while camera moves                   |
+| **Aerial perspective on geometry** _(phase 2)_    | usually nothing — sample AP 3D LUT by depth-reconstructed world position                       | haze blended onto scene pixels        | per scene pixel, post-process                  |
+| **Planet-scale AP fallback** _(phase 3 bridge)_   | camera-to-surface ray for pixels outside AP coverage, or when a debug/quality policy forces it | finite-path inscatter + transmittance | per scene pixel, post-process                  |
 
 In the ground-level steady state, the only raymarches happen inside LUT generation passes; geometry haze normally samples the AP 3D LUT. Planet-scale views add an explicit per-pixel raymarch fallback for geometry past the AP volume coverage (and for debug / high-quality overrides). The "mountain haze fade" you asked about is still the aerial-perspective depth post-process over the main scene — not bakeable into an envmap, which is why it started as phase 2.
 
@@ -33,19 +33,19 @@ In the ground-level steady state, the only raymarches happen inside LUT generati
 
 ## User decisions (baseline)
 
-| Decision | Chosen |
-|---|---|
-| Code location | New `src/` in this repo (`SebH-TSL-Sky/src/`) |
-| Build system | npm + Vite |
-| LUT generation | Fragment render-to-texture (portable, simple) |
-| Scaffold pass | Yes — Preetham-in-cube first |
-| Clouds | Skipped entirely |
-| Sun control | `setSun({ elevation, azimuth })` |
-| Demo scene | Mirror sphere + matte ground + one PBR (metal/rough) sphere |
-| IBL pipeline | Bake → PMREM-filter in phase 1. Baker exposes both `baker.texture` (raw cube) and `baker.environmentTexture` (PMREM-filtered); demo uses the filtered one |
-| Update model | Explicit `baker.update()` in the caller's animation loop; no hidden auto-hooks |
-| LUT sizing | Tunable constants — `src/sky/luts/resolutions.js` exports `LUT_RESOLUTIONS = { transmittance, multiScatter, skyView }`, defaulting to the paper values; overridable via `new SkyAtmosphereBaker(renderer, { lutResolutions })` |
-| AtmosphereParams presets | Earth only for phase 1. Presets for Mars / fictional atmospheres are trivial to add later and deferred |
+| Decision                 | Chosen                                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Code location            | New `src/` in this repo (`SebH-TSL-Sky/src/`)                                                                                                                                                                                  |
+| Build system             | npm + Vite                                                                                                                                                                                                                     |
+| LUT generation           | Fragment render-to-texture (portable, simple)                                                                                                                                                                                  |
+| Scaffold pass            | Yes — Preetham-in-cube first                                                                                                                                                                                                   |
+| Clouds                   | Skipped entirely                                                                                                                                                                                                               |
+| Sun control              | `setSun({ elevation, azimuth })`                                                                                                                                                                                               |
+| Demo scene               | Mirror sphere + matte ground + one PBR (metal/rough) sphere                                                                                                                                                                    |
+| IBL pipeline             | Bake → PMREM-filter in phase 1. Baker exposes both `baker.texture` (raw cube) and `baker.environmentTexture` (PMREM-filtered); demo uses the filtered one                                                                      |
+| Update model             | Explicit `baker.update()` in the caller's animation loop; no hidden auto-hooks                                                                                                                                                 |
+| LUT sizing               | Tunable constants — `src/sky/luts/resolutions.js` exports `LUT_RESOLUTIONS = { transmittance, multiScatter, skyView }`, defaulting to the paper values; overridable via `new SkyAtmosphereBaker(renderer, { lutResolutions })` |
+| AtmosphereParams presets | Earth only for phase 1. Presets for Mars / fictional atmospheres are trivial to add later and deferred                                                                                                                         |
 
 ---
 
@@ -154,7 +154,7 @@ All LUT sizes below come from `LUT_RESOLUTIONS` in `src/sky/luts/resolutions.js`
 - Parameterization: azimuth ∈ [0, 2π] on X, view zenith with horizon-packed non-linear mapping on Y (Hillaire packs more texels near the horizon where the visual detail is).
 - Ray-marches ~30 steps reading Transmittance + Multi-Scatter LUTs.
 - Rebuilt on `sunDirty || atmosDirty`.
-- (In baked mode this runs once per bake and we could have *also* baked it to the cube directly; keeping it as an intermediate lets phase 2 move the camera without re-baking the Sky-View.)
+- (In baked mode this runs once per bake and we could have _also_ baked it to the cube directly; keeping it as an intermediate lets phase 2 move the camera without re-baking the Sky-View.)
 
 ### 4. `SkyAtmosphereMesh` — the visible sky
 
@@ -164,14 +164,14 @@ All LUT sizes below come from `LUT_RESOLUTIONS` in `src/sky/luts/resolutions.js`
 
 ### 5. `SkyAtmosphereBaker` v1 changes
 
-- Owns the three LUT render targets; regenerates on the matching dirty flag inside `update()`, *then* renders cube target.
+- Owns the three LUT render targets; regenerates on the matching dirty flag inside `update()`, _then_ renders cube target.
 - No public-API break vs v0.
 - `AtmosphereParams` drives LUT content; default = Earth constants from Hillaire / Bruneton (planet radius 6360 km, top 6460 km, Rayleigh/Mie coefficients from the paper).
 
 ### Phase 1b verification
 
 - Daytime zenith reads a richer, deeper blue than Preetham; horizon is desaturated with warmer band.
-- Sunset produces the orange horizon band and darker zenith *without* the Preetham tinting tricks.
+- Sunset produces the orange horizon band and darker zenith _without_ the Preetham tinting tricks.
 - Twilight (elevation = -2°) shows faint residual glow, not black — this is the multi-scatter contribution and is the clearest visual "did we get it right" signal vs Preetham.
 - Changing atmosphere params (e.g. Mars-ish ozone off + red-biased scattering) yields a coherent Martian-looking cube, something Preetham cannot produce.
 - Mirror sphere / PBR sphere show the IBL picking up the new sky.
@@ -181,13 +181,13 @@ All LUT sizes below come from `LUT_RESOLUTIONS` in `src/sky/luts/resolutions.js`
 
 ## Deferred (not built in phase 1)
 
-| Phase | Feature | Why deferred |
-|---|---|---|
-| 2 | Aerial Perspective LUT (32³) + main-scene depth-sampled post-process | View-dependent, cannot be baked; requires depth-buffer integration in main scene |
-| 2 | Per-frame Sky-View LUT updates | Needed once the main camera moves through altitudes or sun animates continuously |
-| 3 | High-altitude / space view fallback (per-pixel raymarch) | Sky-View LUT stops being useful past some altitude |
-| 4 | Volumetric shadows / god rays (blue-noise jitter + TAA reprojection) | Separate concern, needs scene geometry participation |
-| Opt | Procedural / volumetric clouds | User chose to skip; would be a real volumetric system, not ported FBM |
+| Phase | Feature                                                              | Why deferred                                                                     |
+| ----- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| 2     | Aerial Perspective LUT (32³) + main-scene depth-sampled post-process | View-dependent, cannot be baked; requires depth-buffer integration in main scene |
+| 2     | Per-frame Sky-View LUT updates                                       | Needed once the main camera moves through altitudes or sun animates continuously |
+| 3     | High-altitude / space view fallback (per-pixel raymarch)             | Sky-View LUT stops being useful past some altitude                               |
+| 4     | Volumetric shadows / god rays (blue-noise jitter + TAA reprojection) | Separate concern, needs scene geometry participation                             |
+| Opt   | Procedural / volumetric clouds                                       | User chose to skip; would be a real volumetric system, not ported FBM            |
 
 ---
 
@@ -195,7 +195,7 @@ All LUT sizes below come from `LUT_RESOLUTIONS` in `src/sky/luts/resolutions.js`
 
 1. **TSL fragment → RenderTarget ergonomics on WebGPURenderer:** writing 16-bit float into a `RenderTarget` and sampling it linearly works in the WebGPU backend, but we should confirm `CubeRenderTarget` supports the same format as our LUT targets so PMREM generation on the cube works. Fallback: RGBA8 with exposure-scaled encoding for the cube itself.
 2. **Non-linear UV remaps:** getting the exact Bruneton/Hillaire parameterization right the first time is the most likely source of subtle horizon artifacts. Plan to cross-reference the Unreal repo at `/Users/dex/Documents/GitHub/homefig/UnrealEngineSkyAtmosphere` (noted in `resources/links.md`) for the exact mapping functions.
-3. **Sun-disc double-count risk:** if the sun disc is drawn during the cube bake, PMREM will bleed an extremely bright highlight across the lower-roughness mips and the mirror sphere will show a suspicious bloom. Default: sun-disc *off* during the cube bake (so IBL uses the sky luminance only). Because `scene.background` uses the raw non-PMREM cube, if we want the sun visible in the background we need to either bake with sun-disc on and accept the IBL bloom, or render the sky as a direct mesh in the main scene instead of using `scene.background`. **Decision for phase 1:** bake without sun disc → PMREM env is clean → main scene uses `scene.background = baker.texture` without disc, and the demo skips rendering a sharp sun disc. Sun disc comes back in phase 2 alongside main-scene sky-mesh rendering.
+3. **Sun-disc double-count risk:** if the sun disc is drawn during the cube bake, PMREM will bleed an extremely bright highlight across the lower-roughness mips and the mirror sphere will show a suspicious bloom. Default: sun-disc _off_ during the cube bake (so IBL uses the sky luminance only). Because `scene.background` uses the raw non-PMREM cube, if we want the sun visible in the background we need to either bake with sun-disc on and accept the IBL bloom, or render the sky as a direct mesh in the main scene instead of using `scene.background`. **Decision for phase 1:** bake without sun disc → PMREM env is clean → main scene uses `scene.background = baker.texture` without disc, and the demo skips rendering a sharp sun disc. Sun disc comes back in phase 2 alongside main-scene sky-mesh rendering.
 
 ---
 
@@ -231,6 +231,7 @@ renders uniform azure overhead, mirror sphere reflects the cube, PBR sphere
 picks up IBL correctly, sun motion triggers re-bake within ~50 ms.
 
 Files of record:
+
 - `src/sky/SkyAtmosphereBaker.js` — owns LUT pipeline + cube + PMREM, dirty-flag scheduling
 - `src/sky/SkyAtmosphereMesh.js` — visible sky, samples Sky-View LUT, exposes `luminanceScale` (default 40) for the `ILLUMINANCE_IS_ONE` consumer-side scaling
 - `src/sky/luts/{Transmittance,MultiScatter,SkyView}LUT.js` — fragment-pass LUT builders
@@ -269,6 +270,7 @@ reconstructs world-position from depth, samples the volume, and blends
 `final = sceneColor * T + inscatter`.
 
 Required sub-tasks (rough):
+
 1. `AerialPerspectiveLUT.js` — TSL compute pass writing to a 3D
    StorageTexture. Each voxel ray-marches from camera through atmosphere
    for `t ∈ [0, frustumZSlice]`, integrating with the same
@@ -293,7 +295,7 @@ AP and planet-scale support now exist beyond the original phase-2 entry point:
   per-pixel raymarch fallback for planet-scale pixels beyond AP coverage.
 - `src/sky/hazeScenePassDepth.js` decodes pass depth correctly for both normal
   and logarithmic depth buffers. When `WebGPURenderer({ logarithmicDepthBuffer:
-  true })` is used, haze consumers must decode with `logarithmicDepthToViewZ`;
+true })` is used, haze consumers must decode with `logarithmicDepthToViewZ`;
   `PassNode.getViewZNode()` assumes perspective depth and corrupts distance
   reconstruction.
 - `examples/05-planet-scale.html` is the stable planet-scale integration page.

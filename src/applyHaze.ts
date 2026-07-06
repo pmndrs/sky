@@ -1,6 +1,18 @@
-import { uniform } from 'three/tsl';
+import { uniform } from 'three/tsl'
 
-import { createHazeOutputNode } from './sky/HazePostProcess.js';
+import { createHazeOutputNode } from './sky/HazePostProcess'
+
+interface ApplyHazeOptions {
+  sky?: any
+  scenePass?: any
+  policy?: string
+  strength?: number
+  altitudeBlend?: { startKm: number; endKm: number }
+  logarithmicDepthBuffer?: boolean
+  useCameraFar?: boolean
+  includeSkyCubeBlend?: boolean
+  debugMode?: string | null
+}
 
 /**
  * Build a haze TSL output node from a `Sky` instance and a scene-color node.
@@ -47,104 +59,103 @@ import { createHazeOutputNode } from './sky/HazePostProcess.js';
  * @param {string} [options.debugMode]                   AP debug mode passthrough
  * @returns {THREE.Node} vec4 output node
  */
-export function applyHaze( sceneColorNode, {
-	sky,
-	scenePass,
-	policy = 'auto',
-	strength = 1.0,
-	altitudeBlend,
-	logarithmicDepthBuffer = false,
-	useCameraFar,
-	includeSkyCubeBlend = false,
-	debugMode = null
-} = {} ) {
+export function applyHaze(
+  sceneColorNode: any,
+  {
+    sky,
+    scenePass,
+    policy = 'auto',
+    strength = 1.0,
+    altitudeBlend,
+    logarithmicDepthBuffer = false,
+    useCameraFar,
+    includeSkyCubeBlend = false,
+    debugMode = null,
+  }: ApplyHazeOptions = {},
+): any {
+  if (!sky) throw new Error('applyHaze: `sky` is required.')
+  if (!scenePass) throw new Error('applyHaze: `scenePass` is required.')
 
-	if ( ! sky ) throw new Error( 'applyHaze: `sky` is required.' );
-	if ( ! scenePass ) throw new Error( 'applyHaze: `scenePass` is required.' );
+  const baker = sky.baker
+  const ap = baker.aerialPerspectiveLUT
 
-	const baker = sky.baker;
-	const ap = baker.aerialPerspectiveLUT;
+  if (!ap) {
+    throw new Error('applyHaze: Sky was constructed with `enableAerialPerspective: false`.')
+  }
 
-	if ( ! ap ) {
+  // --- Sky-owned uniforms (lazy + reseed on every applyHaze() call) ---
+  if (!sky._hazeStrength) sky._hazeStrength = uniform(strength)
+  else sky._hazeStrength.value = strength
 
-		throw new Error( 'applyHaze: Sky was constructed with `enableAerialPerspective: false`.' );
+  if (!sky._hazePolicy) sky._hazePolicy = uniform(policyToHazeMode(policy))
+  else sky._hazePolicy.value = policyToHazeMode(policy)
 
-	}
+  if (!sky._hazeRaymarchOnly) sky._hazeRaymarchOnly = uniform(policy === 'raymarch' ? 1.0 : 0.0)
+  else sky._hazeRaymarchOnly.value = policy === 'raymarch' ? 1.0 : 0.0
 
-	// --- Sky-owned uniforms (lazy + reseed on every applyHaze() call) ---
-	if ( ! sky._hazeStrength ) sky._hazeStrength = uniform( strength );
-	else sky._hazeStrength.value = strength;
+  const seedStartKm = altitudeBlend?.startKm ?? 50.0
+  const seedEndKm = altitudeBlend?.endKm ?? 100.0
 
-	if ( ! sky._hazePolicy ) sky._hazePolicy = uniform( policyToHazeMode( policy ) );
-	else sky._hazePolicy.value = policyToHazeMode( policy );
+  if (!sky._hazeAltStart) sky._hazeAltStart = uniform(seedStartKm)
+  else if (altitudeBlend) sky._hazeAltStart.value = seedStartKm
 
-	if ( ! sky._hazeRaymarchOnly ) sky._hazeRaymarchOnly = uniform( policy === 'raymarch' ? 1.0 : 0.0 );
-	else sky._hazeRaymarchOnly.value = policy === 'raymarch' ? 1.0 : 0.0;
+  if (!sky._hazeAltEnd) sky._hazeAltEnd = uniform(seedEndKm)
+  else if (altitudeBlend) sky._hazeAltEnd.value = seedEndKm
 
-	const seedStartKm = altitudeBlend?.startKm ?? 50.0;
-	const seedEndKm = altitudeBlend?.endKm ?? 100.0;
+  const seedFar = scenePass.camera?.far ?? 1e6
+  if (useCameraFar === undefined) useCameraFar = seedFar > 1e6
+  if (useCameraFar && !sky._cameraFar) sky._cameraFar = uniform(seedFar)
 
-	if ( ! sky._hazeAltStart ) sky._hazeAltStart = uniform( seedStartKm );
-	else if ( altitudeBlend ) sky._hazeAltStart.value = seedStartKm;
+  // `sceneColorNode` is accepted for API symmetry with future operators
+  // (bloom-then-haze, etc.). Today's `createHazeOutputNode` reads colour
+  // off the scenePass directly; future revisions will accept the node.
+  void sceneColorNode
 
-	if ( ! sky._hazeAltEnd ) sky._hazeAltEnd = uniform( seedEndKm );
-	else if ( altitudeBlend ) sky._hazeAltEnd.value = seedEndKm;
-
-	const seedFar = scenePass.camera?.far ?? 1e6;
-	if ( useCameraFar === undefined ) useCameraFar = seedFar > 1e6;
-	if ( useCameraFar && ! sky._cameraFar ) sky._cameraFar = uniform( seedFar );
-
-	// `sceneColorNode` is accepted for API symmetry with future operators
-	// (bloom-then-haze, etc.). Today's `createHazeOutputNode` reads colour
-	// off the scenePass directly; future revisions will accept the node.
-	void sceneColorNode;
-
-	return createHazeOutputNode( {
-		scenePass,
-		aerialPerspectiveTexture: ap.texture,
-		luminanceScale: baker.sky.luminanceScale,
-		invProjUniform: ap.invProjUniform,
-		resZ: ap.resolution?.z ?? ap.resolution?.depth ?? 32,
-		kmPerSlice: baker.apKmPerSlice,
-		hazeStrength: sky._hazeStrength,
-		hazeModeUniform: sky._hazePolicy,
-		raymarchBlendStartKm: sky._hazeAltStart,
-		raymarchBlendEndKm: sky._hazeAltEnd,
-		raymarchOnlyUniform: sky._hazeRaymarchOnly,
-		cameraWorldUniform: ap.cameraWorldUniform,
-		cameraFarUniform: useCameraFar ? sky._cameraFar : null,
-		logarithmicDepthBuffer,
-		// Always wire the raymarch path so live policy switching works without
-		// rebuild. Users wanting the smaller AP-only shader can call
-		// `createHazeOutputNode` directly.
-		enableRaymarchFallback: true,
-		atmosphereUniforms: baker.atmosphereUniforms,
-		sunDirection: baker.sky.sunDirection,
-		viewHeightKm: baker.sky.viewHeight,
-		// Planet-frame camera position — already updated each frame by
-		// AerialPerspectiveLUT.setCamera (called via baker.setCamera). When
-		// the user isn't passing `planetCenter`, this defaults to
-		// (0, viewHeight, 0) which matches the flat-ground convention.
-		cameraPositionKm: ap.cameraPositionKmUniform,
-		transmittanceLUT: baker.transmittanceLUT.texture,
-		multiScatterLUT: baker.multiScatterLUT.texture,
-		skyCube: includeSkyCubeBlend ? baker.texture : null,
-		debugMode
-	} );
-
+  return createHazeOutputNode({
+    scenePass,
+    aerialPerspectiveTexture: ap.texture,
+    luminanceScale: baker.sky.luminanceScale,
+    invProjUniform: ap.invProjUniform,
+    resZ: ap.resolution?.z ?? ap.resolution?.depth ?? 32,
+    kmPerSlice: baker.apKmPerSlice,
+    hazeStrength: sky._hazeStrength,
+    hazeModeUniform: sky._hazePolicy,
+    raymarchBlendStartKm: sky._hazeAltStart,
+    raymarchBlendEndKm: sky._hazeAltEnd,
+    raymarchOnlyUniform: sky._hazeRaymarchOnly,
+    cameraWorldUniform: ap.cameraWorldUniform,
+    cameraFarUniform: useCameraFar ? sky._cameraFar : null,
+    logarithmicDepthBuffer,
+    // Always wire the raymarch path so live policy switching works without
+    // rebuild. Users wanting the smaller AP-only shader can call
+    // `createHazeOutputNode` directly.
+    enableRaymarchFallback: true,
+    atmosphereUniforms: baker.atmosphereUniforms,
+    sunDirection: baker.sky.sunDirection,
+    viewHeightKm: baker.sky.viewHeight,
+    // Planet-frame camera position — already updated each frame by
+    // AerialPerspectiveLUT.setCamera (called via baker.setCamera). When
+    // the user isn't passing `planetCenter`, this defaults to
+    // (0, viewHeight, 0) which matches the flat-ground convention.
+    cameraPositionKm: ap.cameraPositionKmUniform,
+    transmittanceLUT: baker.transmittanceLUT.texture,
+    multiScatterLUT: baker.multiScatterLUT.texture,
+    skyCube: includeSkyCubeBlend ? baker.texture : null,
+    debugMode,
+  })
 }
 
-function policyToHazeMode( policy ) {
-
-	switch ( policy ) {
-
-		case 'auto': return 0.0;
-		case 'ap': return 1.0;
-		case 'raymarch': return 2.0;
-		default: throw new Error( `applyHaze: unknown policy "${policy}". Use 'auto' | 'ap' | 'raymarch'.` );
-
-	}
-
+function policyToHazeMode(policy: string): number {
+  switch (policy) {
+    case 'auto':
+      return 0.0
+    case 'ap':
+      return 1.0
+    case 'raymarch':
+      return 2.0
+    default:
+      throw new Error(`applyHaze: unknown policy "${policy}". Use 'auto' | 'ap' | 'raymarch'.`)
+  }
 }
 
-export { policyToHazeMode };
+export { policyToHazeMode }

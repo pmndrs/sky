@@ -1,6 +1,14 @@
-import { useRenderPipeline } from '@react-three/fiber/webgpu';
+import * as fiberWebGPU from '@react-three/fiber/webgpu'
 
-import { useSky } from './SkyContext.js';
+import { useSky } from './SkyContext'
+
+// `useRenderPipeline` lives on the R3F v10 alpha/canary line; the installed
+// canary's published types don't declare it yet, so read it off the namespace.
+const useRenderPipeline: (...args: any[]) => any = (fiberWebGPU as any).useRenderPipeline
+
+export interface AutoHazeProps {
+  [key: string]: any
+}
 
 /**
  * Aerial-perspective haze post-process for `<Sky>`. Renders nothing; calls
@@ -27,22 +35,18 @@ import { useSky } from './SkyContext.js';
  * prop changes still take effect through `sky.setHaze*` setters even
  * without rebuilding the callback).
  */
-export function AutoHaze( options = {} ) {
+export function AutoHaze(options: AutoHazeProps = {}) {
+  const sky = useSky()
 
-	const sky = useSky();
+  useRenderPipeline(({ renderPipeline, passes }: any) => {
+    if (!sky) return
+    renderPipeline.outputNode = sky.applyHaze(passes.scenePass.getTextureNode(), {
+      ...options,
+      scenePass: passes.scenePass,
+    })
+  })
 
-	useRenderPipeline( ( { renderPipeline, passes } ) => {
-
-		if ( ! sky ) return;
-		renderPipeline.outputNode = sky.applyHaze(
-			passes.scenePass.getTextureNode(),
-			{ ...options, scenePass: passes.scenePass }
-		);
-
-	} );
-
-	return null;
-
+  return null
 }
 
-export default AutoHaze;
+export default AutoHaze

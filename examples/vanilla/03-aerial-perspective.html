@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>03 — Aerial Perspective haze on terrain (Phase 2)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      Phase 2 — Aerial Perspective haze on terrain. Drag to orbit.<br />
+      Debug:
+      <a href="?" style="color: #fc9; text-decoration: none; margin-right: 8px">normal</a>
+      <a href="?debug=ap-rgb" style="color: #fc9; text-decoration: none; margin-right: 8px">ap-rgb</a>
+      <a href="?debug=ap-alpha" style="color: #fc9; text-decoration: none; margin-right: 8px">ap-alpha</a>
+      <a href="?debug=w" style="color: #fc9; text-decoration: none; margin-right: 8px">w</a>
+      <a href="?debug=is-sky" style="color: #fc9; text-decoration: none">is-sky</a>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { pass, uniform } from 'three/tsl'
+
+      import { SkyAtmosphereBaker } from '@sky/sky/SkyAtmosphereBaker'
+      import { createHazeOutputNode } from '@sky/sky/HazePostProcess'
+      import { createStartGate, logStage } from '@sky/demo/startGate'
+
+      const debugMode = new URLSearchParams(window.location.search).get('debug')
+
+      const gate = createStartGate({
+        label: 'Start AP demo',
+        stages: [
+          'create WebGPU renderer',
+          'renderer.init()',
+          'baker (LUTs + cube + AP)',
+          'build terrain scene',
+          'set up haze post-process',
+          'render loop',
+        ],
+      })
+
+      gate.run(async ({ markStage }) => {
+        markStage(0, 'running')
+        // MSAA disabled — when on, the scene's color attachment is multisampled
+        // but the depth texture sampling in the haze post-process reads single
+        // samples. At mountain silhouette edges, resolved color is partly
+        // mountain + partly sky, but the single depth sample fetches the
+        // mountain's near depth → low AP alpha → near-zero inscatter →
+        // composited result keeps the dark scene color and a black fringe
+        // appears along every silhouette. With MSAA off, color and depth
+        // agree per pixel and the AP composite is clean.
+        const renderer = new THREE.WebGPURenderer({ antialias: false })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = 0.5
+        renderer.inspector = new Inspector()
+        document.body.appendChild(renderer.domElement)
+        markStage(1, 'running')
+
+        await logStage('renderer.init()', () => renderer.init())
+        markStage(2, 'running')
+
+        // Camera. Far plane large enough that distant terrain reaches into
+        // the AP LUT's range (32 slices × 4 km/slice = 128 km).
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 200000)
+        camera.position.set(0, 200, 0)
+        camera.lookAt(0, 200, 1000)
+
+        const baker = await logStage('SkyAtmosphereBaker', async () => {
+          const b = new SkyAtmosphereBaker(renderer, { cubeSize: 256, enableAerialPerspective: true })
+          b.setSun({ elevation: 8, azimuth: 0 })
+          b.setCamera(camera)
+          b.update()
+          await b.updateAerialPerspective()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return b
+        })
+        markStage(3, 'running')
+
+        // Build a scene with chunky terrain so the haze gradient is visible
+        // across kilometres of distance.
+        const scene = new THREE.Scene()
+        scene.environment = baker.environmentTexture
+        scene.background = baker.texture
+
+        // Ground plane (huge — let terrain shapes recede into haze).
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x6a6055, roughness: 0.95, metalness: 0.0 })
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(200000, 200000, 1, 1), groundMat)
+        ground.rotation.x = -Math.PI / 2
+        ground.position.y = 0
+        scene.add(ground)
+
+        // Directional sun light. Without this, terrain is lit only by IBL
+        // and stays very dark — the silhouette against the bright sky shows
+        // a prominent dark fringe because mathematically `surfaceColor × T`
+        // is far below the sky's full-atmosphere integration. With direct
+        // sun illumination the lit faces brighten enough that the fringe
+        // effect disappears (matches real-world photography of distant
+        // peaks). Intensity tuned for ACES exposure 0.5 + luminanceScale 40.
+        const sunLight = new THREE.DirectionalLight(0xffffff, 4.0)
+        scene.add(sunLight)
+
+        const sunVec = new THREE.Vector3()
+        const updateSunLight = () => {
+          const sun = baker._sunVec // Y-up world
+          sunVec.copy(sun).multiplyScalar(50000)
+          sunLight.position.copy(sunVec)
+          sunLight.target.position.set(0, 0, 0)
+        }
+        updateSunLight()
+
+        // Scatter of "mountain" cones at various distances so we can see
+        // progressive haze on each.
+        const mountainGeom = new THREE.ConeGeometry(1, 1, 12)
+        const mountainMat = new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 0.9 })
+        for (let i = 1; i <= 12; i++) {
+          const dist = i * 2000 // 2 km apart, up to 24 km
+          const angle = ((i % 4) - 1.5) * 0.4
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 400 + Math.random() * 400
+          m.scale.set(600, h, 600)
+          m.position.set(Math.sin(angle) * dist, h / 2, Math.cos(angle) * dist)
+          scene.add(m)
+        }
+
+        // A few way-distant peaks to exercise long-range AP.
+        for (let i = 0; i < 6; i++) {
+          const dist = 30000 + i * 8000 // 30-70 km
+          const angle = (i - 2.5) * 0.15
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 1500
+          m.scale.set(1500, h, 1500)
+          m.position.set(Math.sin(angle) * dist, h / 2, Math.cos(angle) * dist)
+          scene.add(m)
+        }
+
+        const controls = new OrbitControls(camera, renderer.domElement)
+        controls.target.set(0, 200, 1000)
+        controls.enableDamping = true
+        controls.minDistance = 10
+        controls.maxDistance = 50000
+
+        markStage(4, 'running')
+
+        // Wire the haze post-process. The pass() captures scene+camera
+        // each frame; `outputNode` calls our compositor with the AP LUT.
+        const scenePass = pass(scene, camera)
+
+        // Match the sky mesh's luminance scale (default 40).
+        const luminanceScaleU = baker.sky.luminanceScale
+
+        // Camera inverse projection — drives view-space ray reconstruction
+        // in the haze shader (used for distance-along-ray correction).
+        const invProjU = uniform(camera.projectionMatrixInverse.clone())
+        const hazeStrengthU = uniform(1.0)
+
+        const renderPipeline = new THREE.RenderPipeline(renderer)
+        renderPipeline.outputNode = createHazeOutputNode({
+          scenePass,
+          aerialPerspectiveTexture: baker.aerialPerspectiveTexture,
+          luminanceScale: luminanceScaleU,
+          invProjUniform: invProjU,
+          hazeStrength: hazeStrengthU,
+          // SebH-canonical: no sky-fallback blend. With the AP LUT now
+          // applying SebH's underground-froxel correction, the AP /
+          // Sky-View boundary matches without the extra mix toward the
+          // cube. `skyCube` is still supported in HazePostProcess.js
+          // as an opt-in for legacy skybox callers.
+          debugMode,
+        })
+
+        // GUI — sun and camera-altitude are independent. The cube/PMREM
+        // only re-bakes when sun or atmos params change; aerial
+        // perspective updates every frame from camera position.
+        const gui = renderer.inspector.createParameters('Atmosphere')
+        const eff = {
+          sunElevation: 8,
+          sunAzimuth: 0,
+          cameraAltitude: 200,
+          exposure: 0.5,
+          hazeStrength: 1.0,
+          hazeOn: true,
+        }
+        gui.add(eff, 'sunElevation', -5, 90, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        gui.add(eff, 'sunAzimuth', -180, 180, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        gui.add(eff, 'cameraAltitude', 1, 30000, 1).onChange(() => {
+          const dy = eff.cameraAltitude - camera.position.y
+          camera.position.y = eff.cameraAltitude
+          controls.target.y += dy
+          controls.update()
+        })
+        gui.add(eff, 'exposure', 0, 2, 0.01).onChange(() => {
+          renderer.toneMappingExposure = eff.exposure
+        })
+        gui.add(eff, 'hazeStrength', 0, 3, 0.01).onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+        gui.add(eff, 'hazeOn').onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+
+        window.addEventListener('resize', () => {
+          camera.aspect = window.innerWidth / window.innerHeight
+          camera.updateProjectionMatrix()
+          renderer.setSize(window.innerWidth, window.innerHeight)
+        })
+
+        markStage(5, 'running')
+
+        renderer.setAnimationLoop(async () => {
+          controls.update()
+
+          // Per-frame camera plumbing
+          baker.setCamera(camera)
+          invProjU.value.copy(camera.projectionMatrixInverse)
+
+          // Sky bake (only fires if dirty), then AP LUT (every frame)
+          try {
+            baker.update()
+          } catch (err) {
+            console.error('[animate] baker.update() failed:', err)
+            renderer.setAnimationLoop(null)
+            return
+          }
+
+          await baker.updateAerialPerspective()
+
+          // Re-bind env in case PMREM allocated a new RT
+          if (scene.environment !== baker.environmentTexture) {
+            scene.environment = baker.environmentTexture
+            scene.background = baker.texture
+          }
+
+          await renderPipeline.renderAsync()
+        })
+      })
+    </script>
+  </body>
+</html>

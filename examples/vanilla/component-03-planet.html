@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tsl-sky / 03 — planet-scale ground-to-sky</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">tsl-sky · planet-scale ground→orbit. Drag to look; scroll to dolly altitude.</div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { pass } from 'three/tsl'
+      import CameraControls from 'camera-controls'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+
+      import { Sky, presets } from '@pmndrs/sky'
+      import {
+        createPlanetSurfacePatchGeometry,
+        placeObjectOnPlanetSurface,
+        getPlanetCameraFrame,
+        getPlanetAltitudeM,
+        clampCameraToMinAltitude,
+        getPlanetLookAtTarget,
+      } from '@sky/demo/planetScaleUtils'
+
+      CameraControls.install({ THREE })
+
+      const renderer = new THREE.WebGPURenderer({ antialias: false, logarithmicDepthBuffer: true })
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      renderer.toneMappingExposure = 0.5
+      renderer.inspector = new Inspector()
+      document.body.appendChild(renderer.domElement)
+
+      await renderer.init()
+
+      // Planet-scale needs a wider AP coverage volume — 32 km/slice × 32
+      // slices = 1024 km, large enough that the LUT stays useful for low-
+      // altitude surface views before the raymarch fallback takes over.
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        timeOfDay: 16,
+        latitude: 37.7,
+        exposure: 40,
+        sunDisc: true,
+        enableAerialPerspective: true,
+        apKmPerSlice: 32.0,
+      })
+
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+
+      const bottomRadiusM = sky.baker.atmosphereParams.bottomRadius * 1000
+      const planetCenter = new THREE.Vector3(0, -bottomRadiusM, 0)
+      const MIN_CAMERA_ALTITUDE = 60
+      const LOCAL_PATCH_OFFSET_M = 0.5
+
+      const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 20_000_000)
+      camera.position.set(0, 800, 0)
+
+      // Spherical planet + high-resolution local patch under the camera so
+      // foreground props don't appear to float over coarse triangles.
+      const groundMat = new THREE.MeshStandardMaterial({ color: 0x6a6055, roughness: 0.95 })
+      const planet = new THREE.Mesh(new THREE.SphereGeometry(bottomRadiusM, 128, 64), groundMat)
+      planet.position.copy(planetCenter)
+      scene.add(planet)
+
+      const localGround = new THREE.Mesh(
+        createPlanetSurfacePatchGeometry({
+          bottomRadiusM,
+          patchRadiusM: 60_000,
+          patchAltitudeM: LOCAL_PATCH_OFFSET_M,
+        }),
+        groundMat,
+      )
+      localGround.position.copy(planetCenter)
+      scene.add(localGround)
+
+      // Mountains scattered on the surface so haze gradient is visible
+      // when the camera is near the ground.
+      const mountainGeom = new THREE.ConeGeometry(1, 1, 12)
+      const mountainMat = new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 0.95 })
+      for (let i = 1; i <= 14; i++) {
+        const dist = i * 1500
+        const angle = ((i % 5) - 2) * 0.35
+        const m = new THREE.Mesh(mountainGeom, mountainMat)
+        const h = 350 + Math.random() * 600
+        m.scale.set(500, h, 500)
+        placeObjectOnPlanetSurface(m, {
+          planetCenter,
+          bottomRadiusM,
+          distanceM: dist,
+          bearingRad: angle,
+          heightM: h,
+          baseOffsetM: h * 0.5 + LOCAL_PATCH_OFFSET_M,
+        })
+        scene.add(m)
+      }
+      for (let i = 0; i < 6; i++) {
+        const dist = 30_000 + i * 8000
+        const angle = (i - 2.5) * 0.18
+        const m = new THREE.Mesh(mountainGeom, mountainMat)
+        const h = 1500
+        m.scale.set(1500, h, 1500)
+        placeObjectOnPlanetSurface(m, {
+          planetCenter,
+          bottomRadiusM,
+          distanceM: dist,
+          bearingRad: angle,
+          heightM: h,
+          baseOffsetM: h * 0.5 + LOCAL_PATCH_OFFSET_M,
+        })
+        scene.add(m)
+      }
+
+      // Direct sun keeps lit faces in the same luminance band as the sky,
+      // avoiding the silhouette-fringe on distant geometry.
+      const sunLight = new THREE.DirectionalLight(0xffffff, 4.0)
+      scene.add(sunLight)
+      const updateSunLight = () => {
+        const elev = (sky.sunElevation * Math.PI) / 180
+        const az = (sky.sunAzimuth * Math.PI) / 180
+        sunLight.position.set(
+          Math.cos(elev) * Math.sin(az) * 50_000,
+          Math.sin(elev) * 50_000,
+          Math.cos(elev) * Math.cos(az) * 50_000,
+        )
+        sunLight.target.position.set(0, 0, 0)
+      }
+      updateSunLight()
+
+      // Sky mesh attached to the main scene (in addition to the baker's
+      // internal cube) so we get a *live* sky that reacts to altitude
+      // changes instantly — the cube only refreshes on dirty re-bake.
+      const liveSkyMesh = sky.baker.createSkyMesh({ scale: 4_000_000, showSunDisc: true })
+      scene.add(liveSkyMesh)
+
+      const clock = new THREE.Clock()
+      const cameraControls = new CameraControls(camera, renderer.domElement)
+      const cameraTarget = getPlanetLookAtTarget({
+        position: camera.position,
+        planetCenter,
+        bottomRadiusM,
+        distanceM: 30_000,
+      })
+      cameraControls.setLookAt(
+        camera.position.x,
+        camera.position.y,
+        camera.position.z,
+        cameraTarget.x,
+        cameraTarget.y,
+        cameraTarget.z,
+        false,
+      )
+      cameraControls.minDistance = 100
+      cameraControls.maxDistance = 8_000_000
+      cameraControls.dollySpeed = 2.0
+      cameraControls.truckSpeed = 80.0
+      cameraControls.dollyToCursor = true
+      cameraControls.infinityDolly = true
+      cameraControls.colliderMeshes = [localGround]
+
+      // Vanilla `applyHaze` pipeline. Logarithmic depth buffer is on, so
+      // we set the matching flag on the haze decode so depth → distance
+      // reconstruction stays correct.
+      const scenePass = pass(scene, camera)
+      const post = new THREE.RenderPipeline(renderer)
+      post.outputNode = sky.applyHaze(scenePass.getTextureNode(), {
+        scenePass,
+        policy: 'auto',
+        strength: 1.0,
+        logarithmicDepthBuffer: true,
+        useCameraFar: true,
+      })
+
+      const state = {
+        preset: 'earth',
+        timeOfDay: 16,
+        latitude: 37.7,
+        dayOfYear: 172,
+        north: '+Z',
+        exposure: 40,
+        cameraAltitude: 800,
+        hazeStrength: 1.0,
+        hazePolicy: 'auto',
+        blendStartKm: 50,
+        blendEndKm: 100,
+        toneExposure: renderer.toneMappingExposure,
+      }
+      const gui = renderer.inspector.createParameters('Sky')
+      gui.add(state, 'preset', Object.keys(presets)).onChange((v) => sky.setPreset(v))
+      gui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => {
+        sky.setTimeOfDay(v)
+        updateSunLight()
+      })
+      gui.add(state, 'latitude', -90, 90, 0.5).onChange((v) => {
+        sky.setLatitude(v)
+        updateSunLight()
+      })
+      gui.add(state, 'dayOfYear', 1, 365, 1).onChange((v) => {
+        sky.setDayOfYear(v)
+        updateSunLight()
+      })
+      gui.add(state, 'north', ['+X', '-X', '+Z', '-Z']).onChange((v) => {
+        sky.setNorth(v)
+        updateSunLight()
+      })
+      gui.add(state, 'exposure', 0, 200, 0.5).onChange((v) => sky.setExposure(v))
+      gui.add(state, 'toneExposure', 0, 2, 0.001).onChange((v) => {
+        renderer.toneMappingExposure = v
+      })
+
+      const altitudeController = gui
+        .add(state, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 500_000, 1)
+        .onChange((v) => setCameraAltitude(v))
+      altitudeController.listen?.()
+
+      const hazeGui = renderer.inspector.createParameters('Haze')
+      hazeGui.add(state, 'hazeStrength', 0, 2, 0.01).onChange((v) => sky.setHazeStrength(v))
+      hazeGui.add(state, 'hazePolicy', ['auto', 'ap', 'raymarch']).onChange((v) => sky.setHazePolicy(v))
+      hazeGui.add(state, 'blendStartKm', 1, 200, 1).onChange((v) => sky.setHazeAltitudeBlend({ startKm: v }))
+      hazeGui.add(state, 'blendEndKm', 1, 250, 1).onChange((v) => sky.setHazeAltitudeBlend({ endKm: v }))
+
+      function setCameraAltitude(altitudeM) {
+        cameraControls.getTarget(cameraTarget)
+        const frame = getPlanetCameraFrame(camera.position, planetCenter, bottomRadiusM)
+        const nextPosition = planetCenter.clone().add(frame.up.multiplyScalar(bottomRadiusM + altitudeM))
+        const delta = nextPosition.clone().sub(camera.position)
+        cameraTarget.add(delta)
+        cameraControls.setLookAt(
+          nextPosition.x,
+          nextPosition.y,
+          nextPosition.z,
+          cameraTarget.x,
+          cameraTarget.y,
+          cameraTarget.z,
+          true,
+        )
+      }
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight
+        camera.updateProjectionMatrix()
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      })
+
+      renderer.setAnimationLoop(async () => {
+        const delta = clock.getDelta()
+        cameraControls.update(delta)
+        cameraControls.getTarget(cameraTarget)
+
+        const unclamped = getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM)
+        state.cameraAltitude = clampCameraToMinAltitude({
+          camera,
+          target: cameraTarget,
+          planetCenter,
+          bottomRadiusM,
+          minAltitudeM: MIN_CAMERA_ALTITUDE,
+        })
+        if (state.cameraAltitude !== unclamped) {
+          cameraControls.setLookAt(
+            camera.position.x,
+            camera.position.y,
+            camera.position.z,
+            cameraTarget.x,
+            cameraTarget.y,
+            cameraTarget.z,
+            false,
+          )
+        }
+
+        // Sky-mesh follows the camera so its giant box stays around it.
+        liveSkyMesh.position.copy(camera.position)
+
+        sky.update(camera, { planetCenter })
+        await sky.updateAerialPerspective()
+
+        post.render()
+      })
+    </script>
+  </body>
+</html>

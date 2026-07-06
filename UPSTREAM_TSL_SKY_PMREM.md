@@ -28,8 +28,8 @@ In `SkyAtmosphereBaker.js`:
 // 3. PMREM. WebGPU PMREMGenerator exposes `fromCubemap( texture )` (not the
 // WebGL-style `fromCubeRenderTarget`). It allocates a new RT each call, so
 // dispose the previous one first.
-if ( this._pmremTarget ) this._pmremTarget.dispose();
-this._pmremTarget = this.pmremGenerator.fromCubemap( this.cubeRenderTarget.texture );
+if (this._pmremTarget) this._pmremTarget.dispose()
+this._pmremTarget = this.pmremGenerator.fromCubemap(this.cubeRenderTarget.texture)
 ```
 
 Drag a `setTimeOfDay` slider continuously. `renderer.render(...)` stalls on
@@ -56,16 +56,16 @@ Patched the consumer app's `tsl-sky` install to A/B each suspect at runtime
 behind `globalThis.__SKY_DEBUG_*__` flags. Drag a `setTimeOfDay` slider for
 ~5 s in each configuration, log per-tick split.
 
-| Variant | cube bake | PMREM regen | `scene.environment` reassigned | result |
-|---|---|---|---|---|
-| Baseline | ✓ | ✓ | ✓ | 155 ms, ~7 fps |
-| Skip cube bake + PMREM | ✗ | ✗ | ✗ | 0.7 ms, 50 fps |
-| Skip cube camera only | ✗ | ✓ | ✓ | 165 ms, ~7 fps |
-| Skip PMREM only | ✓ | ✗ | ✗ (target not rotated) | 0.7 ms, 50 fps |
-| **Keep PMREM, skip reassign** | ✓ | ✓ | **✗** | **0.81 ms, ~43 fps** |
+| Variant                       | cube bake | PMREM regen | `scene.environment` reassigned | result               |
+| ----------------------------- | --------- | ----------- | ------------------------------ | -------------------- |
+| Baseline                      | ✓         | ✓           | ✓                              | 155 ms, ~7 fps       |
+| Skip cube bake + PMREM        | ✗         | ✗           | ✗                              | 0.7 ms, 50 fps       |
+| Skip cube camera only         | ✗         | ✓           | ✓                              | 165 ms, ~7 fps       |
+| Skip PMREM only               | ✓         | ✗           | ✗ (target not rotated)         | 0.7 ms, 50 fps       |
+| **Keep PMREM, skip reassign** | ✓         | ✓           | **✗**                          | **0.81 ms, ~43 fps** |
 
 The last row is the decisive one: PMREM runs full-speed, GPU work happens
-every tick, *but* `scene.environment` keeps pointing at the original
+every tick, _but_ `scene.environment` keeps pointing at the original
 texture object → no pipeline invalidation cascade → smooth.
 
 ## Proposed fixes — ranked
@@ -90,16 +90,16 @@ writes into a stable RT.
 
 ```js
 // In SkyAtmosphereBaker.update():
-if ( ! this._pmremTarget ) {
-    this._pmremTarget = this.pmremGenerator.fromCubemap( this.cubeRenderTarget.texture );
+if (!this._pmremTarget) {
+  this._pmremTarget = this.pmremGenerator.fromCubemap(this.cubeRenderTarget.texture)
 } else {
-    // Pseudo: render the convolution into the existing target.
-    this.pmremGenerator.fromCubemap( this.cubeRenderTarget.texture, this._pmremTarget );
+  // Pseudo: render the convolution into the existing target.
+  this.pmremGenerator.fromCubemap(this.cubeRenderTarget.texture, this._pmremTarget)
 }
 ```
 
 **1b. Don't reassign `scene.environment`.** Set it once on `attach()`.
-Since `_pmremTarget.texture` *would* keep its identity under (1a), and
+Since `_pmremTarget.texture` _would_ keep its identity under (1a), and
 the `_scene.environment !== this.baker.environmentTexture` guard in
 `Sky.update()` would naturally become a no-op, this falls out of 1a for
 free. Worth dropping the guarded reassign anyway — the comment in
@@ -113,13 +113,13 @@ cube refresh:
 
 ```js
 new Sky(renderer, {
-    pmremRefreshMs: 100,   // throttle PMREM regen to once per 100 ms
-});
+  pmremRefreshMs: 100, // throttle PMREM regen to once per 100 ms
+})
 
 // or
-sky.setPMREMRefreshMs(0);     // eager (current behaviour, default)
-sky.setPMREMRefreshMs(100);   // throttled
-sky.setPMREMRefreshMs(-1);    // manual — caller invokes sky.refreshPMREM()
+sky.setPMREMRefreshMs(0) // eager (current behaviour, default)
+sky.setPMREMRefreshMs(100) // throttled
+sky.setPMREMRefreshMs(-1) // manual — caller invokes sky.refreshPMREM()
 ```
 
 Cube re-bake continues at full rate; PMREM (and therefore the
@@ -141,12 +141,12 @@ cascade, only shrinks the per-rebuild cost.
 (no user content, but framework-level helpers, sky mesh, and PP materials
 present), WebGPU backend, continuous `setTimeOfDay` slider drag.
 
-| Variant                                       | render time | tick rate |
-|-----------------------------------------------|------------:|----------:|
-| Default                                       |    155 ms  |  ~7 fps   |
-| Skip cube + PMREM entirely                    |    0.7 ms  |   50 fps  |
-| Skip cube camera only (PMREM still runs)      |    165 ms  |  ~7 fps   |
-| Skip PMREM only (cube bake still runs)        |    0.7 ms  |   50 fps  |
+| Variant                                           | render time |   tick rate |
+| ------------------------------------------------- | ----------: | ----------: |
+| Default                                           |      155 ms |      ~7 fps |
+| Skip cube + PMREM entirely                        |      0.7 ms |      50 fps |
+| Skip cube camera only (PMREM still runs)          |      165 ms |      ~7 fps |
+| Skip PMREM only (cube bake still runs)            |      0.7 ms |      50 fps |
 | **Keep PMREM, skip `scene.environment` reassign** | **0.81 ms** | **~43 fps** |
 
 The last row isolates the cause. PMREM is running every frame; the only

@@ -1,20 +1,21 @@
 name: Publish to npm
 
-# Triggered by pushing a `v*` tag (e.g. `v0.1.1`). The tag's commit must
-# match the version in `package.json` — `npm publish` will fail otherwise.
+# Triggered by pushing a `v*` tag (e.g. `v0.1.5`). The tag's commit must match
+# the version in `package.json` — the publish step will fail otherwise.
 #
-# Auth: npm Trusted Publishing (OIDC). No NPM_TOKEN secret needed —
-# GitHub Actions exchanges an OIDC token for npm publish credentials at
-# runtime. Configure the trusted publisher on npmjs.com:
-#   tsl-sky → Settings → Publishing → Trusted Publishers
+# Auth: npm Trusted Publishing (OIDC). No NPM_TOKEN secret needed — GitHub
+# Actions exchanges an OIDC token for npm publish credentials at runtime.
+# Configure the trusted publisher on npmjs.com:
+#   @pmndrs/sky → Settings → Publishing → Trusted Publishers
 #   - Publisher: GitHub Actions
-#   - Repository: DennisSmolek/SebH-TSL-Sky
+#   - Repository: pmndrs/sky
 #   - Workflow filename: publish.yml
 #
-# Trusted Publishing requires npm CLI 11.5.1+, so we upgrade npm before
-# the publish step (Node 20 ships npm 10.x).
+# Trusted Publishing requires npm CLI 11.5.1+, so we upgrade npm before the
+# publish step (Node 20 ships npm 10.x). We install + build with pnpm (the
+# repo's package manager) and publish the built `dist/` with `npm publish`.
 #
-# Manual cut: `git tag v0.1.1 && git push --tags`.
+# Manual cut: `git tag v0.1.5 && git push --tags`.
 
 on:
   push:
@@ -26,18 +27,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # required for npm provenance + Trusted Publishing
+      id-token: write # required for npm provenance + Trusted Publishing
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
 
-      - run: npm install -g npm@latest
-
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       # Sanity check: the version on the tag matches package.json.
       - name: Verify tag matches package.json version
@@ -47,5 +49,13 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}" >&2
             exit 1
           fi
+
+      # Gate the publish on a green build/typecheck/test.
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      # Trusted Publishing (OIDC) needs npm 11.5.1+.
+      - run: npm install -g npm@latest
 
       - run: npm publish --provenance --access public

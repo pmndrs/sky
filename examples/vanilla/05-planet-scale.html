@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>05 — Planet-scale (Mode B + sphere ground + extended AP)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      Planet-scale — sphere ground, orbit-altitude camera, extended AP coverage.<br />
+      Stable counterpart: <a href="/examples/04-live-sky.html" style="color: #fc9">04-live-sky</a> · LUT res:
+      <a href="?" style="color: #fc9">default</a> /
+      <a href="?hires=1" style="color: #fc9">hires</a>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import CameraControls from 'camera-controls'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+
+      import { pass, uniform } from 'three/tsl'
+
+      import { SkyAtmosphereBaker } from '@sky/sky/SkyAtmosphereBaker'
+      import { createHazeOutputNode } from '@sky/sky/HazePostProcess'
+      import { createStartGate, logStage } from '@sky/demo/startGate'
+      import {
+        clampCameraToMinAltitude,
+        createPlanetSurfacePatchGeometry,
+        getPlanetCameraFrame,
+        getPlanetAltitudeM,
+        getPlanetLookAtTarget,
+        placeObjectOnPlanetSurface,
+      } from '@sky/demo/planetScaleUtils'
+
+      CameraControls.install({ THREE })
+
+      const _q = new URLSearchParams(window.location.search)
+      const debugMode = _q.get('debug')
+      // Orbit / planet-scale: default log-Z for depth precision; compare with `?logDepth=0`.
+      const useLogDepth = _q.get('logDepth') !== '0'
+
+      // `?hires=1` doubles Transmittance + Multi-Scatter LUT resolution.
+      // At altitudes 50–100 km looking near the horizon, the TLUT's
+      // Bruneton mu remap has a very steep gradient — a horizontal
+      // screen row at a fixed elevation angle clusters into a narrow
+      // U range and 256 texels can't resolve adjacent rows, producing
+      // chunky horizontal banding on the planet surface. Doubling to
+      // 512×128 (TLUT) and 64×64 (MS) cleans it up at the cost of
+      // roughly 4× the LUT memory. Memory cost is small in absolute
+      // terms (a few MB) but kept opt-in so the default footprint
+      // stays SebH-canonical until we decide it's worth shipping.
+      const hires = new URLSearchParams(window.location.search).get('hires') === '1'
+      const lutResolutions = hires
+        ? {
+            transmittance: { width: 512, height: 128 },
+            multiScatter: { width: 64, height: 64 },
+          }
+        : undefined
+
+      // AP coverage policy for this demo. 32 km/slice × 32 slices ≈ 1024 km.
+      // Tradeoff: close-range slice 0 spans 32 km instead of 8, so haze on
+      // nearby geometry is coarser — fine for orbit views, would degrade
+      // the ground-level demo. That's why 04 keeps the default 8 and 05
+      // is a separate page.
+      const AP_KM_PER_SLICE = 32.0
+      const MIN_CAMERA_ALTITUDE = 25.0
+      const INITIAL_CAMERA_ALTITUDE = 200.0
+      const INITIAL_LOOK_DISTANCE_M = 50_000.0
+      const LOCAL_GROUND_PATCH_RADIUS_M = 140_000.0
+      const LOCAL_GROUND_PATCH_OFFSET_M = 2.0
+      const HAZE_MODES = {
+        auto: 0,
+        ap: 1,
+        raymarch: 2,
+      }
+
+      const gate = createStartGate({
+        label: 'Start Planet-scale demo',
+        stages: [
+          'create WebGPU renderer',
+          'renderer.init()',
+          'baker (LUTs + cube + AP @ 1024 km)',
+          'build planet scene',
+          'set up haze post-process',
+          'render loop',
+        ],
+      })
+
+      gate.run(async ({ markStage }) => {
+        markStage(0, 'running')
+        const renderer = new THREE.WebGPURenderer({ antialias: false, logarithmicDepthBuffer: useLogDepth })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = 0.5
+        renderer.inspector = new Inspector()
+        document.body.appendChild(renderer.domElement)
+        markStage(1, 'running')
+
+        await logStage('renderer.init()', () => renderer.init())
+        markStage(2, 'running')
+
+        // Far plane large enough to enclose the full planet sphere when
+        // looking down from orbit. Earth radius ≈ 6.36 Mm so 20 Mm
+        // comfortably covers the diameter plus altitude headroom.
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 20_000_000)
+        camera.position.set(0, INITIAL_CAMERA_ALTITUDE, 0)
+        camera.lookAt(0, INITIAL_CAMERA_ALTITUDE, INITIAL_LOOK_DISTANCE_M)
+
+        const baker = await logStage('SkyAtmosphereBaker', async () => {
+          const b = new SkyAtmosphereBaker(renderer, {
+            cubeSize: 256,
+            enableAerialPerspective: true,
+            apKmPerSlice: AP_KM_PER_SLICE,
+            lutResolutions,
+          })
+          b.setSun({ elevation: 8, azimuth: 0 })
+          b.setCamera(camera)
+          b.update()
+          await b.updateAerialPerspective()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return b
+        })
+        markStage(3, 'running')
+
+        const scene = new THREE.Scene()
+
+        // Live sky mesh — Mode B. Sky-View LUT is sampled per-pixel
+        // against the current camera; raymarch fallback above topRadius.
+        const skyMesh = baker.createSkyMesh()
+        scene.add(skyMesh)
+
+        // IBL — baked cube → PMREM. The cube is baked at the origin
+        // of the skyScene (planet surface), so at altitude the IBL
+        // is "what the sky looks like FROM the ground" rather than
+        // from where the camera actually is. Toggleable from the GUI
+        // to isolate whether on-surface artefacts come from IBL vs
+        // the haze raymarch.
+        scene.environment = baker.environmentTexture
+
+        // Planet sphere — locally indistinguishable from a flat plane,
+        // but reveals planetary curvature from altitude. Centred at
+        // (0, -bottomRadius_m, 0) so the surface sits at y = 0.
+        const bottomRadiusM = baker.atmosphereParams.bottomRadius * 1000
+        const planetCenter = new THREE.Vector3(0, -bottomRadiusM, 0)
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x6a6055, roughness: 0.95, metalness: 0.0 })
+        const ground = new THREE.Mesh(new THREE.SphereGeometry(bottomRadiusM, 128, 64), groundMat)
+        ground.position.copy(planetCenter)
+        scene.add(ground)
+
+        const localGround = new THREE.Mesh(
+          createPlanetSurfacePatchGeometry({
+            bottomRadiusM,
+            patchRadiusM: LOCAL_GROUND_PATCH_RADIUS_M,
+            patchAltitudeM: LOCAL_GROUND_PATCH_OFFSET_M,
+          }),
+          groundMat,
+        )
+        localGround.position.copy(planetCenter)
+        scene.add(localGround)
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 4.0)
+        scene.add(sunLight)
+
+        const sunVec = new THREE.Vector3()
+        const updateSunLight = () => {
+          sunVec.copy(baker._sunVec).multiplyScalar(50000)
+          sunLight.position.copy(sunVec)
+          sunLight.target.position.set(0, 0, 0)
+        }
+        updateSunLight()
+
+        // Mountain scatter so haze gradient is visible at low altitude.
+        const mountainGeom = new THREE.ConeGeometry(1, 1, 12)
+        const mountainMat = new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 0.9 })
+        for (let i = 1; i <= 12; i++) {
+          const dist = i * 2000
+          const angle = ((i % 4) - 1.5) * 0.4
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 400 + Math.random() * 400
+          m.scale.set(600, h, 600)
+          placeObjectOnPlanetSurface(m, {
+            planetCenter,
+            bottomRadiusM,
+            distanceM: dist,
+            bearingRad: angle,
+            heightM: h,
+            baseOffsetM: h * 0.5 + LOCAL_GROUND_PATCH_OFFSET_M,
+          })
+          scene.add(m)
+        }
+        for (let i = 0; i < 6; i++) {
+          const dist = 30000 + i * 8000
+          const angle = (i - 2.5) * 0.15
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 1500
+          m.scale.set(1500, h, 1500)
+          placeObjectOnPlanetSurface(m, {
+            planetCenter,
+            bottomRadiusM,
+            distanceM: dist,
+            bearingRad: angle,
+            heightM: h,
+            baseOffsetM: h * 0.5 + LOCAL_GROUND_PATCH_OFFSET_M,
+          })
+          scene.add(m)
+        }
+
+        const clock = new THREE.Clock()
+        const cameraControls = new CameraControls(camera, renderer.domElement)
+        const cameraTarget = getPlanetLookAtTarget({
+          position: camera.position,
+          planetCenter,
+          bottomRadiusM,
+          distanceM: INITIAL_LOOK_DISTANCE_M,
+        })
+        cameraControls.setLookAt(
+          camera.position.x,
+          camera.position.y,
+          camera.position.z,
+          cameraTarget.x,
+          cameraTarget.y,
+          cameraTarget.z,
+          false,
+        )
+        cameraControls.minDistance = 100
+        cameraControls.maxDistance = 8_000_000
+        cameraControls.smoothTime = 0.12
+        cameraControls.draggingSmoothTime = 0.04
+        cameraControls.azimuthRotateSpeed = 2.5
+        cameraControls.polarRotateSpeed = 2.0
+        cameraControls.dollySpeed = 2.0
+        cameraControls.truckSpeed = 80.0
+        cameraControls.dollyToCursor = true
+        cameraControls.infinityDolly = true
+        cameraControls.colliderMeshes = [localGround]
+
+        markStage(4, 'running')
+
+        const scenePass = pass(scene, camera)
+        const luminanceScaleU = baker.sky.luminanceScale
+        const invProjU = uniform(camera.projectionMatrixInverse.clone())
+        const cameraWorldU = uniform(camera.matrixWorld.clone())
+        const cameraPositionKmU = uniform(baker.cameraPositionKm.clone())
+        // camera.far is large (20 Mm) for orbit views; opt-in to
+        // the viewZ-based sky-pixel test so AP doesn't double up
+        // the sky-mesh's gradient at the top of the screen.
+        const cameraFarU = uniform(camera.far)
+        const hazeStrengthU = uniform(1.0)
+        const hazeModeU = uniform(HAZE_MODES.auto)
+        const raymarchBlendStartKmU = uniform(50.0)
+        const raymarchBlendEndKmU = uniform(100.0)
+        const raymarchCoverageBlendKmU = uniform(128.0)
+
+        const renderPipeline = new THREE.RenderPipeline(renderer)
+        renderPipeline.outputNode = createHazeOutputNode({
+          scenePass,
+          aerialPerspectiveTexture: baker.aerialPerspectiveTexture,
+          luminanceScale: luminanceScaleU,
+          invProjUniform: invProjU,
+          cameraWorldUniform: cameraWorldU,
+          cameraFarUniform: cameraFarU,
+          logarithmicDepthBuffer: useLogDepth,
+          hazeModeUniform: hazeModeU,
+          raymarchBlendStartKm: raymarchBlendStartKmU,
+          raymarchBlendEndKm: raymarchBlendEndKmU,
+          raymarchCoverageBlendKm: raymarchCoverageBlendKmU,
+          hazeStrength: hazeStrengthU,
+          kmPerSlice: AP_KM_PER_SLICE,
+          // Per-pixel raymarch fallback — geometry past 1024 km integrates
+          // the real atmosphere instead of clamping to slice 31 of the
+          // AP LUT. Required for orbit views of the planet sphere; without
+          // this, the far hemisphere of the planet reads as unhazed.
+          enableRaymarchFallback: true,
+          atmosphereUniforms: baker.atmosphereUniforms,
+          sunDirection: baker.sky.sunDirection,
+          viewHeightKm: baker.sky.viewHeight,
+          cameraPositionKm: cameraPositionKmU,
+          transmittanceLUT: baker.transmittanceLUT.texture,
+          multiScatterLUT: baker.multiScatterLUT.texture,
+          debugMode,
+        })
+
+        const gui = renderer.inspector.createParameters('Atmosphere')
+        const eff = {
+          sunElevation: 8,
+          sunAzimuth: 0,
+          cameraAltitude: INITIAL_CAMERA_ALTITUDE,
+          exposure: 0.5,
+          hazeStrength: 1.0,
+          hazeOn: true,
+          // Isolation toggles — flip one off to figure out which system
+          // is producing a given on-screen artefact.
+          //   skyMeshOn  — the SkyAtmosphereMesh that renders the actual
+          //                visible sky (Sky-View LUT below topRadius +
+          //                space-view raymarch above). When off the sky
+          //                shows whatever the renderer clears to (black);
+          //                the planet surface still has AP haze.
+          //   hazeOn     — the AP post-process. When off the planet
+          //                surface renders without atmospheric haze; the
+          //                sky-mesh still draws.
+          skyMeshOn: true,
+          hazeMode: 'auto',
+          blendStartKm: 50.0,
+          blendEndKm: 100.0,
+          coverageBlendKm: 128.0,
+          // PMREM IBL on the planet surface. Off → surface lit by
+          // directional sun only, useful for isolating raymarch
+          // artefacts from IBL contributions.
+          iblOn: true,
+        }
+        const setCameraAltitude = (altitudeM, enableTransition = true) => {
+          cameraControls.getTarget(cameraTarget)
+          const frame = getPlanetCameraFrame(camera.position, planetCenter, bottomRadiusM)
+          const nextPosition = planetCenter.clone().add(frame.up.multiplyScalar(bottomRadiusM + altitudeM))
+          const delta = nextPosition.clone().sub(camera.position)
+          cameraTarget.add(delta)
+          cameraControls.setLookAt(
+            nextPosition.x,
+            nextPosition.y,
+            nextPosition.z,
+            cameraTarget.x,
+            cameraTarget.y,
+            cameraTarget.z,
+            enableTransition,
+          )
+        }
+        gui.add(eff, 'sunElevation', -5, 90, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        gui.add(eff, 'sunAzimuth', -180, 180, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        const altitudeController = gui
+          .add(eff, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 500000, 1)
+          .onChange(() => setCameraAltitude(eff.cameraAltitude))
+        altitudeController.listen?.()
+        gui.add(eff, 'exposure', 0, 2, 0.01).onChange(() => {
+          renderer.toneMappingExposure = eff.exposure
+        })
+        gui.add(eff, 'hazeStrength', 0, 3, 0.01).onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+        gui.add(eff, 'hazeOn').onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+        gui.add(eff, 'skyMeshOn').onChange(() => {
+          skyMesh.visible = eff.skyMeshOn
+        })
+        gui.add(eff, 'iblOn').onChange(() => {
+          scene.environment = eff.iblOn ? baker.environmentTexture : null
+        })
+        const hazePolicyGui = renderer.inspector.createParameters('Haze policy')
+        hazePolicyGui.add(eff, 'hazeMode', Object.keys(HAZE_MODES)).onChange(() => {
+          hazeModeU.value = HAZE_MODES[eff.hazeMode]
+        })
+        hazePolicyGui.add(eff, 'blendStartKm', 1, 200, 1).onChange(() => {
+          raymarchBlendStartKmU.value = eff.blendStartKm
+        })
+        hazePolicyGui.add(eff, 'blendEndKm', 1, 250, 1).onChange(() => {
+          raymarchBlendEndKmU.value = eff.blendEndKm
+        })
+        hazePolicyGui.add(eff, 'coverageBlendKm', 1, 512, 1).onChange(() => {
+          raymarchCoverageBlendKmU.value = eff.coverageBlendKm
+        })
+
+        window.addEventListener('resize', () => {
+          camera.aspect = window.innerWidth / window.innerHeight
+          camera.updateProjectionMatrix()
+          renderer.setSize(window.innerWidth, window.innerHeight)
+        })
+
+        markStage(5, 'running')
+
+        renderer.setAnimationLoop(async () => {
+          const delta = clock.getDelta()
+          cameraControls.update(delta)
+          cameraControls.getTarget(cameraTarget)
+
+          const unclampedAltitude = getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM)
+          eff.cameraAltitude = clampCameraToMinAltitude({
+            camera,
+            target: cameraTarget,
+            planetCenter,
+            bottomRadiusM,
+            minAltitudeM: MIN_CAMERA_ALTITUDE,
+          })
+          if (eff.cameraAltitude !== unclampedAltitude) {
+            cameraControls.setLookAt(
+              camera.position.x,
+              camera.position.y,
+              camera.position.z,
+              cameraTarget.x,
+              cameraTarget.y,
+              cameraTarget.z,
+              false,
+            )
+          }
+
+          // Sky-mesh box must follow the camera. RenderPipeline passes
+          // don't trigger onBeforeRender consistently, so set it here.
+          skyMesh.position.copy(camera.position)
+
+          baker.setCamera(camera, { planetCenter })
+          invProjU.value.copy(camera.projectionMatrixInverse)
+          cameraWorldU.value.copy(camera.matrixWorld)
+          cameraPositionKmU.value.copy(baker.cameraPositionKm)
+
+          try {
+            baker.update()
+          } catch (err) {
+            console.error('[animate] baker.update() failed:', err)
+            renderer.setAnimationLoop(null)
+            return
+          }
+
+          await baker.updateAerialPerspective()
+
+          if (eff.iblOn && scene.environment !== baker.environmentTexture) {
+            scene.environment = baker.environmentTexture
+          }
+
+          await renderPipeline.renderAsync()
+        })
+      })
+    </script>
+  </body>
+</html>

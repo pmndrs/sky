@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>parity 13 — Multi-Scatter LUT (WGSL vs TSL)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #111;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 8px 12px;
+        background: rgba(0, 0, 0, 0.7);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-width: 640px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #info b {
+        color: #9cf;
+      }
+      #verdict {
+        font-size: 14px;
+        font-weight: bold;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <b>Phase 3 — Multi-Scatter LUT: WGSL vs TSL</b><br />
+      Two <code>MultiScatterLUT</code> instances (<code>backend:'wgsl'</code> / <code>'tsl'</code>) sharing one
+      Transmittance LUT — the 64-direction × 20-step nested integrator + geometric-series finalization. Rendered to
+      float targets and diffed (relative, values are tiny). Canvas shows the WGSL MS LUT (×40).<br />
+      <span id="verdict">running…</span>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Fn, texture, uv, vec4 } from 'three/tsl'
+
+      import { EARTH } from '@sky/core/AtmosphereParams'
+      import { createAtmosphereUniforms } from '@sky/sky/AtmosphereUniforms'
+      import { TransmittanceLUT } from '@sky/sky/luts/TransmittanceLUT'
+      import { MultiScatterLUT } from '@sky/sky/luts/MultiScatterLUT'
+
+      let renderer, displayScene, displayCam
+
+      init()
+
+      async function init() {
+        renderer = new THREE.WebGPURenderer({ antialias: false })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.NoToneMapping
+        renderer.outputColorSpace = THREE.NoColorSpace
+        document.body.appendChild(renderer.domElement)
+        await renderer.init()
+
+        const au = createAtmosphereUniforms(EARTH)
+        const tLut = new TransmittanceLUT(renderer, { atmosphereUniforms: au })
+        tLut.render()
+
+        const msW = new MultiScatterLUT(renderer, { atmosphereUniforms: au, transmittanceLUT: tLut, backend: 'wgsl' })
+        const msT = new MultiScatterLUT(renderer, { atmosphereUniforms: au, transmittanceLUT: tLut, backend: 'tsl' })
+
+        await runParity(msW, msT)
+
+        const mat = new THREE.NodeMaterial()
+        mat.colorNode = Fn(() => vec4(texture(msW.texture, uv()).rgb.mul(40.0), 1.0))()
+        msW.render()
+        displayScene = new THREE.Scene()
+        displayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+        displayScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat))
+        renderer.setAnimationLoop(() => renderer.render(displayScene, displayCam))
+      }
+
+      function renderToFloat(material, W, H) {
+        const rt = new THREE.RenderTarget(W, H, {
+          type: THREE.FloatType,
+          minFilter: THREE.NearestFilter,
+          magFilter: THREE.NearestFilter,
+          depthBuffer: false,
+        })
+        const quad = new THREE.QuadMesh()
+        quad.material = material
+        renderer.setRenderTarget(rt)
+        quad.render(renderer)
+        renderer.setRenderTarget(null)
+        return rt
+      }
+
+      async function runParity(msW, msT) {
+        const W = msW.resolution.width,
+          H = msW.resolution.height
+        const rtW = renderToFloat(msW.material, W, H)
+        const rtT = renderToFloat(msT.material, W, H)
+        const bufW = await renderer.readRenderTargetPixelsAsync(rtW, 0, 0, W, H)
+        const bufT = await renderer.readRenderTargetPixelsAsync(rtT, 0, 0, W, H)
+        let maxAbs = 0,
+          maxRel = 0,
+          maxVal = 0
+        for (let i = 0; i < bufW.length; i++) {
+          if (i % 4 === 3) continue
+          maxVal = Math.max(maxVal, Math.abs(bufT[i]))
+          const a = Math.abs(bufW[i] - bufT[i])
+          if (a > maxAbs) maxAbs = a
+          const rel = a / (Math.abs(bufT[i]) + 1e-4)
+          if (rel > maxRel) maxRel = rel
+        }
+        const pass = maxRel <= 0.02 || maxAbs <= 5e-5
+        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — maxAbs=${maxAbs.toExponential(3)}, maxRel=${(maxRel * 100).toFixed(2)}% (peak≈${maxVal.toExponential(2)})`
+        console.log(`[parity] ${msg}`)
+        const el = document.getElementById('verdict')
+        el.textContent = msg
+        el.style.color = pass ? '#7f7' : '#f77'
+        rtW.dispose()
+        rtT.dispose()
+      }
+    </script>
+  </body>
+</html>

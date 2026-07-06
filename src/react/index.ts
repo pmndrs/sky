@@ -8,5 +8,5 @@
 // which currently lives on the v10 alpha line. Both peers are declared
 // optional in package.json so the vanilla entry (`tsl-sky`) remains
 // importable without React or r3f installed.
-export { Sky } from './Sky.jsx';
-export { SkyContext, useSky } from './SkyContext.js';
+export { Sky } from './Sky'
+export { SkyContext, useSky } from './SkyContext'

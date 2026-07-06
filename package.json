@@ -1,37 +1,7 @@
 {
-  "name": "tsl-sky",
+  "name": "@pmndrs/sky",
   "version": "0.1.4",
   "description": "Production-quality Hillaire atmospheric sky for Three.js / TSL on the WebGPU renderer. Drop-in vanilla and React (R3F) entries.",
-  "type": "module",
-  "exports": {
-    ".": "./src/index.js",
-    "./react": "./src/react/index.js",
-    "./react/auto-haze": "./src/react/AutoHaze.jsx"
-  },
-  "main": "./src/index.js",
-  "files": [
-    "src/index.js",
-    "src/Sky.js",
-    "src/applyHaze.js",
-    "src/presets.js",
-    "src/solarPosition.js",
-    "src/react",
-    "src/sky/AtmosphereParams.js",
-    "src/sky/AtmosphereUniforms.js",
-    "src/sky/HazePostProcess.js",
-    "src/sky/hazeScenePassDepth.js",
-    "src/sky/SkyAtmosphereBaker.js",
-    "src/sky/SkyAtmosphereMesh.js",
-    "src/sky/SkyGround.js",
-    "src/sky/GroundedSkybox.js",
-    "src/sky/SkyMoon.js",
-    "src/sky/SkyNight.js",
-    "src/sky/SkySun.js",
-    "src/sky/luts",
-    "src/sky/shaders",
-    "README.md",
-    "LICENSE"
-  ],
   "keywords": [
     "three",
     "threejs",
@@ -43,26 +13,67 @@
     "scattering",
     "aerial-perspective",
     "r3f",
-    "react-three-fiber"
+    "react-three-fiber",
+    "pmndrs"
   ],
-  "license": "MIT",
   "author": "Dennis Smolek <dennis@smolek.dev>",
+  "license": "MIT",
+  "homepage": "https://github.com/pmndrs/sky#readme",
+  "bugs": {
+    "url": "https://github.com/pmndrs/sky/issues"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DennisSmolek/SebH-TSL-Sky.git"
+    "url": "git+https://github.com/pmndrs/sky.git"
   },
-  "homepage": "https://github.com/DennisSmolek/SebH-TSL-Sky#readme",
-  "bugs": {
-    "url": "https://github.com/DennisSmolek/SebH-TSL-Sky/issues"
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.mjs",
+      "require": "./dist/react.cjs"
+    },
+    "./react/auto-haze": {
+      "types": "./dist/react/AutoHaze.d.ts",
+      "import": "./dist/react/AutoHaze.mjs",
+      "require": "./dist/react/AutoHaze.cjs"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "unbuild",
+    "prepack": "pnpm build",
+    "stub": "unbuild --stub",
+    "dev": "unbuild --stub",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "ci": "pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm format"
   },
   "peerDependencies": {
     "@react-three/fiber": ">=10.0.0-0",
-    "react": ">=18.0.0",
+    "react": ">=18",
+    "react-dom": ">=18",
     "three": ">=0.184.0"
   },
   "peerDependenciesMeta": {
@@ -71,17 +82,41 @@
     },
     "react": {
       "optional": true
+    },
+    "react-dom": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
     "@react-three/fiber": "^10.0.0-alpha.2",
-    "camera-controls": "^3.1.2",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.8",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "0.184.0",
+    "@vitest/coverage-v8": "^4.0.17",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-vitest": "^0.5.4",
+    "globals": "^16.4.0",
+    "jsdom": "^27.4.0",
+    "prettier": "^3.8.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "three": "^0.184.0",
-    "vite": "^5.4.0"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.53.0",
+    "unbuild": "^3.6.1",
+    "vite": "^8.1.3",
+    "vitest": "^4.0.17"
   },
-  "publishConfig": {
-    "access": "public"
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

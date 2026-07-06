@@ -1,14 +1,34 @@
 import {
-	Color,
-	Mesh,
-	MeshStandardMaterial,
-	NodeMaterial,
-	PlaneGeometry,
-	SphereGeometry
-} from 'three/webgpu';
+  BufferGeometry,
+  Color,
+  Material,
+  Mesh,
+  MeshStandardMaterial,
+  NodeMaterial,
+  Object3D,
+  PlaneGeometry,
+  SphereGeometry,
+} from 'three/webgpu'
 
-import { mix, reflector, vec4 } from 'three/tsl';
-import { gaussianBlur } from 'three/addons/tsl/display/GaussianBlurNode.js';
+import { mix, reflector, vec4 } from 'three/tsl'
+import { gaussianBlur } from 'three/addons/tsl/display/GaussianBlurNode.js'
+
+interface SkyGroundOptions {
+  mode?: string
+  size?: number
+  segments?: number
+  radius?: number | null
+  widthSegments?: number
+  heightSegments?: number
+  color?: number
+  roughness?: number
+  metalness?: number
+  material?: Material | null
+  reflective?: boolean
+  blur?: number
+  reflectorOptions?: any
+  receiveShadow?: boolean
+}
 
 /**
  * Optional ground / floor mesh for tsl-sky scenes.
@@ -38,150 +58,138 @@ import { gaussianBlur } from 'three/addons/tsl/display/GaussianBlurNode.js';
  * ```
  */
 export class SkyGround {
+  sky: any
+  mode: string
+  reflector: any
+  _scene: Object3D | null
+  geometry: BufferGeometry
+  _sphereRadius!: number
+  material: Material
+  mesh: Mesh
 
-	constructor( sky, {
-		mode = 'plane',
+  constructor(
+    sky: any,
+    {
+      mode = 'plane',
 
-		// plane mode
-		size = 200000,
-		segments = 1,
+      // plane mode
+      size = 200000,
+      segments = 1,
 
-		// sphere mode (radius defaults to baker.atmosphereParams.bottomRadius * 1000)
-		radius = null,
-		widthSegments = 128,
-		heightSegments = 64,
+      // sphere mode (radius defaults to baker.atmosphereParams.bottomRadius * 1000)
+      radius = null,
+      widthSegments = 128,
+      heightSegments = 64,
 
-		// material shortcuts (used when `material` is null)
-		color = 0x6a6055,
-		roughness = 0.95,
-		metalness = 0.0,
-		material = null,
+      // material shortcuts (used when `material` is null)
+      color = 0x6a6055,
+      roughness = 0.95,
+      metalness = 0.0,
+      material = null,
 
-		// reflection (plane mode only)
-		reflective = false,
-		blur = 0.0,
-		reflectorOptions = {
-			resolutionScale: 0.5,
-			generateMipmaps: false,
-			bounces: false
-		},
+      // reflection (plane mode only)
+      reflective = false,
+      blur = 0.0,
+      reflectorOptions = {
+        resolutionScale: 0.5,
+        generateMipmaps: false,
+        bounces: false,
+      },
 
-		receiveShadow = true
-	} = {} ) {
+      receiveShadow = true,
+    }: SkyGroundOptions = {},
+  ) {
+    this.sky = sky
+    this.mode = mode
+    this.reflector = null
+    this._scene = null
 
-		this.sky = sky;
-		this.mode = mode;
-		this.reflector = null;
-		this._scene = null;
+    // --- geometry ---
+    if (mode === 'sphere') {
+      const r = radius ?? sky.baker.atmosphereParams.bottomRadius * 1000
+      this.geometry = new SphereGeometry(r, widthSegments, heightSegments)
+      this._sphereRadius = r
+    } else {
+      this.geometry = new PlaneGeometry(size, size, segments, segments)
+    }
 
-		// --- geometry ---
-		if ( mode === 'sphere' ) {
+    // --- material ---
+    const wantsReflection = reflective && mode === 'plane' && material === null
 
-			const r = radius ?? sky.baker.atmosphereParams.bottomRadius * 1000;
-			this.geometry = new SphereGeometry( r, widthSegments, heightSegments );
-			this._sphereRadius = r;
+    if (reflective && mode === 'sphere') {
+      console.warn('[SkyGround] reflective is not supported in sphere mode — falling back to non-reflective.')
+    }
 
-		} else {
+    if (material) {
+      this.material = material
+    } else if (wantsReflection) {
+      this.material = this._buildReflectiveMaterial({ color, roughness, blur, reflectorOptions })
+    } else {
+      this.material = new MeshStandardMaterial({ color, roughness, metalness })
+    }
 
-			this.geometry = new PlaneGeometry( size, size, segments, segments );
+    // --- mesh ---
+    this.mesh = new Mesh(this.geometry, this.material)
+    this.mesh.receiveShadow = receiveShadow
 
-		}
+    if (mode === 'sphere') {
+      this.mesh.position.y = -this._sphereRadius
+    } else {
+      this.mesh.rotation.x = -Math.PI / 2
+      this.mesh.position.y = 0
+    }
 
-		// --- material ---
-		const wantsReflection = reflective && mode === 'plane' && material === null;
+    // Attach the reflector's target as a child of the mesh so it inherits
+    // the floor's world transform — the reflector uses target's world +Z
+    // as the mirror plane normal, which now correctly aligns with world +Y.
+    if (this.reflector) this.mesh.add(this.reflector.target)
+  }
 
-		if ( reflective && mode === 'sphere' ) {
+  setVisible(visible: boolean) {
+    this.mesh.visible = visible
+    return this
+  }
 
-			console.warn( '[SkyGround] reflective is not supported in sphere mode — falling back to non-reflective.' );
+  attach(scene: Object3D) {
+    this._scene = scene
+    scene.add(this.mesh)
+    return this
+  }
 
-		}
+  detach() {
+    if (this._scene) {
+      this._scene.remove(this.mesh)
+      this._scene = null
+    }
 
-		if ( material ) {
+    return this
+  }
 
-			this.material = material;
+  dispose() {
+    this.detach()
+    this.geometry.dispose()
+    if (this.material && this.material.dispose) this.material.dispose()
+  }
 
-		} else if ( wantsReflection ) {
+  _buildReflectiveMaterial({
+    color,
+    roughness,
+    blur,
+    reflectorOptions,
+  }: {
+    color: number
+    roughness: number
+    blur: number
+    reflectorOptions: any
+  }): Material {
+    const reflectorNode = reflector(reflectorOptions)
+    this.reflector = reflectorNode
 
-			this.material = this._buildReflectiveMaterial( { color, roughness, blur, reflectorOptions } );
+    const baseColorNode = vec4(new Color(color), 1.0)
+    const sampledReflection = blur > 0 ? gaussianBlur(reflectorNode, null, blur) : reflectorNode
 
-		} else {
-
-			this.material = new MeshStandardMaterial( { color, roughness, metalness } );
-
-		}
-
-		// --- mesh ---
-		this.mesh = new Mesh( this.geometry, this.material );
-		this.mesh.receiveShadow = receiveShadow;
-
-		if ( mode === 'sphere' ) {
-
-			this.mesh.position.y = - this._sphereRadius;
-
-		} else {
-
-			this.mesh.rotation.x = - Math.PI / 2;
-			this.mesh.position.y = 0;
-
-		}
-
-		// Attach the reflector's target as a child of the mesh so it inherits
-		// the floor's world transform — the reflector uses target's world +Z
-		// as the mirror plane normal, which now correctly aligns with world +Y.
-		if ( this.reflector ) this.mesh.add( this.reflector.target );
-
-	}
-
-	setVisible( visible ) {
-
-		this.mesh.visible = visible;
-		return this;
-
-	}
-
-	attach( scene ) {
-
-		this._scene = scene;
-		scene.add( this.mesh );
-		return this;
-
-	}
-
-	detach() {
-
-		if ( this._scene ) {
-
-			this._scene.remove( this.mesh );
-			this._scene = null;
-
-		}
-
-		return this;
-
-	}
-
-	dispose() {
-
-		this.detach();
-		this.geometry.dispose();
-		if ( this.material && this.material.dispose ) this.material.dispose();
-
-	}
-
-	_buildReflectiveMaterial( { color, roughness, blur, reflectorOptions } ) {
-
-		const reflectorNode = reflector( reflectorOptions );
-		this.reflector = reflectorNode;
-
-		const baseColorNode = vec4( new Color( color ), 1.0 );
-		const sampledReflection = blur > 0
-			? gaussianBlur( reflectorNode, null, blur )
-			: reflectorNode;
-
-		const mat = new NodeMaterial();
-		mat.colorNode = mix( sampledReflection, baseColorNode, roughness );
-		return mat;
-
-	}
-
+    const mat = new NodeMaterial()
+    mat.colorNode = mix(sampledReflection, baseColorNode, roughness)
+    return mat
+  }
 }

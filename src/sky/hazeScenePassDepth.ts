@@ -1,4 +1,4 @@
-import { logarithmicDepthToViewZ, viewZToOrthographicDepth } from 'three/tsl';
+import { logarithmicDepthToViewZ, viewZToOrthographicDepth } from 'three/tsl'
 
 /**
  * ViewZ + linear depth for haze post-processing.
@@ -12,22 +12,21 @@ import { logarithmicDepthToViewZ, viewZToOrthographicDepth } from 'three/tsl';
  * @param {import('three/webgpu').PassNode} scenePass  `pass(scene, camera)`
  * @param {boolean} logarithmicDepthBuffer  Same flag as `WebGPURenderer`.
  */
-export function createHazeDepthNodes( scenePass, logarithmicDepthBuffer ) {
+export function createHazeDepthNodes(
+  scenePass: any,
+  logarithmicDepthBuffer: boolean,
+): { viewZNode: any; linearDepthNode: any } {
+  if (logarithmicDepthBuffer) {
+    const depthTex = scenePass.getTextureNode('depth')
+    const near = scenePass._cameraNear
+    const far = scenePass._cameraFar
+    const viewZNode = logarithmicDepthToViewZ(depthTex, near, far)
+    const linearDepthNode = viewZToOrthographicDepth(viewZNode, near, far)
+    return { viewZNode, linearDepthNode }
+  }
 
-	if ( logarithmicDepthBuffer ) {
-
-		const depthTex = scenePass.getTextureNode( 'depth' );
-		const near = scenePass._cameraNear;
-		const far = scenePass._cameraFar;
-		const viewZNode = logarithmicDepthToViewZ( depthTex, near, far );
-		const linearDepthNode = viewZToOrthographicDepth( viewZNode, near, far );
-		return { viewZNode, linearDepthNode };
-
-	}
-
-	return {
-		viewZNode: scenePass.getViewZNode(),
-		linearDepthNode: scenePass.getLinearDepthNode()
-	};
-
+  return {
+    viewZNode: scenePass.getViewZNode(),
+    linearDepthNode: scenePass.getLinearDepthNode(),
+  }
 }

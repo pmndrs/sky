@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>parity 01 — UV maps + spherical dir (WGSL core vs TSL twin)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #111;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 8px 12px;
+        background: rgba(0, 0, 0, 0.7);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-width: 600px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #info b {
+        color: #9cf;
+      }
+      #verdict {
+        font-size: 14px;
+        font-weight: bold;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <b>Phase 0+ parity — UV maps &amp; spherical dir</b><br />
+      Three bands (bottom→top): <b>uvToSkyViewLutParams</b>, <b>skyViewLutParamsToUv</b>, <b>getSphericalDir</b>. This
+      also exercises the two mechanisms Phase 0's leaf test didn't: <b>single-source</b> (each wrapper is
+      <code>wgslFn(CHUNK)</code> importing the core string) and <b>includes</b> (the Sky-View maps pull the sub-UV
+      helper through the <code>includes</code> array).<br />
+      <b>Green</b> = value (liveness). <b>Red</b> = |WGSL − TSL| × 500. Correct = green gradients, zero red.<br />
+      <span id="verdict">running…</span>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Fn, uv, vec2, vec3, vec4, float, floor, fract, select, bool } from 'three/tsl'
+
+      import { EARTH } from '@sky/core/AtmosphereParams'
+      import { createAtmosphereUniforms } from '@sky/sky/AtmosphereUniforms'
+
+      // TSL twin
+      import {
+        uvToSkyViewLutParams as uvToParamsTSL,
+        skyViewLutParamsToUv as paramsToUvTSL,
+        getSphericalDir as sphericalTSL,
+      } from '@sky/backends/tsl/atmosphere.tsl'
+
+      // WGSL core via wgslFn (single-source + includes)
+      import {
+        uvToSkyViewLutParams as uvToParamsWGSL,
+        skyViewLutParamsToUv as paramsToUvWGSL,
+        getSphericalDir as sphericalWGSL,
+      } from '@sky/backends/wgsl/atmosphere'
+
+      let renderer, displayScene, displayCam
+
+      init()
+
+      function buildParityNode() {
+        const atmosphere = createAtmosphereUniforms(EARTH)
+        const bottomRadius = float(EARTH.bottomRadius)
+        const viewHeight = float(EARTH.bottomRadius + 0.5)
+
+        return Fn(() => {
+          const u = uv()
+          const band = floor(u.y.mul(3.0))
+          const localY = fract(u.y.mul(3.0))
+
+          // --- band 0: uvToSkyViewLutParams (needs fromSubUvsToUnit include) ---
+          const p0W = uvToParamsWGSL({ viewHeight, bottomRadius, uv: u }) // vec2(vzca, lvca)
+          const p0T = uvToParamsTSL(atmosphere, viewHeight, u) // { viewZenithCosAngle, lightViewCosAngle }
+          const d0 = p0W.x.sub(p0T.viewZenithCosAngle).abs().add(p0W.y.sub(p0T.lightViewCosAngle).abs())
+          const v0 = p0W.x.mul(0.5).add(0.5)
+
+          // --- band 1: skyViewLutParamsToUv (needs fromUnitToSubUvs include) ---
+          const vzca = u.x.mul(2.0).sub(1.0)
+          const lvca = localY.mul(2.0).sub(1.0)
+          const p1W = paramsToUvWGSL({
+            intersectsGround: float(0.0),
+            viewZenithCosAngle: vzca,
+            lightViewCosAngle: lvca,
+            viewHeight,
+            bottomRadius,
+          }) // vec2 uv
+          const p1T = paramsToUvTSL(atmosphere, bool(false), vzca, lvca, viewHeight) // vec2
+          const d1 = p1W.x.sub(p1T.x).abs().add(p1W.y.sub(p1T.y).abs())
+          const v1 = p1W.x
+
+          // --- band 2: getSphericalDir ---
+          const sqrtN = float(8.0)
+          const iph = u.x.mul(sqrtN)
+          const jph = localY.mul(sqrtN)
+          const s2W = sphericalWGSL({ iPlusHalf: iph, jPlusHalf: jph, sqrtSampleCount: sqrtN }) // vec3
+          const s2T = sphericalTSL(iph, jph, sqrtN) // vec3
+          const dv = s2W.sub(s2T).abs()
+          const d2 = dv.x.add(dv.y).add(dv.z)
+          const v2 = s2W.z.mul(0.5).add(0.5)
+
+          const diff = select(band.lessThan(1.0), d0, select(band.lessThan(2.0), d1, d2))
+          const valNorm = select(band.lessThan(1.0), v0, select(band.lessThan(2.0), v1, v2))
+
+          const red = diff.mul(500.0).clamp(0.0, 1.0)
+          return vec4(red, valNorm, diff, 1.0) // blue = raw diff for readback
+        })()
+      }
+
+      async function init() {
+        renderer = new THREE.WebGPURenderer({ antialias: false })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.NoToneMapping
+        renderer.outputColorSpace = THREE.NoColorSpace
+        document.body.appendChild(renderer.domElement)
+        await renderer.init()
+
+        const mat = new THREE.NodeMaterial()
+        mat.colorNode = buildParityNode()
+
+        displayScene = new THREE.Scene()
+        displayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+        displayScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat))
+
+        await runParityReadback(mat)
+
+        window.addEventListener('resize', onResize)
+        renderer.setAnimationLoop(() => renderer.render(displayScene, displayCam))
+      }
+
+      async function runParityReadback(mat) {
+        const W = 256
+        const H = 256
+        const rt = new THREE.RenderTarget(W, H, {
+          type: THREE.FloatType,
+          minFilter: THREE.NearestFilter,
+          magFilter: THREE.NearestFilter,
+          depthBuffer: false,
+        })
+        const scene = new THREE.Scene()
+        const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+        scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat))
+
+        renderer.setRenderTarget(rt)
+        renderer.render(scene, cam)
+        renderer.setRenderTarget(null)
+
+        const buf = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H)
+        let maxDiff = 0
+        let maxAt = 0
+        for (let i = 2; i < buf.length; i += 4) {
+          const d = buf[i] // blue = raw diff
+          if (d > maxDiff) {
+            maxDiff = d
+            maxAt = (i - 2) / 4
+          }
+        }
+        const py = Math.floor(maxAt / W)
+        const bandIdx = Math.min(2, Math.floor((py / H) * 3))
+        const names = ['uvToSkyViewLutParams', 'skyViewLutParamsToUv', 'getSphericalDir']
+        const THRESH = 1e-4
+        const pass = maxDiff <= THRESH
+        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — maxDiff=${maxDiff.toExponential(3)} (thresh ${THRESH.toExponential(0)}), worst band=${names[bandIdx]}`
+        console.log(`[parity] ${msg}`)
+        const el = document.getElementById('verdict')
+        el.textContent = msg
+        el.style.color = pass ? '#7f7' : '#f77'
+        rt.dispose()
+      }
+
+      function onResize() {
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      }
+    </script>
+  </body>
+</html>

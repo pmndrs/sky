@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "es2020",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "lib": ["es2020", "dom", "dom.iterable"],
+    "noEmit": true,
+    "baseUrl": "./",
+    "paths": {
+      "@pmndrs/sky/react": ["../../src/react/index.ts"],
+      "@pmndrs/sky": ["../../src/index.ts"],
+      "@sky/*": ["../../src/*"],
+      "three/tsl": ["../../types/three-tsl.d.ts"]
+    }
+  },
+  "include": ["src"]
+}

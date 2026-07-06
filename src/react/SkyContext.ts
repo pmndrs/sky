@@ -1,6 +1,34 @@
-import { createContext, useContext } from 'react';
+import { createContext, useContext } from 'react'
 
-export const SkyContext = createContext( null );
+/**
+ * Shape of the value published on `SkyContext` — the active vanilla `Sky`
+ * instance. Only the surface used by React consumers is typed here; TSL /
+ * three objects are left as `any`.
+ */
+export interface SkyContextValue {
+  attach(scene: any): void
+  detach(): void
+  dispose(): void
+  update(camera: any): void
+  setTimeOfDay(timeOfDay: number): void
+  setLatitude(latitude: number): void
+  setDayOfYear(dayOfYear: number): void
+  setSunDirection(sunDirection: any): void
+  setExposure(exposure: number): void
+  setSunDisc(sunDisc: boolean): void
+  setNorth(north: any): void
+  setTurbidity(turbidity: number): void
+  setGroundAlbedo(groundAlbedo: any): void
+  setAtmosphere(atmosphere: any): void
+  setMirrorBelowHorizon(mirrorBelowHorizon: boolean): void
+  setHazeStrength(hazeStrength: number): void
+  setHazePolicy(hazePolicy: any): void
+  setHazeAltitudeBlend(hazeAltitudeBlend: any): void
+  applyHaze(sceneTexture: any, options?: any): any
+  [key: string]: any
+}
+
+export const SkyContext = createContext<SkyContextValue | null>(null)
 
 /**
  * Returns the active `Sky` instance, or `null` if no `<Sky>` is mounted.
@@ -18,7 +46,5 @@ export const SkyContext = createContext( null );
  *   });
  */
 export function useSky() {
-
-	return useContext( SkyContext );
-
+  return useContext(SkyContext)
 }

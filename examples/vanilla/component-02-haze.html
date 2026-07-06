@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tsl-sky / 02 — sky + haze post-process</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">tsl-sky · baked sky + aerial-perspective haze on distant geometry</div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { pass } from 'three/tsl'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { Sky, presets } from '@pmndrs/sky'
+
+      const renderer = new THREE.WebGPURenderer({ antialias: true })
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      renderer.toneMappingExposure = 0.5
+      renderer.inspector = new Inspector()
+      document.body.appendChild(renderer.domElement)
+
+      await renderer.init()
+
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        timeOfDay: 14.5,
+        latitude: 37.7,
+        exposure: 40,
+        sunDisc: true,
+        enableAerialPerspective: true,
+      })
+
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+
+      const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000)
+      camera.position.set(0, 8, 30)
+      camera.lookAt(0, 4, 0)
+
+      // Direct sun light so distant lit geometry sits in the sky's luminance
+      // range (avoids the silhouette-fringe artifact documented in CLAUDE.md).
+      const sun = new THREE.DirectionalLight(0xffffff, 4)
+      scene.add(sun)
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(4000, 4000),
+        new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.95 }),
+      )
+      ground.rotation.x = -Math.PI / 2
+      scene.add(ground)
+
+      // "Mountains" — cones at varying distances so haze gradient is visible.
+      const mountainMat = new THREE.MeshStandardMaterial({ color: 0x6a6a6a, roughness: 0.95 })
+      const distances = [60, 100, 180, 300, 500, 900, 1500]
+      for (const d of distances) {
+        for (let i = -3; i <= 3; i++) {
+          const h = 8 + Math.random() * 18
+          const cone = new THREE.Mesh(new THREE.ConeGeometry(h * 0.6, h, 8), mountainMat)
+          cone.position.set(i * 35 + Math.random() * 10, h / 2, -d)
+          scene.add(cone)
+        }
+      }
+
+      const mirror = new THREE.Mesh(
+        new THREE.SphereGeometry(2, 64, 64),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1.0, roughness: 0.0 }),
+      )
+      mirror.position.set(0, 4, 0)
+      scene.add(mirror)
+
+      const controls = new OrbitControls(camera, renderer.domElement)
+      controls.target.set(0, 4, 0)
+      controls.minDistance = 5
+      controls.maxDistance = 200
+      controls.update()
+
+      // Vanilla post-process pipeline using `applyHaze` as the output node.
+      const scenePass = pass(scene, camera)
+      const post = new THREE.RenderPipeline(renderer)
+      post.outputNode = sky.applyHaze(scenePass.getTextureNode(), {
+        scenePass,
+        policy: 'auto',
+        strength: 1.0,
+      })
+
+      const state = {
+        preset: 'earth',
+        timeOfDay: 14.5,
+        latitude: 37.7,
+        north: '+Z',
+        exposure: 40,
+        sunDisc: true,
+        turbidity: 1.0,
+        hazeStrength: 1.0,
+        hazePolicy: 'auto',
+        toneExposure: renderer.toneMappingExposure,
+      }
+      const gui = renderer.inspector.createParameters('Sky + Haze')
+      gui.add(state, 'preset', Object.keys(presets)).onChange((v) => sky.setPreset(v))
+      gui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => sky.setTimeOfDay(v))
+      gui.add(state, 'latitude', -90, 90, 0.5).onChange((v) => sky.setLatitude(v))
+      gui.add(state, 'north', ['+X', '-X', '+Z', '-Z']).onChange((v) => sky.setNorth(v))
+      gui.add(state, 'exposure', 0, 200, 0.5).onChange((v) => sky.setExposure(v))
+      gui.add(state, 'sunDisc').onChange((v) => sky.setSunDisc(v))
+      gui.add(state, 'turbidity', 0, 4, 0.01).onChange((v) => sky.setTurbidity(v))
+      gui.add(state, 'hazeStrength', 0, 2, 0.01).onChange((v) => sky.setHazeStrength(v))
+      gui.add(state, 'hazePolicy', ['auto', 'ap', 'raymarch']).onChange((v) => sky.setHazePolicy(v))
+      gui.add(state, 'toneExposure', 0, 2, 0.001).onChange((v) => {
+        renderer.toneMappingExposure = v
+      })
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight
+        camera.updateProjectionMatrix()
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      })
+
+      renderer.setAnimationLoop(() => {
+        // Drive the directional light from the sky's current sun.
+        const elev = (sky.sunElevation * Math.PI) / 180
+        const az = (sky.sunAzimuth * Math.PI) / 180
+        sun.position.set(Math.cos(elev) * Math.sin(az) * 100, Math.sin(elev) * 100, Math.cos(elev) * Math.cos(az) * 100)
+
+        sky.update(camera)
+        sky.updateAerialPerspective()
+        controls.update()
+        post.render()
+      })
+    </script>
+  </body>
+</html>

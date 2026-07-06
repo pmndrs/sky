@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>06 — Planet-scale debug harness</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: auto;
+        z-index: 10;
+      }
+      #debug-panel {
+        position: absolute;
+        top: 68px;
+        left: 8px;
+        width: min(360px, calc(100vw - 16px));
+        max-height: calc(100vh - 84px);
+        overflow: auto;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.74);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 6px;
+        font-size: 12px;
+        z-index: 20;
+        pointer-events: auto;
+      }
+      #debug-panel summary {
+        cursor: pointer;
+        user-select: none;
+      }
+      #debug-panel form {
+        display: grid;
+        grid-template-columns: 110px 1fr;
+        gap: 6px 8px;
+        margin-top: 8px;
+        align-items: center;
+      }
+      #debug-panel label {
+        color: #cfd7df;
+      }
+      #debug-panel select,
+      #debug-panel input {
+        min-width: 0;
+        background: #101820;
+        color: #eee;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 3px;
+      }
+      #debug-panel button {
+        background: #27435f;
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        border-radius: 3px;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      #debug-panel a,
+      #info a {
+        color: #fc9;
+        text-decoration: none;
+      }
+      #debug-panel a:hover,
+      #info a:hover {
+        text-decoration: underline;
+      }
+      .debug-actions {
+        grid-column: 1 / -1;
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      .debug-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px 8px;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.14);
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      Planet-scale debug harness — stable source page:
+      <a href="/examples/05-planet-scale.html">05-planet-scale</a><br />
+      <span id="active-debug-label"></span>
+    </div>
+    <details id="debug-panel" open>
+      <summary>Debug controls</summary>
+      <form id="debug-form">
+        <label for="debug-mode">Debug</label>
+        <select id="debug-mode" name="debug"></select>
+
+        <label for="camera-far">Camera far</label>
+        <select id="camera-far" name="cameraFar"></select>
+
+        <label for="ap-resolution">AP volume</label>
+        <select id="ap-resolution" name="apRes"></select>
+
+        <label for="rm-samples">RM samples</label>
+        <select id="rm-samples" name="rmSamples"></select>
+
+        <label for="rm-jitter">RM jitter</label>
+        <select id="rm-jitter" name="rmJitter"></select>
+
+        <label for="start-altitude">Start altitude</label>
+        <input id="start-altitude" name="altitude" type="number" min="1" max="500000" step="1" />
+
+        <label for="raymarch-only">Raymarch only</label>
+        <input id="raymarch-only" name="raymarchOnly" type="checkbox" value="1" />
+
+        <label for="hires-luts">Hi-res LUTs</label>
+        <input id="hires-luts" name="hires" type="checkbox" value="1" />
+
+        <label for="log-depth">Log depth buffer</label>
+        <input id="log-depth" name="logDepth" type="checkbox" value="1" />
+
+        <div class="debug-actions">
+          <button type="submit">Apply reload</button>
+          <a id="normal-link" href="?">normal</a>
+        </div>
+      </form>
+      <div id="debug-links" class="debug-links"></div>
+      <p
+        style="
+          margin-top: 10px;
+          padding-top: 8px;
+          border-top: 1px solid rgba(255, 255, 255, 0.12);
+          color: #9ab;
+          font-size: 11px;
+          line-height: 1.35;
+        ">
+        <code>lin-depth</code> on the sky looks faceted because the sky is a box (12 tris) with a far-depth hack — use
+        <code>lin-depth-geom</code> to mask sky. <code>rm-alpha</code> / sample count: transmittance often changes
+        little once the integral has converged; try <code>rm-optical-depth-frac</code> or
+        <code>rm-transmittance</code> for finer contrast. Log-Z (default) follows the
+        <a
+          href="https://github.com/mrdoob/three.js/blob/master/examples/webgpu_camera_logarithmicdepthbuffer.html"
+          style="color: #fc9"
+          >three.js WebGPU log-depth example</a
+        >
+        — use the checkbox or <code>?logDepth=0</code> to A/B.
+      </p>
+    </details>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import CameraControls from 'camera-controls'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+
+      import { pass, uniform } from 'three/tsl'
+
+      import { SkyAtmosphereBaker } from '@sky/sky/SkyAtmosphereBaker'
+      import { createHazeDebugOutputNode } from '@sky/sky/debug/HazeDebugPostProcess'
+      import { createStartGate, logStage } from '@sky/demo/startGate'
+      import {
+        clampCameraToMinAltitude,
+        createPlanetSurfacePatchGeometry,
+        getPlanetAltitudeM,
+        getPlanetCameraFrame,
+        getPlanetLookAtTarget,
+        placeObjectOnPlanetSurface,
+      } from '@sky/demo/planetScaleUtils'
+
+      CameraControls.install({ THREE })
+
+      const query = new URLSearchParams(window.location.search)
+      const debugMode = query.get('debug')
+      const numberParam = (key, fallback) => {
+        const raw = query.get(key)
+        if (raw === null || raw.trim() === '') return fallback
+
+        const value = Number(raw)
+        return Number.isFinite(value) ? value : fallback
+      }
+      const enumParam = (key, fallback, allowed) => {
+        const value = query.get(key)
+        return allowed.includes(value) ? value : fallback
+      }
+
+      const DEBUG_MODES = [
+        ['', 'normal'],
+        ['ap-rgb', 'ap-rgb'],
+        ['ap-alpha', 'ap-alpha'],
+        ['w', 'w'],
+        ['is-sky', 'is-sky'],
+        ['beyond', 'beyond'],
+        ['lin-depth', 'lin-depth'],
+        ['lin-depth-geom', 'lin-depth-geom (sky masked)'],
+        ['view-z', 'view-z'],
+        ['screen-grid', 'screen-grid'],
+        ['rm-rgb', 'rm-rgb'],
+        ['rm-alpha', 'rm-alpha'],
+        ['rm-transmittance', 'rm-transmittance'],
+        ['rm-optical-depth', 'rm-optical-depth'],
+        ['rm-optical-depth-frac', 'rm-optical-depth-frac'],
+        ['rm-dist', 'rm-dist'],
+        ['rm-dist-frac', 'rm-dist-frac'],
+        ['rm-viewz', 'rm-viewz'],
+        ['rm-cos', 'rm-cos'],
+        ['rm-hash', 'rm-hash'],
+        ['rm-worlddir', 'rm-worlddir'],
+        ['rm-tmax', 'rm-tmax'],
+        ['rm-tmax-frac', 'rm-tmax-frac'],
+        ['rm-valid', 'rm-valid'],
+      ]
+      const CAMERA_FAR_OPTIONS = [500000, 1000000, 2000000, 8000000, 20000000]
+      const RM_SAMPLE_OPTIONS = [8, 16, 32, 64, 128, 256]
+      const RM_JITTER_OPTIONS = [
+        ['fixed-0.3', 'fixed 0.3'],
+        ['center', 'center 0.5'],
+        ['uv-hash', 'uv hash'],
+      ]
+      const AP_RESOLUTION_OPTIONS = [
+        ['32', '32³ default'],
+        ['64', '64³'],
+        ['128', '128³ heavy'],
+        ['256', '256³ very heavy'],
+        ['32x32x64', '32×32×64 z-only'],
+        ['32x32x128', '32×32×128 z-only heavy'],
+        ['64x64x32', '64×64×32 xy-only'],
+        ['128x128x32', '128×128×32 xy-only heavy'],
+      ]
+
+      const cameraFar = Math.max(1000, numberParam('cameraFar', 20_000_000))
+      const rmSamples = Math.max(1, Math.min(256, Math.floor(numberParam('rmSamples', 64))))
+      const rmJitter = enumParam(
+        'rmJitter',
+        'uv-hash',
+        RM_JITTER_OPTIONS.map(([value]) => value),
+      )
+      const startAltitude = Math.max(1, numberParam('altitude', 200))
+      const startRaymarchOnly = query.get('raymarchOnly') === '1'
+      const hires = query.get('hires') === '1'
+      // Default on: huge `camera.far` + linear depth loses precision; turn off with `?logDepth=0`.
+      const useLogDepth = query.get('logDepth') !== '0'
+      const debugModeSafe = enumParam(
+        'debug',
+        '',
+        DEBUG_MODES.map(([value]) => value),
+      )
+      const apResKey = enumParam(
+        'apRes',
+        '32',
+        AP_RESOLUTION_OPTIONS.map(([value]) => value),
+      )
+      const parseApResolution = (key) => {
+        if (key.includes('x')) {
+          const [x, y, z] = key.split('x').map(Number)
+          return { x, y, z }
+        }
+
+        const size = Number(key)
+        return { x: size, y: size, z: size }
+      }
+      const apResolution = parseApResolution(apResKey)
+
+      // `?hires=1` doubles Transmittance + Multi-Scatter LUT resolution.
+      const lutResolutions = hires
+        ? {
+            transmittance: { width: 512, height: 128 },
+            multiScatter: { width: 64, height: 64 },
+          }
+        : undefined
+
+      // AP coverage policy for this demo. 32 km/slice × 32 slices ≈ 1024 km.
+      const AP_KM_PER_SLICE = 32.0
+      const MIN_CAMERA_ALTITUDE = 25.0
+      const INITIAL_LOOK_DISTANCE_M = 50_000.0
+      const LOCAL_GROUND_PATCH_RADIUS_M = 140_000.0
+      const LOCAL_GROUND_PATCH_OFFSET_M = 2.0
+
+      //* Debug Form ====================================================
+
+      const populateSelect = (select, options, current) => {
+        for (const option of options) {
+          const value = Array.isArray(option) ? option[0] : String(option)
+          const label = Array.isArray(option) ? option[1] : String(option)
+          const el = document.createElement('option')
+          el.value = value
+          el.textContent = label
+          el.selected = String(current ?? '') === value
+          select.appendChild(el)
+        }
+      }
+
+      const makeDebugUrl = (overrides = {}) => {
+        const next = new URLSearchParams(window.location.search)
+        for (const [key, value] of Object.entries(overrides)) {
+          if (value === '' || value === false || value === null || value === undefined) next.delete(key)
+          else next.set(key, String(value))
+        }
+
+        const out = next.toString()
+        return out ? `?${out}` : '?'
+      }
+
+      const setupDebugControls = () => {
+        const form = document.querySelector('#debug-form')
+        const links = document.querySelector('#debug-links')
+        if (!form || !links) return
+
+        populateSelect(form.elements.debug, DEBUG_MODES, debugModeSafe)
+        populateSelect(form.elements.cameraFar, CAMERA_FAR_OPTIONS, cameraFar)
+        populateSelect(form.elements.apRes, AP_RESOLUTION_OPTIONS, apResKey)
+        populateSelect(form.elements.rmSamples, RM_SAMPLE_OPTIONS, rmSamples)
+        populateSelect(form.elements.rmJitter, RM_JITTER_OPTIONS, rmJitter)
+        form.elements.altitude.value = String(startAltitude)
+        form.elements.raymarchOnly.checked = startRaymarchOnly
+        form.elements.hires.checked = hires
+
+        document.querySelector('#normal-link').href = makeDebugUrl({ debug: '', raymarchOnly: '' })
+        form.elements.logDepth.checked = useLogDepth
+        document.querySelector('#active-debug-label').textContent =
+          `debug=${debugModeSafe || 'normal'} · raymarchOnly=${startRaymarchOnly ? 1 : 0} · rmSamples=${rmSamples} · rmJitter=${rmJitter} · apRes=${apResKey} · cameraFar=${cameraFar} · altitude=${startAltitude} · logDepth=${useLogDepth ? 1 : 0}`
+
+        for (const [value, label] of DEBUG_MODES) {
+          const link = document.createElement('a')
+          link.href = makeDebugUrl({ debug: value })
+          link.textContent = label
+          links.appendChild(link)
+        }
+
+        form.addEventListener('submit', (event) => {
+          event.preventDefault()
+          window.location.search = makeDebugUrl({
+            debug: form.elements.debug.value,
+            cameraFar: form.elements.cameraFar.value,
+            apRes: form.elements.apRes.value,
+            rmSamples: form.elements.rmSamples.value,
+            rmJitter: form.elements.rmJitter.value,
+            altitude: form.elements.altitude.value,
+            raymarchOnly: form.elements.raymarchOnly.checked ? 1 : '',
+            hires: form.elements.hires.checked ? 1 : '',
+            logDepth: form.elements.logDepth.checked ? null : '0',
+          }).slice(1)
+        })
+      }
+
+      setupDebugControls()
+
+      const gate = createStartGate({
+        label: 'Start Planet-scale debug demo',
+        stages: [
+          'create WebGPU renderer',
+          'renderer.init()',
+          'baker (LUTs + cube + AP @ 1024 km)',
+          'build planet scene',
+          'set up haze post-process',
+          'render loop',
+        ],
+      })
+
+      gate.run(async ({ markStage }) => {
+        markStage(0, 'running')
+        const renderer = new THREE.WebGPURenderer({ antialias: false, logarithmicDepthBuffer: useLogDepth })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = 0.5
+        renderer.inspector = new Inspector()
+        document.body.appendChild(renderer.domElement)
+        markStage(1, 'running')
+
+        await logStage('renderer.init()', () => renderer.init())
+        markStage(2, 'running')
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, cameraFar)
+        camera.position.set(0, startAltitude, 0)
+        camera.lookAt(0, startAltitude, 1000)
+
+        const baker = await logStage('SkyAtmosphereBaker', async () => {
+          const b = new SkyAtmosphereBaker(renderer, {
+            cubeSize: 256,
+            enableAerialPerspective: true,
+            apKmPerSlice: AP_KM_PER_SLICE,
+            apResolution,
+            lutResolutions,
+          })
+          b.setSun({ elevation: 8, azimuth: 0 })
+          b.setCamera(camera)
+          b.update()
+          await b.updateAerialPerspective()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return b
+        })
+        markStage(3, 'running')
+
+        const scene = new THREE.Scene()
+
+        const skyMesh = baker.createSkyMesh()
+        scene.add(skyMesh)
+
+        scene.environment = baker.environmentTexture
+
+        const bottomRadiusM = baker.atmosphereParams.bottomRadius * 1000
+        const planetCenter = new THREE.Vector3(0, -bottomRadiusM, 0)
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x6a6055, roughness: 0.95, metalness: 0.0 })
+        const ground = new THREE.Mesh(new THREE.SphereGeometry(bottomRadiusM, 128, 64), groundMat)
+        ground.position.copy(planetCenter)
+        scene.add(ground)
+
+        const localGround = new THREE.Mesh(
+          createPlanetSurfacePatchGeometry({
+            bottomRadiusM,
+            patchRadiusM: LOCAL_GROUND_PATCH_RADIUS_M,
+            patchAltitudeM: LOCAL_GROUND_PATCH_OFFSET_M,
+          }),
+          groundMat,
+        )
+        localGround.position.copy(planetCenter)
+        scene.add(localGround)
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 4.0)
+        scene.add(sunLight)
+
+        const sunVec = new THREE.Vector3()
+        const updateSunLight = () => {
+          sunVec.copy(baker._sunVec).multiplyScalar(50000)
+          sunLight.position.copy(sunVec)
+          sunLight.target.position.set(0, 0, 0)
+        }
+        updateSunLight()
+
+        const mountainGeom = new THREE.ConeGeometry(1, 1, 12)
+        const mountainMat = new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 0.9 })
+        for (let i = 1; i <= 12; i++) {
+          const dist = i * 2000
+          const angle = ((i % 4) - 1.5) * 0.4
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 400 + Math.random() * 400
+          m.scale.set(600, h, 600)
+          placeObjectOnPlanetSurface(m, {
+            planetCenter,
+            bottomRadiusM,
+            distanceM: dist,
+            bearingRad: angle,
+            heightM: h,
+            baseOffsetM: h * 0.5 + LOCAL_GROUND_PATCH_OFFSET_M,
+          })
+          scene.add(m)
+        }
+        for (let i = 0; i < 6; i++) {
+          const dist = 30000 + i * 8000
+          const angle = (i - 2.5) * 0.15
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 1500
+          m.scale.set(1500, h, 1500)
+          placeObjectOnPlanetSurface(m, {
+            planetCenter,
+            bottomRadiusM,
+            distanceM: dist,
+            bearingRad: angle,
+            heightM: h,
+            baseOffsetM: h * 0.5 + LOCAL_GROUND_PATCH_OFFSET_M,
+          })
+          scene.add(m)
+        }
+
+        const clock = new THREE.Clock()
+        const cameraControls = new CameraControls(camera, renderer.domElement)
+        const cameraTarget = getPlanetLookAtTarget({
+          position: camera.position,
+          planetCenter,
+          bottomRadiusM,
+          distanceM: INITIAL_LOOK_DISTANCE_M,
+        })
+        cameraControls.setLookAt(
+          camera.position.x,
+          camera.position.y,
+          camera.position.z,
+          cameraTarget.x,
+          cameraTarget.y,
+          cameraTarget.z,
+          false,
+        )
+        cameraControls.minDistance = 100
+        cameraControls.maxDistance = 8_000_000
+        cameraControls.smoothTime = 0.12
+        cameraControls.draggingSmoothTime = 0.04
+        cameraControls.azimuthRotateSpeed = 2.5
+        cameraControls.polarRotateSpeed = 2.0
+        cameraControls.dollySpeed = 2.0
+        cameraControls.truckSpeed = 80.0
+        cameraControls.dollyToCursor = true
+        cameraControls.infinityDolly = true
+        cameraControls.colliderMeshes = [localGround]
+
+        markStage(4, 'running')
+
+        const scenePass = pass(scene, camera)
+        const luminanceScaleU = baker.sky.luminanceScale
+        const invProjU = uniform(camera.projectionMatrixInverse.clone())
+        const cameraWorldU = uniform(camera.matrixWorld.clone())
+        const cameraPositionKmU = uniform(baker.cameraPositionKm.clone())
+        const cameraFarU = uniform(camera.far)
+        const hazeStrengthU = uniform(1.0)
+        const raymarchOnlyU = uniform(startRaymarchOnly ? 1.0 : 0.0)
+        // Tuned in inspector — same graph every frame, no URL reload.
+        const rmExtEpsU = uniform(1e-6)
+        const rmSegTU = uniform(rmJitter === 'center' ? 0.5 : 0.3)
+        const rmTMaxScaleU = uniform(1.0)
+
+        const renderPipeline = new THREE.RenderPipeline(renderer)
+        renderPipeline.outputNode = createHazeDebugOutputNode({
+          scenePass,
+          aerialPerspectiveTexture: baker.aerialPerspectiveTexture,
+          luminanceScale: luminanceScaleU,
+          invProjUniform: invProjU,
+          cameraWorldUniform: cameraWorldU,
+          cameraFarUniform: cameraFarU,
+          logarithmicDepthBuffer: useLogDepth,
+          hazeStrength: hazeStrengthU,
+          kmPerSlice: AP_KM_PER_SLICE,
+          enableRaymarchFallback: true,
+          atmosphereUniforms: baker.atmosphereUniforms,
+          sunDirection: baker.sky.sunDirection,
+          viewHeightKm: baker.sky.viewHeight,
+          cameraPositionKm: cameraPositionKmU,
+          transmittanceLUT: baker.transmittanceLUT.texture,
+          multiScatterLUT: baker.multiScatterLUT.texture,
+          raymarchOnlyUniform: raymarchOnlyU,
+          raymarchSampleCount: rmSamples,
+          raymarchJitterMode: rmJitter,
+          raymarchExtEpsUniform: rmExtEpsU,
+          raymarchSegmentTUniform: rmSegTU,
+          raymarchTMaxScaleUniform: rmTMaxScaleU,
+          debugMode: debugModeSafe || null,
+        })
+
+        const gui = renderer.inspector.createParameters('Atmosphere')
+        const eff = {
+          sunElevation: 8,
+          sunAzimuth: 0,
+          cameraAltitude: startAltitude,
+          exposure: 0.5,
+          hazeStrength: 1.0,
+          hazeOn: true,
+          skyMeshOn: true,
+          hazeRaymarchOnly: startRaymarchOnly,
+          iblOn: true,
+        }
+        const setCameraAltitude = (altitudeM, enableTransition = true) => {
+          cameraControls.getTarget(cameraTarget)
+          const frame = getPlanetCameraFrame(camera.position, planetCenter, bottomRadiusM)
+          const nextPosition = planetCenter.clone().add(frame.up.multiplyScalar(bottomRadiusM + altitudeM))
+          const delta = nextPosition.clone().sub(camera.position)
+          cameraTarget.add(delta)
+          cameraControls.setLookAt(
+            nextPosition.x,
+            nextPosition.y,
+            nextPosition.z,
+            cameraTarget.x,
+            cameraTarget.y,
+            cameraTarget.z,
+            enableTransition,
+          )
+        }
+        gui.add(eff, 'sunElevation', -5, 90, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        gui.add(eff, 'sunAzimuth', -180, 180, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        const altitudeController = gui
+          .add(eff, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 500000, 1)
+          .onChange(() => setCameraAltitude(eff.cameraAltitude))
+        altitudeController.listen?.()
+        gui.add(eff, 'exposure', 0, 2, 0.01).onChange(() => {
+          renderer.toneMappingExposure = eff.exposure
+        })
+        gui.add(eff, 'hazeStrength', 0, 3, 0.01).onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+        gui.add(eff, 'hazeOn').onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+        gui.add(eff, 'skyMeshOn').onChange(() => {
+          skyMesh.visible = eff.skyMeshOn
+        })
+        gui.add(eff, 'hazeRaymarchOnly').onChange(() => {
+          raymarchOnlyU.value = eff.hazeRaymarchOnly ? 1 : 0
+        })
+        gui.add(eff, 'iblOn').onChange(() => {
+          scene.environment = eff.iblOn ? baker.environmentTexture : null
+        })
+
+        const rmTuning = {
+          extEps: rmExtEpsU.value,
+          segmentT: rmSegTU.value,
+          tMaxScale: rmTMaxScaleU.value,
+        }
+        const rmGui = renderer.inspector.createParameters('RM integrator')
+        rmGui.add(rmTuning, 'extEps', 1e-9, 1e-2, 1e-9).onChange(() => {
+          rmExtEpsU.value = rmTuning.extEps
+        })
+        rmGui.add(rmTuning, 'segmentT', 0.01, 0.99, 0.001).onChange(() => {
+          rmSegTU.value = rmTuning.segmentT
+        })
+        rmGui.add(rmTuning, 'tMaxScale', 0.1, 2.0, 0.01).onChange(() => {
+          rmTMaxScaleU.value = rmTuning.tMaxScale
+        })
+
+        window.addEventListener('resize', () => {
+          camera.aspect = window.innerWidth / window.innerHeight
+          camera.updateProjectionMatrix()
+          renderer.setSize(window.innerWidth, window.innerHeight)
+        })
+
+        markStage(5, 'running')
+
+        renderer.setAnimationLoop(async () => {
+          const delta = clock.getDelta()
+          cameraControls.update(delta)
+          cameraControls.getTarget(cameraTarget)
+
+          const unclampedAltitude = getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM)
+          eff.cameraAltitude = clampCameraToMinAltitude({
+            camera,
+            target: cameraTarget,
+            planetCenter,
+            bottomRadiusM,
+            minAltitudeM: MIN_CAMERA_ALTITUDE,
+          })
+          if (eff.cameraAltitude !== unclampedAltitude) {
+            cameraControls.setLookAt(
+              camera.position.x,
+              camera.position.y,
+              camera.position.z,
+              cameraTarget.x,
+              cameraTarget.y,
+              cameraTarget.z,
+              false,
+            )
+          }
+
+          skyMesh.position.copy(camera.position)
+
+          baker.setCamera(camera, { planetCenter })
+          invProjU.value.copy(camera.projectionMatrixInverse)
+          cameraWorldU.value.copy(camera.matrixWorld)
+          cameraPositionKmU.value.copy(baker.cameraPositionKm)
+
+          try {
+            baker.update()
+          } catch (err) {
+            console.error('[animate] baker.update() failed:', err)
+            renderer.setAnimationLoop(null)
+            return
+          }
+
+          await baker.updateAerialPerspective()
+
+          if (eff.iblOn && scene.environment !== baker.environmentTexture) scene.environment = baker.environmentTexture
+
+          await renderPipeline.renderAsync()
+        })
+      })
+    </script>
+  </body>
+</html>

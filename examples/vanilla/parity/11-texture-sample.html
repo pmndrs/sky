@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>parity 11 — texture sampling in wgslFn (manual bilinear vs hardware)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #111;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 8px 12px;
+        background: rgba(0, 0, 0, 0.7);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-width: 640px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #info b {
+        color: #9cf;
+      }
+      #verdict {
+        font-size: 14px;
+        font-weight: bold;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <b>Phase 3 gate — can wgslFn sample a LUT well enough?</b><br />
+      three's wgslFn binds a texture handle but provides no sampler, so a WGSL integrator must do
+      <b>manual bilinear via <code>textureLoad</code></b
+      >. This compares that against TSL's hardware-filtered <code>texture()</code>, sampling the real Transmittance LUT
+      over a UV sweep. If maxDiff is small, the full integrator port is viable; if not, integrator LUTs stay on TSL for
+      the three path.<br />
+      <span id="verdict">running…</span>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Fn, uv, texture, vec4, wgslFn, float } from 'three/tsl'
+
+      import { EARTH } from '@sky/core/AtmosphereParams'
+      import { createAtmosphereUniforms } from '@sky/sky/AtmosphereUniforms'
+      import { TransmittanceLUT } from '@sky/sky/luts/TransmittanceLUT'
+
+      // Manual bilinear via textureLoad (the only texture path wgslFn offers).
+      const bilinearSample = wgslFn(/* wgsl */ `
+        fn bilinearSample(map: texture_2d<f32>, uvc: vec2<f32>, resX: f32, resY: f32) -> vec3<f32> {
+          let res = vec2<f32>(resX, resY);
+          let p = uvc * res - 0.5;
+          let fl = floor(p);
+          let f = p - fl;
+          let ix = i32(fl.x);
+          let iy = i32(fl.y);
+          let maxX = i32(resX) - 1;
+          let maxY = i32(resY) - 1;
+          let x0 = clamp(ix, 0, maxX);
+          let x1 = clamp(ix + 1, 0, maxX);
+          let y0 = clamp(iy, 0, maxY);
+          let y1 = clamp(iy + 1, 0, maxY);
+          let c00 = textureLoad(map, vec2<i32>(x0, y0), 0).rgb;
+          let c10 = textureLoad(map, vec2<i32>(x1, y0), 0).rgb;
+          let c01 = textureLoad(map, vec2<i32>(x0, y1), 0).rgb;
+          let c11 = textureLoad(map, vec2<i32>(x1, y1), 0).rgb;
+          return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+        }
+      `)
+
+      let renderer, displayScene, displayCam
+
+      init()
+
+      async function init() {
+        renderer = new THREE.WebGPURenderer({ antialias: false })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.NoToneMapping
+        renderer.outputColorSpace = THREE.NoColorSpace
+        document.body.appendChild(renderer.domElement)
+        await renderer.init()
+
+        const atmosphereUniforms = createAtmosphereUniforms(EARTH)
+        const lut = new TransmittanceLUT(renderer, { atmosphereUniforms })
+        lut.render()
+
+        const resX = float(lut.resolution.width)
+        const resY = float(lut.resolution.height)
+
+        const mat = new THREE.NodeMaterial()
+        mat.colorNode = Fn(() => {
+          const u = uv()
+          const hw = texture(lut.texture, u).rgb // hardware bilinear
+          const man = bilinearSample({ map: texture(lut.texture), uvc: u, resX, resY }) // manual
+          const diff = man.sub(hw).abs()
+          const d = diff.x.add(diff.y).add(diff.z)
+          return vec4(d.mul(200.0).clamp(0.0, 1.0), hw.r, d, 1.0) // blue = raw diff
+        })()
+
+        displayScene = new THREE.Scene()
+        displayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+        displayScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat))
+
+        await runReadback(mat)
+
+        renderer.setAnimationLoop(() => renderer.render(displayScene, displayCam))
+      }
+
+      async function runReadback(mat) {
+        const W = 512,
+          H = 256
+        const rt = new THREE.RenderTarget(W, H, {
+          type: THREE.FloatType,
+          minFilter: THREE.NearestFilter,
+          magFilter: THREE.NearestFilter,
+          depthBuffer: false,
+        })
+        const quad = new THREE.QuadMesh()
+        quad.material = mat
+        renderer.setRenderTarget(rt)
+        quad.render(renderer)
+        renderer.setRenderTarget(null)
+        const buf = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H)
+        let maxDiff = 0
+        for (let i = 2; i < buf.length; i += 4) if (buf[i] > maxDiff) maxDiff = buf[i]
+        const THRESH = 5e-3
+        const pass = maxDiff <= THRESH
+        const msg = `TEXSAMPLE ${pass ? 'PASS' : 'FAIL'} — maxDiff=${maxDiff.toExponential(3)} (thresh ${THRESH.toExponential(0)}) manual-bilinear vs hardware`
+        console.log(`[parity] ${msg}`)
+        const el = document.getElementById('verdict')
+        el.textContent = msg
+        el.style.color = pass ? '#7f7' : '#f77'
+        rt.dispose()
+      }
+    </script>
+  </body>
+</html>

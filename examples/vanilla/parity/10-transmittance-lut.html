@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>parity 10 — Transmittance LUT (WGSL backend vs TSL backend)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #111;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 8px 12px;
+        background: rgba(0, 0, 0, 0.7);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-width: 620px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #info b {
+        color: #9cf;
+      }
+      #verdict {
+        font-size: 14px;
+        font-weight: bold;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <b>Phase 2 parity — whole Transmittance LUT, WGSL backend vs TSL backend</b><br />
+      Two <code>TransmittanceLUT</code> instances, <code>backend:'wgsl'</code> and <code>backend:'tsl'</code>, each
+      rendered into a <b>float</b> target (bypassing the shipped half-float LUT storage so the diff reflects the shader
+      math, not quantization). Max |WGSL − TSL| over all texels/channels is read back for a numeric verdict. The canvas
+      shows the WGSL LUT (bright top-left, dark grazing bottom-right).<br />
+      <span id="verdict">running…</span>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Fn, texture, uv, vec4 } from 'three/tsl'
+
+      import { EARTH } from '@sky/core/AtmosphereParams'
+      import { createAtmosphereUniforms } from '@sky/sky/AtmosphereUniforms'
+      import { TransmittanceLUT } from '@sky/sky/luts/TransmittanceLUT'
+
+      let renderer, displayScene, displayCam
+
+      init()
+
+      async function init() {
+        renderer = new THREE.WebGPURenderer({ antialias: false })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.NoToneMapping
+        renderer.outputColorSpace = THREE.NoColorSpace
+        document.body.appendChild(renderer.domElement)
+        await renderer.init()
+
+        const atmosphereUniforms = createAtmosphereUniforms(EARTH)
+        const lutWGSL = new TransmittanceLUT(renderer, { atmosphereUniforms, backend: 'wgsl' })
+        const lutTSL = new TransmittanceLUT(renderer, { atmosphereUniforms, backend: 'tsl' })
+
+        // Bake the shipped LUTs (for the on-screen preview).
+        lutWGSL.render()
+
+        // --- numeric parity: render each material into a FLOAT target, diff ---
+        await runParityReadback(lutWGSL, lutTSL)
+
+        // --- preview: show the WGSL LUT ---
+        const displayMat = new THREE.NodeMaterial()
+        displayMat.colorNode = Fn(() => vec4(texture(lutWGSL.texture, uv()).rgb, 1.0))()
+        displayScene = new THREE.Scene()
+        displayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+        displayScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), displayMat))
+
+        window.addEventListener('resize', onResize)
+        renderer.setAnimationLoop(() => renderer.render(displayScene, displayCam))
+      }
+
+      async function runParityReadback(lutWGSL, lutTSL) {
+        const W = lutWGSL.resolution.width
+        const H = lutWGSL.resolution.height
+        const quad = new THREE.QuadMesh()
+
+        function renderMaterialToFloat(material) {
+          const rt = new THREE.RenderTarget(W, H, {
+            type: THREE.FloatType,
+            minFilter: THREE.NearestFilter,
+            magFilter: THREE.NearestFilter,
+            depthBuffer: false,
+          })
+          quad.material = material
+          renderer.setRenderTarget(rt)
+          quad.render(renderer)
+          renderer.setRenderTarget(null)
+          return rt
+        }
+
+        const rtW = renderMaterialToFloat(lutWGSL.material)
+        const rtT = renderMaterialToFloat(lutTSL.material)
+        const bufW = await renderer.readRenderTargetPixelsAsync(rtW, 0, 0, W, H)
+        const bufT = await renderer.readRenderTargetPixelsAsync(rtT, 0, 0, W, H)
+
+        let maxDiff = 0
+        for (let i = 0; i < bufW.length; i++) {
+          if (i % 4 === 3) continue // skip alpha
+          const d = Math.abs(bufW[i] - bufT[i])
+          if (d > maxDiff) maxDiff = d
+        }
+
+        const THRESH = 1e-4
+        const pass = maxDiff <= THRESH
+        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — maxDiff=${maxDiff.toExponential(3)} (thresh ${THRESH.toExponential(0)}) over ${W}×${H} RGB`
+        console.log(`[parity] ${msg}`)
+        const el = document.getElementById('verdict')
+        el.textContent = msg
+        el.style.color = pass ? '#7f7' : '#f77'
+
+        rtW.dispose()
+        rtT.dispose()
+      }
+
+      function onResize() {
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      }
+    </script>
+  </body>
+</html>

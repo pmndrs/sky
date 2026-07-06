@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>01 — Preetham baked into cube (Phase 1a)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      Phase 1a — baker v1 now owns the Hillaire pipeline; this example currently also renders Hillaire (see PLAN caveat)
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { SkyAtmosphereBaker } from '@sky/sky/SkyAtmosphereBaker'
+      import { createDemoScene } from '@sky/demo/createDemoScene'
+      import { createSunGui } from '@sky/demo/sunGui'
+      import { createStartGate, logStage } from '@sky/demo/startGate'
+
+      const gate = createStartGate({
+        label: 'Start bake',
+        stages: [
+          'create WebGPU renderer',
+          'renderer.init()',
+          'baker: LUTs + cube + PMREM (first bake)',
+          'build demo scene',
+          'render loop',
+        ],
+      })
+
+      gate.run(async ({ markStage }) => {
+        markStage(0, 'running')
+        const renderer = new THREE.WebGPURenderer({ antialias: true })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = 0.5
+        renderer.inspector = new Inspector()
+        document.body.appendChild(renderer.domElement)
+        markStage(1, 'running')
+
+        await logStage('renderer.init()', () => renderer.init())
+        markStage(2, 'running')
+
+        const baker = await logStage('SkyAtmosphereBaker construct + first update()', async () => {
+          const b = new SkyAtmosphereBaker(renderer, { cubeSize: 256 })
+          b.setSun({ elevation: 15, azimuth: 180 })
+          b.update()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return b
+        })
+        markStage(3, 'running')
+
+        const demo = createDemoScene(baker)
+        const scene = demo.scene
+        const camera = demo.camera
+
+        const controls = new OrbitControls(camera, renderer.domElement)
+        controls.target.set(0, 1.5, 0)
+        controls.minDistance = 4
+        controls.maxDistance = 40
+        controls.update()
+
+        createSunGui({ renderer, baker, scene })
+
+        window.addEventListener('resize', () => {
+          camera.aspect = window.innerWidth / window.innerHeight
+          camera.updateProjectionMatrix()
+          renderer.setSize(window.innerWidth, window.innerHeight)
+        })
+        markStage(4, 'running')
+
+        renderer.setAnimationLoop(() => {
+          const wasDirty = baker.cubeDirty || baker.sunDirty || baker.atmosDirty
+          try {
+            baker.update()
+          } catch (err) {
+            console.error('[animate] baker.update() failed:', err)
+            renderer.setAnimationLoop(null)
+            return
+          }
+
+          if (wasDirty) {
+            scene.environment = baker.environmentTexture
+            scene.background = baker.texture
+          }
+
+          controls.update()
+          renderer.render(scene, camera)
+        })
+      })
+    </script>
+  </body>
+</html>

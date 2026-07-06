@@ -2,41 +2,115 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>SebH TSL Sky — examples</title>
+    <title>@pmndrs/sky — examples</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       html,
       body {
         margin: 0;
-        padding: 24px;
+        padding: 24px 28px 48px;
         font-family: system-ui, sans-serif;
         background: #111;
         color: #eee;
+        line-height: 1.5;
       }
       a {
         color: #8ad;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
       }
       h1 {
-        font-size: 18px;
-        margin-top: 0;
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #8a8f98;
+        margin: 28px 0 8px;
+      }
+      p.sub {
+        color: #999;
+        margin: 0 0 8px;
+        max-width: 60ch;
       }
       ul {
-        line-height: 1.8;
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      li {
+        padding: 4px 0;
+      }
+      .num {
+        display: inline-block;
+        width: 2.4em;
+        color: #666;
+      }
+      .desc {
+        color: #999;
       }
     </style>
   </head>
   <body>
-    <h1>SebH TSL Sky</h1>
+    <h1>@pmndrs/sky</h1>
+    <p class="sub">
+      Hillaire atmospheric sky for Three.js / TSL on the WebGPU renderer. Requires a WebGPU-capable browser.
+    </p>
+
+    <h2>Sky demos</h2>
     <ul>
-      <li><a href="./01-legacy-baked.html">01 — Preetham baked into cube (Phase 1a)</a></li>
-      <li><a href="./02-hillaire-baked.html">02 — Hillaire LUT-baked sky (Phase 1b)</a></li>
-      <li><a href="./05-planet-scale.html">05 — Planet-scale stable scene</a></li>
-      <li><a href="./06-planet-scale-debug.html">06 — Planet-scale debug harness</a></li>
-      <li><a href="./10-transmittance-lut.html">10 — Transmittance LUT (Phase 1b scratchpad)</a></li>
-      <li><a href="./11-multiscatter-lut.html">11 — Multi-Scatter LUT (Phase 1b scratchpad)</a></li>
-      <li><a href="./12-skyview-lut.html">12 — Sky-View LUT (Phase 1b scratchpad)</a></li>
-      <li><a href="./14-night-sky.html">14 — Night sky (procedural stars + opt-in HDR)</a></li>
-      <li><a href="./15-grounded-skybox.html">15 — GroundedSkybox dial-in</a></li>
+      <li><span class="num">01</span><a href="./01-legacy-baked.html">Legacy Preetham sky baked into a cube</a></li>
+      <li><span class="num">02</span><a href="./02-hillaire-baked.html">Hillaire LUT-baked sky</a></li>
+      <li>
+        <span class="num">03</span><a href="./03-aerial-perspective.html">Aerial-perspective haze over terrain</a>
+      </li>
+      <li><span class="num">04</span><a href="./04-live-sky.html">Live sky (per-frame LUT rebake)</a></li>
+      <li><span class="num">05</span><a href="./05-planet-scale.html">Planet-scale sky with sphere ground</a></li>
+      <li><span class="num">06</span><a href="./06-planet-scale-debug.html">Planet-scale debug harness</a></li>
+      <li><span class="num">14</span><a href="./14-night-sky.html">Night sky — procedural stars + optional HDR</a></li>
+      <li><span class="num">15</span><a href="./15-grounded-skybox.html">Grounded skybox</a></li>
+    </ul>
+
+    <h2>Sky component (drop-in facade)</h2>
+    <p class="sub">The high-level <code>Sky</code> class — the 90% path.</p>
+    <ul>
+      <li><span class="num">C1</span><a href="./component-01-baked.html">Baked sky, drop-in</a></li>
+      <li>
+        <span class="num">C2</span><a href="./component-02-haze.html">Sky + aerial-perspective haze post-process</a>
+      </li>
+      <li><span class="num">C3</span><a href="./component-03-planet.html">Planet-scale ground-to-sky</a></li>
+    </ul>
+
+    <h2>LUT viewers</h2>
+    <p class="sub">Fullscreen views of each Hillaire lookup table, with pixel readback.</p>
+    <ul>
+      <li><span class="num">10</span><a href="./10-transmittance-lut.html">Transmittance LUT</a></li>
+      <li><span class="num">11</span><a href="./11-multiscatter-lut.html">Multi-Scatter LUT</a></li>
+      <li><span class="num">12</span><a href="./12-skyview-lut.html">Sky-View LUT</a></li>
+      <li>
+        <span class="num">13</span><a href="./13-aerial-perspective-lut.html">Aerial-Perspective LUT (froxel volume)</a>
+      </li>
+    </ul>
+
+    <h2>WGSL / TSL parity harness</h2>
+    <p class="sub">Numeric parity checks between the shared WGSL core and its TSL twin.</p>
+    <ul>
+      <li><span class="num">00</span><a href="./parity/00-leaf-helpers.html">Leaf helpers</a></li>
+      <li><span class="num">01</span><a href="./parity/01-uv-maps.html">UV maps + spherical direction</a></li>
+      <li>
+        <span class="num">10</span
+        ><a href="./parity/10-transmittance-lut.html">Transmittance LUT (WGSL vs TSL backend)</a>
+      </li>
+      <li>
+        <span class="num">11</span
+        ><a href="./parity/11-texture-sample.html">Texture sampling in wgslFn (manual bilinear vs hardware)</a>
+      </li>
+      <li><span class="num">12</span><a href="./parity/12-skyview-lut.html">Sky-View LUT integrator</a></li>
+      <li><span class="num">13</span><a href="./parity/13-multiscatter-lut.html">Multi-Scatter LUT</a></li>
     </ul>
   </body>
 </html>

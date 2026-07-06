@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>04 — Live SebH-core sky (Mode B)</title>
+    <title>04 — Live sky</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       html,
@@ -33,7 +33,7 @@
   </head>
   <body>
     <div id="info">
-      Mode B — live SkyAtmosphereMesh in main scene + AP haze.<br />
+      live SkyAtmosphereMesh in main scene + AP haze.<br />
       Sky updates per-frame from current camera; cube re-bake only on sun change (IBL).
     </div>
     <script type="module">
@@ -50,7 +50,7 @@
       const debugMode = new URLSearchParams(window.location.search).get('debug')
 
       const gate = createStartGate({
-        label: 'Start Mode B demo',
+        label: 'Start demo',
         stages: [
           'create WebGPU renderer',
           'renderer.init()',
@@ -94,7 +94,7 @@
 
         const scene = new THREE.Scene()
 
-        // Mode B — add the live sky mesh directly into the main scene.
+        // add the live sky mesh directly into the main scene.
         // Sky-View LUT is sampled per-pixel against the current camera; sun
         // disc is visible (cube bake still hides it during its temporary
         // pass). No `scene.background = baker.texture` here.

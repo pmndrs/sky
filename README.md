@@ -161,8 +161,8 @@ npx degit DennisSmolek/tsl-sky-starters/r3f my-sky-app
 
 ## Status
 
-Phase 1 (baked sky), Phase 2 (aerial perspective), and Phase 3 (planet-scale
-ground→orbit) are functional. Volumetric clouds and god-rays are out of scope.
+Baked sky, aerial-perspective haze, and planet-scale (ground→orbit) rendering
+are all functional. Volumetric clouds and god-rays are out of scope.
 
 ## Changelog
 

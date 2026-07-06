@@ -42,7 +42,7 @@
   </head>
   <body>
     <div id="info">
-      <b>Phase 2 parity — whole Transmittance LUT, WGSL backend vs TSL backend</b><br />
+      <b>Parity — whole Transmittance LUT, WGSL backend vs TSL backend</b><br />
       Two <code>TransmittanceLUT</code> instances, <code>backend:'wgsl'</code> and <code>backend:'tsl'</code>, each
       rendered into a <b>float</b> target (bypassing the shipped half-float LUT storage so the diff reflects the shader
       math, not quantization). Max |WGSL − TSL| over all texels/channels is read back for a numeric verdict. The canvas

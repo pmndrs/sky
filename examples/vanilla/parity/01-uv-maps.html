@@ -42,9 +42,9 @@
   </head>
   <body>
     <div id="info">
-      <b>Phase 0+ parity — UV maps &amp; spherical dir</b><br />
+      <b>Parity — UV maps &amp; spherical dir</b><br />
       Three bands (bottom→top): <b>uvToSkyViewLutParams</b>, <b>skyViewLutParamsToUv</b>, <b>getSphericalDir</b>. This
-      also exercises the two mechanisms Phase 0's leaf test didn't: <b>single-source</b> (each wrapper is
+      also exercises the two mechanisms the leaf test didn't: <b>single-source</b> (each wrapper is
       <code>wgslFn(CHUNK)</code> importing the core string) and <b>includes</b> (the Sky-View maps pull the sub-UV
       helper through the <code>includes</code> array).<br />
       <b>Green</b> = value (liveness). <b>Red</b> = |WGSL − TSL| × 500. Correct = green gradients, zero red.<br />

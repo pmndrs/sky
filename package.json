@@ -68,7 +68,10 @@
     "lint:fix": "eslint src tests --fix",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
-    "ci": "pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm format"
+    "ci": "pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm format",
+    "example": "pnpm --filter @pmndrs/sky-example-vanilla dev",
+    "example:vanilla": "pnpm --filter @pmndrs/sky-example-vanilla dev",
+    "example:react": "pnpm --filter @pmndrs/sky-example-react dev"
   },
   "peerDependencies": {
     "@react-three/fiber": ">=10.0.0-0",

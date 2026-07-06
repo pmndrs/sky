@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>05 — Planet-scale (Mode B + sphere ground + extended AP)</title>
+    <title>05 — Planet-scale sky with sphere ground</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       html,
@@ -150,7 +150,7 @@
 
         const scene = new THREE.Scene()
 
-        // Live sky mesh — Mode B. Sky-View LUT is sampled per-pixel
+        // Live sky mesh. Sky-View LUT is sampled per-pixel
         // against the current camera; raymarch fallback above topRadius.
         const skyMesh = baker.createSkyMesh()
         scene.add(skyMesh)

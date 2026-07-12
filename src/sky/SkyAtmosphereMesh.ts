@@ -102,8 +102,9 @@ export class SkyAtmosphereMesh extends Mesh {
   upVector: any
   showSunDisc: any
   mirrorBelowHorizon: any
-  sunIntensity: any
+  sunDiscIntensity: any
   sunDiscCos: any
+  sunDiscCosInner: any
   moonDirection: any
   showMoonDisc: any
   moonIntensity: any
@@ -195,23 +196,63 @@ export class SkyAtmosphereMesh extends Mesh {
     this.mirrorBelowHorizon = uniform(0.0)
 
     /**
-     * Sun-disc intensity multiplier. Tuned to match the Sky-View LUT's
-     * radiance magnitude (which is already in "Mcd/m²"-like units from
-     * Hillaire's integrator). A value of ~20 reads as a bright sun without
-     * blowing out the IBL when this mesh is used outside a bake.
+     * Sun-disc intensity multiplier, applied *after* the transmittance tint
+     * (see `_buildColorNode`'s sun-disc term). Deliberately NOT multiplied
+     * by `luminanceScale` — the sky LUT sample and the disc are on
+     * different scales (LUT is "per unit sun illuminance", the disc is a
+     * direct luminaire term), and stacking both scales would blow the disc
+     * out to a flat white disc at every elevation, defeating the point of
+     * the transmittance tint.
+     *
+     * Derivation of the default (20.0), assuming the demo defaults of
+     * `luminanceScale = 40` and `renderer.toneMappingExposure = 0.5`:
+     * composite = `sunDiscIntensity * transmittance`, and the ACES filmic
+     * curve is effectively saturated (reads as flat white) for any input
+     * above roughly 2–3 post-exposure. At zenith, camera→space
+     * transmittance is close to 1 (clear air overhead), so
+     * `20 * 1.0 * 0.5(exposure) = 10` — comfortably into the saturated
+     * region, giving the expected bright-white high-sun disc. Near the
+     * horizon transmittance drops sharply (Rayleigh + Mie extinction over
+     * a long grazing path) — by T ≈ 0.2 the composite is
+     * `20 * 0.2 * 0.5 = 2`, right at the edge of saturation, so the disc
+     * starts reading as colour instead of flat white; by T ≈ 0.05 it's
+     * `20 * 0.05 * 0.5 = 0.5`, a dim reddened ember that fades into the
+     * horizon glow just before `intersectsGround` clips it entirely. This
+     * headroom (≈40x between "just saturated" and "just visible") is what
+     * produces the white→red→gone falloff described in the elevation
+     * sweep verification script.
      *
      * @type {UniformNode<float>}
      */
-    this.sunIntensity = uniform(20.0)
+    this.sunDiscIntensity = uniform(20.0)
 
     /**
-     * Sun-disc angular *diameter* in radians. Stored as `cos(diameter)` for
-     * the smoothstep test. Default ~0.535° matches the Sun seen from Earth.
-     * Updated via `setSunAngularDiameter(rad)`.
+     * Sun-disc angular *half-angle* in radians, stored as `cos(halfAngle)`
+     * (the outer edge of the smoothstep soft rim — see `sunDiscCosInner`).
+     * Default 0.004675 rad ≈ 0.268°, i.e. an angular *diameter* of ≈0.535°,
+     * matching the real Sun seen from Earth. Update both bounds together
+     * via `setSunAngularRadius(halfAngleRad, edgeSoftness)` rather than
+     * poking this uniform directly, so the soft-edge inner bound stays in
+     * sync.
      *
      * @type {UniformNode<float>}
      */
     this.sunDiscCos = uniform(Math.cos(0.004675))
+
+    /**
+     * Inner bound of the sun disc's soft edge, stored as `cos(innerAngle)`
+     * where `innerAngle = halfAngle * (1 - edgeSoftness)`. The disc mask is
+     * `smoothstep(sunDiscCos, sunDiscCosInner, dot(viewDir, sunDir))` — 1.0
+     * inside `innerAngle`, ramping to 0.0 at `halfAngle`. Doing the ramp in
+     * `cos`-space with precomputed bounds (rather than an `acos` per pixel)
+     * keeps the shader cheap; only `setSunAngularRadius` pays the trig cost,
+     * on the JS side, once per call. Default edge softness is 10% of the
+     * half-angle — enough to anti-alias the disc rim at typical demo
+     * resolutions/FOVs without visibly blurring it.
+     *
+     * @type {UniformNode<float>}
+     */
+    this.sunDiscCosInner = uniform(Math.cos(0.004675 * (1 - 0.1)))
 
     /**
      * Moon direction in Y-up world space. Mirrors `sunDirection`. Pushed
@@ -381,6 +422,22 @@ export class SkyAtmosphereMesh extends Mesh {
     material.colorNode = colorNode
   }
 
+  /**
+   * Set the sun disc's angular size and rim softness. `halfAngleRad` is
+   * half the disc's angular *diameter* (the physical Sun is ≈0.535°
+   * diameter → ≈0.00465 rad half-angle). `edgeSoftness` is the fraction of
+   * `halfAngleRad` over which the disc ramps from opaque to transparent at
+   * its rim (0 = perfectly hard/aliased edge, 1 = the whole disc is a soft
+   * gradient with no flat core). Both `sunDiscCos` (outer bound) and
+   * `sunDiscCosInner` (inner bound) are recomputed here in one JS-side call
+   * so the shader never needs a per-pixel `acos`.
+   */
+  setSunAngularRadius(halfAngleRad: number, edgeSoftness: number = 0.1): this {
+    this.sunDiscCos.value = Math.cos(halfAngleRad)
+    this.sunDiscCosInner.value = Math.cos(halfAngleRad * (1 - edgeSoftness))
+    return this
+  }
+
   _buildColorNode(): any {
     const params = this.atmosphereUniforms
     const skyViewTex = this.skyViewLUT.texture
@@ -390,8 +447,9 @@ export class SkyAtmosphereMesh extends Mesh {
     const sunDirU = this.sunDirection
     const upU = this.upVector
     const showSunDiscU = this.showSunDisc
-    const sunIntensityU = this.sunIntensity
+    const sunDiscIntensityU = this.sunDiscIntensity
     const sunDiscCosU = this.sunDiscCos
+    const sunDiscCosInnerU = this.sunDiscCosInner
     const luminanceScaleU = this.luminanceScale
     const viewHeightU = this.viewHeight
     const starsTexNode = this.starsTextureNode
@@ -452,6 +510,9 @@ export class SkyAtmosphereMesh extends Mesh {
       const ro = upVec.mul(viewHeight)
       const tPlanet = raySphereIntersectNearest(ro, viewDir, earthO, params.bottomRadius)
       const intersectsGround = tPlanet.greaterThanEqual(float(0.0))
+      // Shared by stars and the sun disc: both need "is this ray looking at
+      // open sky, not the planet" and both need camera→space transmittance.
+      const skyMask = intersectsGround.select(float(0.0), float(1.0))
 
       // Sky color accumulator. Either populated by the SkyView LUT
       // (camera inside / near atmosphere) or by a per-pixel raymarch
@@ -507,6 +568,17 @@ export class SkyAtmosphereMesh extends Mesh {
         skyColor.assign(texture(skyViewTex, lutUv).rgb.mul(luminanceScaleU))
       }
 
+      // Camera→space transmittance along this view ray. Shared by the stars
+      // fade and the sun-disc tint below. Defaults to white (no attenuation)
+      // when the transmittance LUT isn't wired (stand-alone Phase 1b mesh);
+      // both consumers degrade gracefully to their pre-tint behaviour in
+      // that case.
+      const tToSpace = vec3(1.0, 1.0, 1.0).toVar()
+      if (transmittanceTex !== null) {
+        const tToSpaceUv = transmittanceLutParamsToUv(viewHeight, viewZenithCosAngle, params)
+        tToSpace.assign(texture(transmittanceTex, tToSpaceUv).rgb)
+      }
+
       // Stars contribution. Two source paths run in parallel and are
       // lerp-mixed by `starsMode` (0 = procedural shader-only, 1 = HDR
       // texture sample). Both paths are cheap; the runtime mix lets
@@ -539,20 +611,35 @@ export class SkyAtmosphereMesh extends Mesh {
         const textureRaw = starsTexNode.sample(starsUv).rgb
         const starsRaw = mix(proceduralRaw, textureRaw, starsModeU)
 
-        // Camera→space transmittance along this view ray.
-        const tToSpaceUv = transmittanceLutParamsToUv(viewHeight, viewZenithCosAngle, params)
-        const tToSpace = texture(transmittanceTex, tToSpaceUv).rgb
-        const skyMask = intersectsGround.select(float(0.0), float(1.0))
-
         starsContribution.assign(starsRaw.mul(tToSpace).mul(starsIntensityU).mul(skyMask))
       }
 
-      // Sun disc — same in both paths. cos(angularDiameter) smoothstep,
-      // driven by the `sunDiscCos` uniform so callers can size the disc.
+      // Sun disc, rendered in-shader (not a separate mesh) so it composites
+      // with the same LUT / raymarch sky colour and shares the exact view
+      // ray — this is what gives the disc free limb reddening at the
+      // horizon "for free" instead of needing a hand-authored gradient.
+      // Port of Hillaire's `GetSunLuminance` (RenderSkyCommon.hlsl): if the
+      // view ray falls within the sun's angular radius AND doesn't hit the
+      // planet, output sun luminance tinted by transmittance-to-space along
+      // the view ray.
+      //
+      // Angular test done entirely in cos-space (no per-pixel acos): the
+      // mask ramps from 0 at the outer bound (`sunDiscCos`,
+      // cos(halfAngle)) to 1 at the inner bound (`sunDiscCosInner`,
+      // cos(halfAngle * (1 - edgeSoftness))) — see `setSunAngularRadius`.
       const cosSun = dot(viewDir, sunDir)
-      const sunDiscMask = smoothstep(sunDiscCosU, sunDiscCosU.add(float(0.00002)), cosSun).mul(showSunDiscU)
+      const sunAngularMask = smoothstep(sunDiscCosU, sunDiscCosInnerU, cosSun)
+      // Ground occlusion: the sun must set behind the horizon rather than
+      // shine through the planet — reuse the same `intersectsGround` test
+      // the sky colour and stars already use (`skyMask` = 1 above horizon).
+      const sunDiscMask = sunAngularMask.mul(showSunDiscU).mul(skyMask)
 
-      const sunContribution = vec3(1.0, 1.0, 1.0).mul(sunDiscMask).mul(sunIntensityU)
+      // Transmittance tint IS the limb-reddening effect: near the horizon
+      // the long grazing path through the atmosphere absorbs/scatters blue
+      // light far more than red, so `tToSpace` skews red and drops in
+      // magnitude — see `sunDiscIntensity`'s doc comment for the exposure
+      // math this relies on.
+      const sunContribution = tToSpace.mul(sunDiscMask).mul(sunDiscIntensityU)
 
       // Moon disc — same shape as the sun disc, separate uniforms so the
       // sun stays unaffected. Constantly "full" — no phase-shaded

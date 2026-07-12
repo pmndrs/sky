@@ -19,7 +19,7 @@ interface SkyOptions {
   atmosphere?: any
   exposure?: number
   north?: string
-  sunDisc?: boolean | { visible?: boolean; angularDiameter?: number }
+  sunDisc?: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number }
   timeOfDay?: number
   latitude?: number
   dayOfYear?: number
@@ -238,13 +238,20 @@ export class Sky {
   }
 
   /**
-   * `visible` may be a boolean OR an object `{ visible?, angularDiameter? }`.
-   * `angularDiameter` is in radians; default ~0.00935 rad (~0.535°).
+   * `visible` may be a boolean OR an object
+   * `{ visible?, angularDiameter?, edgeSoftness? }`. `angularDiameter` is in
+   * radians; default ~0.00935 rad (~0.535°). `edgeSoftness` is the fraction
+   * of the disc's angular *radius* the rim ramps over (default 0.1 = 10%);
+   * see `SkyAtmosphereMesh.setSunAngularRadius`. The disc itself renders
+   * in-shader on the sky mesh, tinted by transmittance-to-space, so it
+   * reddens and dims naturally near the horizon and disappears once the
+   * view ray intersects the planet — there is no separate sun sprite/mesh
+   * to manage.
    */
-  setSunDisc(visible: boolean | { visible?: boolean; angularDiameter?: number }) {
+  setSunDisc(visible: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number }) {
     if (typeof visible === 'object' && visible !== null) {
       if (typeof visible.angularDiameter === 'number') {
-        this.baker.sky.sunDiscCos.value = Math.cos(visible.angularDiameter * 0.5)
+        this.baker.sky.setSunAngularRadius(visible.angularDiameter * 0.5, visible.edgeSoftness)
       }
 
       if (typeof visible.visible === 'boolean') {

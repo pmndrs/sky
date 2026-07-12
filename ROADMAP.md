@@ -149,3 +149,23 @@ Track 4.x rest ────► after 1.1
 Suggested batching to save tokens: run 2.1 + 4.6-research + 4.5-research as one
 cheap parallel research wave; 4.3 helpers as the first code task (it directly
 helps debugging D1 by visualizing the sun frame).
+
+## Status log
+
+**2026-07-12 — agent wave 1 complete:**
+
+- ✅ 2.1 pmndrs docs conventions researched → `research/pmndrs-docs-conventions.md`
+  (key finding: docs workflow + examples deploy both target the ONE Pages site —
+  merge into a single artifact before wiring docs; see memo)
+- ✅ 2.3 Pages deploy implemented → `.github/workflows/deploy-pages.yml`
+  (base path derived from repo name; verified `/sky/` + default builds)
+- ✅ 4.3 `SkyHelper` implemented (compass ring, north tick, sun arrow,
+  elevation arc; exported from `@pmndrs/sky`; toggle in component-02) —
+  pending visual check
+- ✅ 4.5 research → `research/stylized-ghibli-sky.md` (v1: in-mesh post-LUT
+  color remap + light param preset, `preset: 'ghibli'` + `styleStrength`;
+  6 open questions for maintainer)
+- ✅ 4.6 research → `research/upscaler-integration.md` (verdict: half-res+FSR3
+  joint demo only; cube-bake upscaling is a no-fit; zero library changes)
+- ⏳ D1/D2 browser verification: in progress — blocked on the automation
+  window being visible (Chrome throttles rAF when hidden)

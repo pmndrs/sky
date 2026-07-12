@@ -20,7 +20,7 @@ _Last audited: 2026-07-12, branch `feat/pmndrs-monorepo`._
 
 ## Known defects
 
-### D1 — Camera-altitude/pitch sky flip (**fix implemented — pending eyeball verification**)
+### D1 — Camera-altitude/pitch sky flip (**FIXED — verified in browser 2026-07-12**)
 
 **Root cause found (2026-07-12):** `SkyAtmosphereBaker.setSun` locked the
 SkyView LUT's baked sun zenith to the flat-world frame (`z = sin(elevation)`
@@ -64,23 +64,26 @@ fix sun at 8°; screenshot; pitch camera up/down and confirm below-horizon
 content changes; then repeat at 2 km / 10 km / 80 km to find onset altitude.
 Deliverable: diagnosis + fix + before/after captures.
 
-### D2 — `component-03-planet` camera-altitude feedback instability (**fix implemented — pending eyeball verification**)
+### D2 — `component-03-planet` camera-altitude feedback instability (**FIXED — verified 2026-07-12**)
 
-Root cause: two owners of `state.cameraAltitude`. The GUI slider's `onChange`
-started an **animated** `setLookAt` transition while the animate loop mirrored
-the camera's in-transit altitude back into the same state each frame (GUI
-`.listen()`) — re-firing `onChange` → new transition from mid-flight → never
-converges. Fix (demo-local): `syncingAltitude` guard around the loop's mirror
-write, and the slider's `setLookAt` is now non-animated — one owner per frame.
+Root cause: two owners of `state.cameraAltitude`, made unfixable-by-flag by
+the three.js Inspector's `listen()` semantics — it polls the bound property
+per rAF and re-dispatches `onChange` **one rAF later** on external change, so
+a synchronous guard around the loop's mirror write can't stop the echo. Real
+fix (`7675411`): break the loop **by value** — `onChange` only records a
+pending request (ignoring echoes of values we mirrored ourselves), the animate
+loop is the single writer (no transitions), and the mirror only republishes on
+meaningful change. Applied to `05` and `component-03`.
 
-### D3 — Planet-scale demo controls are wrong idiom (P1)
+### D3 — Planet-scale demo controls are wrong idiom (**DONE — `PlanetFlightControls`, verified 2026-07-12**)
 
-Orbit controls around a ground-based origin produce huge, twitchy rotations at
-planet scale. Replace with airplane-style controls for planet demos: camera
-rotates in place (yaw/pitch around its own position, radial-up-referenced),
-altitude changes along the radial axis, no distant orbit target. Applies to
-`05`, `06`, `component-03`, and is a prerequisite for the space-to-ground and
-Outer Wilds demos (Track 3).
+Implemented in `3b46477`: `src/demo/planetFlightControls.ts` — first-person
+look-around (yaw/pitch about the camera-local radial up, roll-free), wheel is
+the only movement (radial altitude, exponential ~8%/tick), no orbit target.
+Wired into `05` and `component-03`; maintainer verdict: "controls feel much
+better". Note: `06-planet-scale-debug` still uses camera-controls — port it
+when next touched. The class is demo-infrastructure (`@sky/demo/...`), a
+candidate for promotion to the public API if users want it.
 
 ### D4 — Concentric "wave" bands in AP haze at 50–100 km altitude (OPEN, deferred)
 
@@ -196,3 +199,23 @@ helps debugging D1 by visualizing the sun frame).
   joint demo only; cube-bake upscaling is a no-fit; zero library changes)
 - ⏳ D1/D2 browser verification: in progress — blocked on the automation
   window being visible (Chrome throttles rAF when hidden)
+
+**2026-07-12 (evening) — interactive verification + fix wave 2 complete:**
+
+- ✅ D1 verified fixed in browser (maintainer): sky coherent at altitude, sun
+  sets/rises as the camera moves over the planet
+- ✅ D2 re-fixed properly (`7675411` — Inspector `listen()` echoes onChange
+  async; broke the loop by value) and verified
+- ✅ D3 done (`3b46477` — `PlanetFlightControls`), verified: "controls feel
+  much better"
+- ✅ component-02-haze rescaled (`c61cb8a`): haze was invisible because the
+  scene was sub-km; now 1.5–50 km geometry — verified "looks better"
+- ✅ **AP LUT Y-flip fixed** (`a069e61`): LUT build filled rows bottom-up while
+  the post-process samples v-down → froxel field mirrored about screen
+  centre; caused pitch-tracking under-haze at altitude. Found via the
+  maintainer's ap/raymarch A/B; gotcha recorded in CLAUDE.md
+- ⛔ D4 opened (AP wave banding 50–100 km): dither+jitter attempt failed
+  (reverted `97e3003`), deferred with full bisection notes — see D4 above
+- ✅ 4.3 SkyHelper verified visible in the rescaled component-02
+- ⏳ 0.3 partial: 05 / component-02 / component-03 interactively verified by
+  the maintainer; full scripted sweep (1.2) still open

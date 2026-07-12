@@ -30,6 +30,7 @@ function htmlEntries() {
 }
 
 export default defineConfig({
+  base: process.env.BASE_PATH || '/',
   server: { port: 5173, open: false },
   resolve: {
     alias: [

@@ -246,9 +246,17 @@ export class AerialPerspectiveLUT {
       const fz = float(z)
 
       // --- screen-space NDC (centre of texel) ---
-      // Three.js convention: NDC y-up. Texel (0,0) at lower-left, NDC y=-1.
+      // Row y is sampled by the haze post-process at v = uv().y, whose ray
+      // reconstruction uses ndc.y = 1 - 2*uv.y (WebGPU v-down screen UV; see
+      // the ndc2 comment in HazePostProcess). Row 0 must therefore hold the
+      // TOP-of-frustum ray (ndc.y = +1). Building rows bottom-up instead
+      // mirrors the whole froxel field about screen centre: bottom-of-screen
+      // pixels read upward-tilted rays that integrate through exponentially
+      // thinner air, so near-ground haze vanishes and the error tracks
+      // camera pitch (invisible at ground level where the view is roughly
+      // horizon-symmetric, obvious from altitude).
       const ndcX = fx.add(0.5).div(float(resX)).mul(2.0).sub(1.0)
-      const ndcY = fy.add(0.5).div(float(resY)).mul(2.0).sub(1.0)
+      const ndcY = float(1.0).sub(fy.add(0.5).div(float(resY)).mul(2.0))
 
       // --- view-space ray (z = -1 in three.js view space, but we use
       // homogeneous reconstruction via inverse projection at clip-z 0.5) ---

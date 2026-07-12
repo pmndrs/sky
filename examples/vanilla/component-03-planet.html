@@ -237,9 +237,17 @@
         renderer.toneMappingExposure = v
       })
 
-      const altitudeController = gui
-        .add(state, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 500_000, 1)
-        .onChange((v) => setCameraAltitude(v))
+      // Single-owner altitude sync: the animate loop mirrors the camera's
+      // actual altitude back into `state.cameraAltitude` for GUI display.
+      // Guard that write with `syncingAltitude` so a GUI implementation that
+      // fires onChange on programmatic updates can't re-trigger
+      // setCameraAltitude from its own mirror — that feedback loop (slider →
+      // animated transition → loop writes in-transit altitude → onChange →
+      // new transition …) made the altitude oscillate without converging.
+      let syncingAltitude = false
+      const altitudeController = gui.add(state, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 500_000, 1).onChange((v) => {
+        if (!syncingAltitude) setCameraAltitude(v)
+      })
       altitudeController.listen?.()
 
       const hazeGui = renderer.inspector.createParameters('Haze')
@@ -254,6 +262,9 @@
         const nextPosition = planetCenter.clone().add(frame.up.multiplyScalar(bottomRadiusM + altitudeM))
         const delta = nextPosition.clone().sub(camera.position)
         cameraTarget.add(delta)
+        // Non-animated: an animated transition here spans many frames, and the
+        // per-frame altitude mirror would keep republishing in-transit values
+        // while the user (or the clamp) is also steering — one owner per frame.
         cameraControls.setLookAt(
           nextPosition.x,
           nextPosition.y,
@@ -261,7 +272,7 @@
           cameraTarget.x,
           cameraTarget.y,
           cameraTarget.z,
-          true,
+          false,
         )
       }
 
@@ -277,6 +288,7 @@
         cameraControls.getTarget(cameraTarget)
 
         const unclamped = getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM)
+        syncingAltitude = true
         state.cameraAltitude = clampCameraToMinAltitude({
           camera,
           target: cameraTarget,
@@ -284,6 +296,7 @@
           bottomRadiusM,
           minAltitudeM: MIN_CAMERA_ALTITUDE,
         })
+        syncingAltitude = false
         if (state.cameraAltitude !== unclamped) {
           cameraControls.setLookAt(
             camera.position.x,

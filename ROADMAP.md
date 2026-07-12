@@ -20,22 +20,67 @@ _Last audited: 2026-07-12, branch `feat/pmndrs-monorepo`._
 
 ## Known defects
 
-### D1 — Elevation color flip (P0, investigate before demo work)
+### D1 — Camera-altitude/pitch sky flip (**fix implemented — pending eyeball verification**)
 
-Symptom (from practical usage): background and atmosphere appear to swap/flip
-colorings when sun elevation changes. Suspects, in order:
+**Root cause found (2026-07-12):** `SkyAtmosphereBaker.setSun` locked the
+SkyView LUT's baked sun zenith to the flat-world frame (`z = sin(elevation)`
+vs +Y), while `setCamera` (planet mode) gives the mesh a **radial** up for its
+sample scalars. The LUT's 2-angle parameterization requires baked-sun-zenith ==
+`dot(sunWorld, localUp)`; orbiting the planet changes local up, nobody updated
+the LUT → mirrored/rotated atmosphere tracking camera movement. All other
+paths (AP LUT, haze raymarch, space fallback) are fully-3D and were already
+frame-consistent.
 
-1. The Y-up world / Z-up LUT frame dance (`SkyAtmosphereMesh` /
-   `SkyViewLUT.setSun` synthesizing `z = sin(elevation)`) — CLAUDE.md flags this
-   as the first place to look for horizon/orientation artifacts.
-2. Cube bake (background) vs live sky mesh / haze disagreeing across the
-   horizon crossing (`mirrorBelowHorizon`, sky-view V packing near horizon).
-3. Sun-listener ordering: SkyView LUT vs AP LUT receiving different sun frames.
+**Fix:** `_syncSkyViewSunFrame()` derives the LUT sun from
+`sunVec · cameraUp`, called from both `setSun` and `setCamera`; cube re-bakes
+when the effective zenith drifts. Flat mode is bit-identical to the old math
+(`sunVec · +Y = sin(elevation)`) — zero regression risk for ground scenes.
 
-Repro protocol: `pnpm example` → `component-02-haze.html` (and `04-live-sky`),
-sweep elevation +90° → −10° in ~10° steps via GUI, screenshot each; compare
-`scene.background` (cube) against the live mesh & haze at each step; then binary
-search the first bad step. Deliverable: diagnosis + fix + before/after captures.
+Original investigation notes:
+
+Corrected symptom (repro'd in `05-planet-scale`, cameraAltitude ≈ 44 km,
+sunElevation 8°): the above-horizon sky is correct, but the **below-horizon
+half renders as an inverted/mirrored atmosphere gradient instead of ground**,
+and — the key clue — **what renders depends on camera pitch**: raising camera
+elevation "reveals the ground", pitching back down brings the atmosphere back.
+
+A frame-invariant Sky-View LUT sample depends only on world view direction and
+view height — camera pitch must not change the result for a fixed world
+direction. Pitch-dependence implicates the per-pixel view-direction
+reconstruction / LUT-V mapping in `SkyAtmosphereMesh` (and/or its
+`intersectsGround` branch selection at altitude), not the LUT contents.
+Suspects, in order:
+
+1. `SkyAtmosphereMesh._buildColorNode`'s `viewZenithCosAngle` /
+   `intersectsGround` computation using the wrong "up" (flat world +Y vs
+   planet-radial) or a screen-space-influenced direction at altitude.
+2. The horizon-packed V parameterization's ground half (mirrored V) sign flip
+   when `viewHeight` ≫ ground — samples sky half mirrored instead of ground.
+3. Cube bake vs live mesh disagreement across the same crossing
+   (`mirrorBelowHorizon` interplay).
+
+Repro protocol: `pnpm example` → `05-planet-scale.html`, set altitude ~44 km,
+fix sun at 8°; screenshot; pitch camera up/down and confirm below-horizon
+content changes; then repeat at 2 km / 10 km / 80 km to find onset altitude.
+Deliverable: diagnosis + fix + before/after captures.
+
+### D2 — `component-03-planet` camera-altitude feedback instability (**fix implemented — pending eyeball verification**)
+
+Root cause: two owners of `state.cameraAltitude`. The GUI slider's `onChange`
+started an **animated** `setLookAt` transition while the animate loop mirrored
+the camera's in-transit altitude back into the same state each frame (GUI
+`.listen()`) — re-firing `onChange` → new transition from mid-flight → never
+converges. Fix (demo-local): `syncingAltitude` guard around the loop's mirror
+write, and the slider's `setLookAt` is now non-animated — one owner per frame.
+
+### D3 — Planet-scale demo controls are wrong idiom (P1)
+
+Orbit controls around a ground-based origin produce huge, twitchy rotations at
+planet scale. Replace with airplane-style controls for planet demos: camera
+rotates in place (yaw/pitch around its own position, radial-up-referenced),
+altitude changes along the radial axis, no distant orbit target. Applies to
+`05`, `06`, `component-03`, and is a prerequisite for the space-to-ground and
+Outer Wilds demos (Track 3).
 
 ## Workstreams
 

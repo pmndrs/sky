@@ -92,6 +92,7 @@ export class SkyAtmosphereBaker {
   cubeDirty: boolean
   cameraDirty: boolean
   _sunVec: Vector3
+  _skyViewSunZenith: number
   _sunListeners: Set<(sunVec: Vector3) => void>
   _camera: PerspectiveCamera | null
   _cameraPositionKm: Vector3
@@ -229,6 +230,7 @@ export class SkyAtmosphereBaker {
     this._camera = null
     this._cameraPositionKm = new Vector3(0.0, this.atmosphereUniforms.bottomRadius.value + 0.001, 0.0)
     this._cameraUp = new Vector3(0.0, 1.0, 0.0)
+    this._skyViewSunZenith = 1.0 // sunVec(+Y) · cameraUp(+Y) at construction
     this._cameraAltitudeM = 1.0
   }
 
@@ -294,11 +296,41 @@ export class SkyAtmosphereBaker {
     this.sky.viewHeight.value = viewHeightKm
     this.sky.upVector.value.copy(this._cameraUp)
 
+    // The SkyView LUT's baked-in sun zenith is defined against the camera's
+    // LOCAL up. In planet mode, moving around the sphere tilts local up, so
+    // the effective sun elevation changes (the sun "sets" as you fly around
+    // the planet) — re-derive it every camera update. Also refresh the cube
+    // bake when the frame drifts meaningfully: background + IBL are baked
+    // from the same LUT and would otherwise keep the stale sun frame.
+    const prevZenith = this._skyViewSunZenith
+    this._syncSkyViewSunFrame()
+    if (Math.abs(this._skyViewSunZenith - prevZenith) > 1e-3) {
+      this.cubeDirty = true
+    }
+
     if (this.aerialPerspectiveLUT) {
       this.aerialPerspectiveLUT.setCamera(camera, { planetCenter })
     }
 
     this.cameraDirty = true
+  }
+
+  /**
+   * Push the sun direction into the SkyView LUT's Z-up local frame, using the
+   * sun's zenith cosine *relative to the camera's local up* — not the flat
+   * world +Y. The LUT's horizon-packed parameterization is only valid when its
+   * baked sun zenith matches the sun-vs-local-up angle the mesh computes its
+   * sample scalars against (`SkyAtmosphereMesh` uses `upVector`, which
+   * `setCamera` keeps radial in planet mode).
+   *
+   * Flat mode: cameraUp = +Y, so `sunVec · up = sin(elevation)` — identical to
+   * the historical behaviour.
+   */
+  _syncSkyViewSunFrame(): void {
+    const sinEff = MathUtils.clamp(this._sunVec.dot(this._cameraUp), -1.0, 1.0)
+    const cosEff = Math.sqrt(Math.max(0.0, 1.0 - sinEff * sinEff))
+    this._skyViewSunZenith = sinEff
+    this.skyViewLUT.sunDirection = new Vector3(cosEff, 0.0, sinEff)
   }
 
   /**
@@ -324,11 +356,10 @@ export class SkyAtmosphereBaker {
     // tracks the internal reference).
     this.sky.sunDirection.value.copy(this._sunVec)
 
-    // Z-up sun for SkyView LUT: only z matters (= sin(elevation)).
-    const elevRad = MathUtils.degToRad(elevation)
-    const cosE = Math.cos(elevRad)
-    const sinE = Math.sin(elevRad)
-    this.skyViewLUT.sunDirection = new Vector3(cosE, 0.0, sinE)
+    // Z-up sun for SkyView LUT — derived from the sun vector *relative to the
+    // camera's local up* (see _syncSkyViewSunFrame). In flat mode cameraUp is
+    // +Y and this reduces to z = sin(elevation), the historical behaviour.
+    this._syncSkyViewSunFrame()
 
     // AP LUT consumes the Y-up world sun directly (matches the integrator's
     // frame-invariant scalar-only consumption).

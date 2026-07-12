@@ -1,0 +1,161 @@
+---
+title: SkyAtmosphereBaker
+description: The power-user surface underneath Sky — owns the LUT pipeline, cube bake, and PMREM.
+---
+
+`SkyAtmosphereBaker` (`import { SkyAtmosphereBaker } from '@pmndrs/sky'`) is
+what [`Sky`](./sky) constructs and drives internally
+(`sky.baker` — always available). Reach for it directly when you need
+control `Sky` doesn't expose: custom dirty-flag management, direct LUT
+access, or building your own facade.
+
+Source: `src/sky/SkyAtmosphereBaker.ts`.
+
+## Architecture
+
+A **split-scene bake-first** design. The baker owns a private sky scene
+containing a single `SkyAtmosphereMesh`, three LUTs (Transmittance →
+MultiScatter → SkyView, see [LUTs](./luts)), a `CubeRenderTarget`, a
+`CubeCamera`, and a `PMREMGenerator`. Optionally (default on) it also owns
+a fourth LUT, the aerial-perspective 3D froxel volume.
+
+Call `baker.update()` once per frame; it cascades dirty flags and only
+re-runs the pipeline stages whose inputs actually changed. The main scene
+consumes `baker.environmentTexture` (PMREM-filtered) for IBL and
+`baker.texture` (raw cube) for `scene.background`.
+
+## Constructor
+
+```js
+new SkyAtmosphereBaker(renderer, options?)
+```
+
+| Option                    | Default            | Notes                                                                                                                                                                      |
+| ------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cubeSize`                | `256`              | Cube-render-target face size.                                                                                                                                              |
+| `atmosphere`              | `EARTH`            | Partial `AtmosphereParams`, merged onto `EARTH` (not onto a named preset — pass the fully resolved params if you want `mars`/`titan`; `Sky` does this resolution for you). |
+| `lutResolutions`          | `LUT_RESOLUTIONS`  | Partial override of `{ transmittance, multiScatter, skyView }` sizes. See [LUTs](./luts).                                                                                  |
+| `enableAerialPerspective` | `true`             | Build the AP LUT + compute pipeline.                                                                                                                                       |
+| `apKmPerSlice`            | `8.0`              | AP LUT depth-slice size in km. Must match whatever `kmPerSlice` you pass to `createHazeOutputNode` if you're not going through `Sky.applyHaze` (which wires this for you). |
+| `apResolution`            | `{x:32,y:32,z:32}` | AP LUT voxel grid override.                                                                                                                                                |
+| `mirrorBelowHorizon`      | `false`            | See `setMirrorBelowHorizon` below.                                                                                                                                         |
+
+## Getters
+
+| Getter                                                                             | Returns                                                                             |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `.texture`                                                                         | Raw cube (`cubeRenderTarget.texture`) — for `scene.background`.                     |
+| `.environmentTexture`                                                              | PMREM-filtered cube, or `null` before the first bake — for `scene.environment`.     |
+| `.aerialPerspectiveTexture`                                                        | 3D AP LUT texture, or `null` if AP is disabled.                                     |
+| `.cameraPositionKm`                                                                | Camera position in the LUT's km-scaled frame (planet-relative in planet mode).      |
+| `.cameraAltitudeM`                                                                 | Camera altitude above the ground shell, in metres.                                  |
+| `.cameraUp`                                                                        | Camera's local "up" — `+Y` in flat mode, radial-from-`planetCenter` in planet mode. |
+| `.sky`                                                                             | The `SkyAtmosphereMesh` instance (GUI access, or pass to `createSkyMesh`).          |
+| `.atmosphereParams`                                                                | Current resolved `AtmosphereParams`.                                                |
+| `.transmittanceLUT` / `.multiScatterLUT` / `.skyViewLUT` / `.aerialPerspectiveLUT` | The individual LUT class instances — see [LUTs](./luts).                            |
+
+## Dirty-flag semantics
+
+The baker tracks four independent dirty flags so `update()` skips work
+whose inputs haven't changed:
+
+| Flag          | Set by                                                                                           | Triggers on next `update()`                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `atmosDirty`  | `setAtmosphereParams(partial)`                                                                   | Transmittance + MultiScatter + SkyView + cube bake + PMREM (full chain)      |
+| `sunDirty`    | `setSun({ elevation, azimuth })`                                                                 | SkyView + cube bake + PMREM (Transmittance/MultiScatter don't depend on sun) |
+| `cubeDirty`   | `markCubeDirty()`, or indirectly by the above, or a meaningful camera-frame drift in planet mode | Cube bake + PMREM only                                                       |
+| `cameraDirty` | `setCamera(camera, opts)`                                                                        | SkyView (viewHeight) — the AP LUT is refreshed separately, see below         |
+
+`update()` is a no-op if nothing is dirty. This is why calling `sky.update(camera)`
+every frame is cheap once the sun/atmosphere have settled — most frames it's
+just a camera-height comparison.
+
+<Note>
+  `updateAerialPerspective()` is **not** part of the dirty-flag system — the AP LUT's froxels are camera-relative, so it
+  must re-render every frame the camera moves, regardless of any other dirty state. Call it explicitly each frame if
+  you've wired `applyHaze`.
+</Note>
+
+## Sun and camera
+
+### `setSun({ elevation, azimuth })`
+
+Degrees. `phi = 90 - elevation` (polar angle from +Y), `theta = azimuth`.
+Produces a Y-up world-space sun vector fed to the sky mesh, and separately
+derives the Z-up sun vector the Sky-View LUT's internal frame expects (see
+the Y-up/Z-up coordinate dance in the project's `CLAUDE.md` if you're
+debugging a tilted horizon). Sets `sunDirty` and `cubeDirty`.
+
+### `setCamera(camera, { planetCenter? })`
+
+Feeds the main camera's height into the Sky-View LUT and mesh, and (if AP
+is enabled) matrices into the AP LUT. Call every frame the camera moves.
+
+- **Flat mode** (no `planetCenter`): `viewHeight = bottomRadius + camera.position.y * 0.001`
+  — the legacy convention where world `y` is altitude.
+- **Planet mode** (`planetCenter` given): `viewHeight` is computed as true
+  radial distance from `planetCenter`, and `cameraUp` becomes the radial
+  direction instead of fixed `+Y`. See the
+  [Planet-scale guide](../guides/planet-scale).
+
+In planet mode, moving around the sphere tilts local "up", which changes
+the _effective_ sun elevation relative to the camera (the sun visually
+"sets" as you fly around the globe even with a fixed world sun direction).
+`setCamera` re-derives the Sky-View LUT's sun frame every call to account
+for this, and forces a cube re-bake if the effective zenith drifted enough
+to matter.
+
+### `addSunListener(fn)` / `removeSunListener(fn)`
+
+Subscribe to sun-direction changes — `fn(sunVec: Vector3)` fires at the end
+of every `setSun()` call (vector passed by reference; clone if you keep it).
+`SkySun`/`SkyMoon` use this to keep their `DirectionalLight`s in lockstep
+without per-frame polling. Returns an unsubscribe function.
+
+## Atmosphere
+
+### `setAtmosphereParams(partial)`
+
+Merges `partial` onto the current `AtmosphereParams` (see
+[Tuning the atmosphere](../guides/tuning-atmosphere) for the full shape)
+and pushes updated values into the TSL uniform bundle. Sets `atmosDirty`
+and `cubeDirty` — this is the expensive path, triggering a full LUT
+rebuild on the next `update()`.
+
+### `markCubeDirty()`
+
+Force the next `update()` to re-bake the cube + PMREM without touching the
+LUTs. Useful if you mutated a sky-mesh uniform directly and bypassed the
+baker's setters.
+
+### `setMirrorBelowHorizon(flag)`
+
+When `true`, the next cube bake folds below-horizon view rays to
+above-horizon before sampling the LUT — the cube's (and hence
+`environmentTexture`'s) lower hemisphere becomes a clean Y-mirror of the
+sky instead of the LUT's lit-ground-albedo content. The **live** sky mesh
+in the main scene (if you added one via `createSkyMesh`) is unaffected —
+only the baked cube changes. Zero extra render passes; forces `cubeDirty`.
+
+## Mesh access
+
+### `createSkyMesh({ scale = 450000, showSunDisc = true })`
+
+Returns a `THREE.Mesh` sharing the baker's internal geometry + material
+(and therefore uniforms) — add it to your own scene for a _live_ sky that
+updates every `setCamera` call instead of only on cube re-bake. Useful at
+planet scale where altitude changes fast enough that the cube-bake cadence
+alone looks stepped. `renderOrder = -1`, `frustumCulled = false`,
+`depthWrite` off on the shared material.
+
+The cube bake still runs on sun-dirty for IBL — `environmentTexture`
+remains the recommended `scene.environment` regardless of whether you also
+add a live mesh.
+
+## Per-frame
+
+| Method                              | Notes                                                                                                                                                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `update()`                          | Runs only the dirty pipeline stages. Call once per frame — cheap when nothing is dirty.                                                                                                                                                           |
+| `updateAerialPerspective()` (async) | Runs the AP compute pass unconditionally. ~1ms on a mid-range GPU. No-op if AP was disabled.                                                                                                                                                      |
+| `dispose()`                         | Disposes all LUT render targets, the cube render target, PMREM target/generator, and the sky mesh's geometry/material. Does not remove the baker from any scene it wasn't added to directly — the baker manages its own private scene internally. |

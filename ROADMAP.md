@@ -219,3 +219,29 @@ helps debugging D1 by visualizing the sun frame).
 - ✅ 4.3 SkyHelper verified visible in the rescaled component-02
 - ⏳ 0.3 partial: 05 / component-02 / component-03 interactively verified by
   the maintainer; full scripted sweep (1.2) still open
+
+**2026-07-12 (later) — 2.2/2.4 docs + Pages-merge complete:**
+
+- ✅ 2.2 `docs/` folder scaffolded (`getting-started/{introduction,installation,your-first-sky}`,
+  `api/{sky,baker,luts}`, `guides/{haze,planet-scale,tuning-atmosphere}`) —
+  every code sample sourced from current `src/*.ts` + `examples/vanilla/*.html`,
+  not invented. Fixed a stale `peerDependencies.three` (`>=0.184.0` →
+  `>=0.185.0`) found while writing installation.mdx — the devDependency was
+  bumped in `abe1207` but the peer range was missed.
+- ✅ 2.4 README rewritten for the pmndrs launch (badges, pitch, quick start,
+  docs/gallery links, contributor section); dropped the `tsl-sky-starters`
+  personal-repo section per the "remove stale personal-repo references"
+  instruction.
+- ✅ 2.3 **superseded** — `.github/workflows/deploy-pages.yml` deleted,
+  replaced by `.github/workflows/docs.yml`: builds the pmndrs/docs site AND
+  `examples/vanilla`, merges the examples build into the docs output under
+  `/examples/`, uploads one Pages artifact. Could not use
+  `uses: pmndrs/docs/.github/workflows/build.yml@v3` as documented in the
+  research memo — inspecting that workflow directly showed its single job
+  ends with its own `upload-pages-artifact` call inside an isolated
+  Docker-build job, so there's no seam to inject the examples merge.
+  Fallback: inline the same docker invocation as a step in our own job
+  instead of calling the reusable workflow — see the long comment at the
+  top of `docs.yml` for the full limitation writeup. Linted clean with
+  `actionlint`; **not executed on GitHub Actions** — unverified beyond
+  static analysis.

@@ -1,0 +1,117 @@
+---
+title: Your First Sky
+description: Minimal Sky setup — construct, attach, update loop.
+nav: 2
+---
+
+This walks through the smallest useful `@pmndrs/sky` scene: a `Sky`
+attached as both `scene.background` and `scene.environment` (IBL), driven
+by a single `update(camera)` call per frame. It's trimmed from
+`examples/vanilla/component-01-baked.html` in the repo — run
+`pnpm --filter @pmndrs/sky-example-vanilla dev` and open that page to see
+it live with a GUI.
+
+## Renderer setup
+
+```js
+import * as THREE from 'three/webgpu'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+import { Sky } from '@pmndrs/sky'
+
+const renderer = new THREE.WebGPURenderer({ antialias: true })
+renderer.setPixelRatio(window.devicePixelRatio)
+renderer.setSize(window.innerWidth, window.innerHeight)
+renderer.toneMapping = THREE.ACESFilmicToneMapping
+renderer.toneMappingExposure = 0.5
+document.body.appendChild(renderer.domElement)
+
+await renderer.init()
+```
+
+`renderer.init()` must resolve before you construct a `Sky` — the baker
+allocates WebGPU resources (render targets, a compute pipeline for aerial
+perspective) that need the backend ready.
+
+## Construct and attach
+
+```js
+const sky = new Sky(renderer, {
+  preset: 'earth', // 'earth' | 'mars' | 'titan'
+  timeOfDay: 14.5, // hours, 0..24
+  latitude: 37.7,
+  exposure: 40,
+  sunDisc: true,
+  // Skip the aerial-perspective LUT entirely for the simplest possible
+  // sky — turn it on later if you want the haze post-process (see the
+  // Haze guide).
+  enableAerialPerspective: false,
+})
+
+const scene = new THREE.Scene()
+sky.attach(scene) // sets scene.environment (PMREM) + scene.background (raw cube)
+```
+
+`sky.attach(scene)` wires:
+
+- `scene.background = sky.texture` — the raw baked cube, used for the
+  visible skybox and for anything sampling it directly (mirror materials).
+- `scene.environment = sky.environmentTexture` — the PMREM-filtered version,
+  used for physically-based IBL on your materials.
+
+## Camera and scene content
+
+```js
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000)
+camera.position.set(6, 3, 10)
+camera.lookAt(0, 1, 0)
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.9 }),
+)
+ground.rotation.x = -Math.PI / 2
+scene.add(ground)
+
+const controls = new OrbitControls(camera, renderer.domElement)
+controls.target.set(0, 1.5, 0)
+controls.update()
+```
+
+## The update loop
+
+```js
+renderer.setAnimationLoop(() => {
+  sky.update(camera)
+  controls.update()
+  renderer.render(scene, camera)
+})
+```
+
+`sky.update(camera)` is the one call you need every frame. Internally it:
+
+1. Feeds the camera's height into the Sky-View LUT (so altitude affects the
+   sky), via `baker.setCamera(camera, opts)`.
+2. Re-runs only the LUT stages whose inputs actually changed since the last
+   call (dirty-flag cascade — see the [Baker reference](../api/baker) for
+   the exact rules). Most frames where nothing changed, this is a no-op.
+3. Keeps `scene.environment` pointed at the current PMREM texture.
+
+If you never call `sky.setTimeOfDay`, `sky.setSunDirection`, or any other
+setter after construction, the LUT chain bakes once and every subsequent
+`update()` call is cheap (a camera-height check).
+
+## Reacting to input
+
+Every `Sky` setter returns `this`, so you can chain, or wire directly to a
+GUI:
+
+```js
+sky.setTimeOfDay(16.2)
+sky.setLatitude(51.5)
+sky.setExposure(35)
+```
+
+See the [Sky API reference](../api/sky) for the full setter list, and the
+[Haze guide](../guides/haze) once you're ready to add aerial-perspective
+haze on distant geometry.

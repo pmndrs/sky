@@ -1,0 +1,185 @@
+---
+title: Tuning the atmosphere
+description: AtmosphereParams shape, presets, and the shortcut scalars.
+---
+
+Everything about how the sky looks — planet size, Rayleigh/Mie scattering,
+ozone absorption, ground albedo — lives in one `AtmosphereParams` object
+(`src/core/AtmosphereParams.ts`). This guide covers the shape, the curated
+presets, and the fastest paths to a custom look.
+
+## Three ways to change the atmosphere
+
+From cheapest/coarsest to most precise:
+
+1. **Presets** — `preset: 'earth' | 'mars' | 'titan'` at construction, or
+   `sky.setPreset(name)` later.
+2. **Shortcut scalars** — `turbidity` / `groundAlbedo`, either at
+   construction or via `sky.setTurbidity(n)` / `sky.setGroundAlbedo(v)`.
+3. **Direct overrides** — `atmosphere: {...partial}` at construction, or
+   `sky.setAtmosphere(partial)` / `sky.baker.setAtmosphereParams(partial)`
+   later. Merges onto whatever's currently active.
+
+Any `setAtmosphere`/`setAtmosphereParams`/`setPreset`/`setTurbidity`/
+`setGroundAlbedo` call marks the baker's `atmosDirty` flag, which triggers
+a full LUT rebuild (Transmittance → MultiScatter → SkyView → cube → PMREM)
+on the next `update()`. That's the most expensive dirty path in the
+pipeline — fine for occasional GUI tweaks or preset switches, not
+something to call every frame.
+
+## `AtmosphereParams` shape
+
+Units: kilometers for radii/altitudes, `1/km` for scattering/extinction/
+absorption coefficients.
+
+```ts
+interface AtmosphereParams {
+  // Planet / atmosphere geometry (km)
+  bottomRadius: number
+  topRadius: number
+
+  // Rayleigh (air molecules — blue-sky scattering)
+  rayleighScattering: Vector3 // 1/km
+  rayleighDensityExpScale: number // 1/km, density = exp(scale * altitude)
+
+  // Mie (aerosols/dust/haze)
+  mieScattering: Vector3 // 1/km
+  mieExtinction: Vector3 // 1/km
+  mieAbsorption: Vector3 // extinction - scattering, 1/km
+  miePhaseG: number // Henyey-Greenstein asymmetry, -1..1 (forward-scatter bias)
+  mieDensityExpScale: number // 1/km
+
+  // Ozone absorption — Bruneton "tent" function, two linear segments
+  absorptionExtinction: Vector3 // 1/km
+  absorptionDensity0LayerWidth: number // km — tent switches segments here
+  absorptionDensity0ConstantTerm: number
+  absorptionDensity0LinearTerm: number // 1/km
+  absorptionDensity1ConstantTerm: number
+  absorptionDensity1LinearTerm: number // 1/km
+
+  // Back-compat aliases (read by legacy code paths; prefer the fields above)
+  ozoneAbsorption: Vector3
+  ozoneLayerCenterAltitude: number
+  ozoneLayerHalfWidth: number
+
+  // Ground albedo — feeds the multi-scatter LUT's ground-bounce term
+  groundAlbedo: Vector3
+
+  // Sun
+  sunAngularRadius: number // radians
+  sunIlluminance: Vector3
+}
+```
+
+Vector fields (`rayleighScattering`, `mieScattering`, etc.) accept a
+`THREE.Vector3`, a plain `{x, y, z}`, or a `[x, y, z]` array anywhere a
+partial override is accepted — `mergeAtmosphereParams` normalizes them.
+
+<Note>
+  `sunIlluminance` here is a *parameter of the atmosphere model*, not the display-brightness knob you want for
+  day-to-day tuning — the LUTs are baked with sun illuminance normalized to `1.0` regardless of this field (the
+  `ILLUMINANCE_IS_ONE` contract — see [LUTs](../api/luts)). Use `sky.setExposure(n)` / the `exposure` constructor option
+  to control brightness.
+</Note>
+
+## `EARTH` defaults
+
+```js
+import { EARTH } from '@pmndrs/sky'
+```
+
+Hillaire 2020 / Bruneton reference values — `bottomRadius: 6360` km,
+`topRadius: 6460` km (100 km atmosphere shell), Rayleigh/Mie/ozone
+coefficients matching the paper. This is the base every preset merges
+onto, and what `SkyAtmosphereBaker` uses if you don't pass an `atmosphere`
+option at all.
+
+## Presets
+
+```js
+import { presets, resolvePreset } from '@pmndrs/sky'
+```
+
+`presets` is `Record<'earth' | 'mars' | 'titan', AtmosphereParams>`. Each
+non-Earth preset is `mergeAtmosphereParams(EARTH, {...overrides})` — see
+`src/presets.ts` for the exact numbers.
+
+- **`earth`** — `EARTH` itself.
+- **`mars`** — CO₂-thin atmosphere, `bottomRadius: 3389.5` km, ~60 km
+  shell, dust-Mie-dominated butterscotch daytime sky, no ozone layer.
+  Tuned to match commonly published renderer references, not a
+  scientifically rigorous radiative model.
+- **`titan`** — thick orange tholin haze, `bottomRadius: 2575.0` km,
+  clamped to a renderer-friendly 200 km shell (real Titan atmosphere
+  extends ~600 km), very forward-scattering Mie (`miePhaseG: 0.85`),
+  negligible Rayleigh at visible wavelengths, no ozone layer.
+
+`resolvePreset(nameOrObject)` accepts either a preset name or an already-
+resolved `AtmosphereParams` object (pass-through) — this is what `Sky`'s
+constructor uses internally to resolve the `preset` option before merging
+your `atmosphere` override on top.
+
+Swap presets live:
+
+```js
+sky.setPreset('mars')
+```
+
+## Shortcut scalars
+
+### `turbidity`
+
+```js
+new Sky(renderer, { turbidity: 1.5 })
+// or later:
+sky.setTurbidity(1.5)
+```
+
+A convenience multiplier (1.0 = Earth default) applied to
+`mieScattering`/`mieExtinction`/`mieAbsorption` together — raise it for a
+hazier/dustier look, lower toward 0 for a clearer sky with Mie effectively
+off. `setTurbidity` tracks the current value internally so repeated calls
+compose correctly (each call computes a fresh ratio against the
+_previous_ turbidity, not a fresh multiply against the base preset).
+
+### `groundAlbedo`
+
+```js
+new Sky(renderer, { groundAlbedo: 0.3 }) // or a Vector3 / {x,y,z} for tinted ground
+// or later:
+sky.setGroundAlbedo(0.3)
+```
+
+Feeds the multi-scatter LUT's ground-bounce term — affects the sky's
+overall brightness near the horizon and the tint of any downward-facing
+IBL. A single number is broadcast to `(v, v, v)`.
+
+## Direct overrides
+
+```js
+sky.setAtmosphere({
+  mieScattering: [0.006, 0.006, 0.006],
+  miePhaseG: 0.6,
+})
+```
+
+Merges onto the _current_ resolved params (whatever preset/overrides are
+already active), not back onto `EARTH` — so direct overrides compose with
+presets and shortcut scalars rather than resetting them.
+
+## Fictional atmospheres
+
+Beyond `mars`/`titan`, build your own look by tweaking scalars on top of
+whichever preset is the closest starting point — there's no separate
+"custom preset" mechanism, `atmosphere: {...}` covers it:
+
+```js
+const sky = new Sky(renderer, {
+  preset: 'earth',
+  atmosphere: {
+    rayleighScattering: [0.01, 0.005, 0.002], // amber/red-shifted sky
+    miePhaseG: 0.9, // strongly forward-scattering haze
+  },
+  turbidity: 2.0,
+})
+```

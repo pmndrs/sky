@@ -1,0 +1,60 @@
+---
+title: Introduction
+description: Production-quality Hillaire atmospheric sky for Three.js / TSL on the WebGPU renderer.
+nav: 0
+---
+
+`@pmndrs/sky` is a port of Sébastien Hillaire's [_A Scalable and Production
+Ready Sky and Atmosphere Rendering Technique_](https://sebh.github.io/publications/egsr2020.pdf)
+(EGSR 2020) to Three.js TSL, running on the WebGPU renderer. It gives you a
+physically-based sky that you drop into a scene as `scene.background` +
+`scene.environment` (IBL) with one class, and scales up to aerial-perspective
+haze on distant geometry and planet-scale (ground-to-orbit) rendering when
+you need it.
+
+## Why
+
+Most Three.js sky solutions are either a static HDRI (no time-of-day, no
+atmosphere response to camera altitude) or a cheap analytic gradient
+(Preetham-style — looks flat, no aerial perspective). `@pmndrs/sky` instead
+bakes the real multi-scattering atmosphere integral into a small set of
+lookup textures (LUTs) once per sun/atmosphere change, so you get:
+
+- A physically-plausible sky that responds correctly to time of day,
+  latitude, and camera altitude — including views from space.
+- Aerial-perspective haze: distant geometry desaturates and blues out with
+  distance, the way real haze does, driven by the same LUTs as the sky
+  background.
+- Planet-scale support: fly from the ground up through the atmosphere to
+  orbit without a "seam" between two different sky implementations.
+- A tiny per-frame cost — the expensive multi-scattering integration is
+  baked into LUTs and only re-runs when the sun or atmosphere parameters
+  change; per-frame work is a handful of cheap LUT samples plus (optionally)
+  a 32×32×32 aerial-perspective compute pass.
+
+## What you get
+
+- **`Sky`** — the 90% facade. Construct it, `attach()` it to a scene, call
+  `update(camera)` every frame. See [Your First Sky](./your-first-sky).
+- **`applyHaze`** — an opt-in post-process node for aerial-perspective haze
+  on your scene's opaque geometry. See the [Haze guide](../guides/haze).
+- **Planet-scale support** via `planetCenter` — fly from a few metres off
+  the ground to orbit with one continuous atmosphere model. See the
+  [Planet-scale guide](../guides/planet-scale).
+- **`SkyAtmosphereBaker`** and the individual LUT classes for power users who
+  want to swap pieces or drive the pipeline directly. See the
+  [API reference](../api/baker).
+- Curated atmosphere presets (`earth`, `mars`, `titan`) and full control over
+  every Hillaire parameter. See [Tuning the atmosphere](../guides/tuning-atmosphere).
+
+## Requirements
+
+`@pmndrs/sky` targets the **WebGPU renderer** (`three/webgpu`,
+`THREE.WebGPURenderer`) — see [Installation](./installation) for peer
+dependency versions and WebGPU browser support notes.
+
+## Status
+
+Baked sky, aerial-perspective haze, and planet-scale (ground→orbit)
+rendering are all functional today. Volumetric clouds and god-rays are out
+of scope for this library.

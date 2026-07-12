@@ -1,0 +1,195 @@
+name: docs
+
+# Single owner of this repo's GitHub Pages site. Builds the pmndrs/docs MDX
+# site (docs/) AND the examples/vanilla gallery, merges the examples build
+# into the docs output under /examples/, and deploys ONE Pages artifact.
+#
+# ---------------------------------------------------------------------------
+# LIMITATION — read before editing this file
+# ---------------------------------------------------------------------------
+# The "official" pmndrs/docs wiring (per that repo's own README / the
+# `docs/getting-started/introduction.mdx` this reusable workflow itself
+# serves) is:
+#
+#   jobs:
+#     build:
+#       uses: pmndrs/docs/.github/workflows/build.yml@v3
+#       with: { mdx: docs, libname: Sky, ... }
+#     deploy:
+#       needs: build
+#       steps:
+#         - uses: actions/deploy-pages@v4
+#
+# We deliberately do NOT call that reusable workflow here. Inspected
+# pmndrs/docs@v3.4.2's `.github/workflows/build.yml` directly (2026-07-12):
+# its single job runs the MDX→static-site build inside a Docker container
+# (`ghcr.io/pmndrs/docs:<tag>`) and its LAST step is its own
+# `actions/upload-pages-artifact@v4` call. A `uses: <reusable-workflow>`
+# job cannot have additional steps appended after it, and the container's
+# build output never lands on our runner's filesystem outside that
+# isolated job — so there is no way to intercept the docs HTML from a
+# downstream job and copy the examples build into it. Running two
+# `upload-pages-artifact` + `deploy-pages` pairs in one workflow both
+# target this repo's single Pages site and would race/overwrite each
+# other on every push — not a real fix, and the reason the previous
+# `deploy-pages.yml` (examples-only) and a naively-added docs workflow
+# would have fought over Pages.
+#
+# Fallback implemented below: inline the *same* docker invocation
+# pmndrs/docs's reusable workflow performs (pinned to docker tag `3`,
+# matching that workflow's own `docker_tag` default for the `@v3` line),
+# as a normal step in our own job. That gives us the docs HTML as a plain
+# directory on our runner (bind-mounted from `docs/`), which we then merge
+# the examples/vanilla build into before a single upload+deploy.
+#
+# Trade-off: this duplicates a slice of the reusable workflow's `docker
+# run` invocation (env var list + the `docs/out<base_path>` DIST_DIR
+# convention that relies on the bind mount to write output back to the
+# host). If pmndrs/docs changes that invocation, this file needs a manual
+# re-sync — check `pmndrs/docs/.github/workflows/build.yml` against the
+# "Build docs site" step below next time this is touched.
+#
+# UNVERIFIED: this workflow has not been executed on GitHub Actions (no
+# local GHA runner in this environment) — reviewed with `actionlint` and
+# by hand only. In particular: (1) whether `ghcr.io/pmndrs/docs:3` is
+# public/pullable without auth from a public-repo Actions runner is
+# assumed, not confirmed; (2) the custom-domain Pages config
+# (`sky.docs.pmnd.rs`, giving `configure-pages` an empty `base_path`) is a
+# manual repo-settings step tracked separately (ROADMAP Track 0) and not
+# yet done as of this commit — until it is, `base_path` will resolve to
+# `/sky` and every URL below shifts accordingly.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - id: configurepages
+        uses: actions/configure-pages@v4
+        with:
+          enablement: true
+
+      - id: set-base-path
+        run: echo "BASE_PATH=${{ steps.configurepages.outputs.base_path }}" >> "$GITHUB_OUTPUT"
+
+      # --- 1. Docs site (pmndrs/docs builder), run in-place instead of via
+      # `uses: pmndrs/docs/.github/workflows/build.yml@v3` — see the
+      # LIMITATION comment at the top of this file for why.
+      - name: Build docs site
+        run: |
+          set -ex
+          docker run --rm --init \
+            -v "$PWD/docs":/app/docs \
+            -e MDX \
+            -e NEXT_PUBLIC_LIBNAME \
+            -e NEXT_PUBLIC_LIBNAME_SHORT \
+            -e NEXT_PUBLIC_LIBNAME_DOTSUFFIX_LABEL \
+            -e NEXT_PUBLIC_LIBNAME_DOTSUFFIX_HREF \
+            -e BASE_PATH \
+            -e DIST_DIR \
+            -e OUTPUT \
+            -e HOME_REDIRECT \
+            -e MDX_BASEURL \
+            -e SOURCECODE_BASEURL \
+            -e EDIT_BASEURL \
+            -e NEXT_PUBLIC_URL \
+            -e ICON \
+            -e LOGO \
+            -e GITHUB \
+            -e DISCORD \
+            -e THEME_PRIMARY \
+            -e THEME_SCHEME \
+            -e THEME_CONTRAST \
+            -e THEME_NOTE \
+            -e THEME_TIP \
+            -e THEME_IMPORTANT \
+            -e THEME_WARNING \
+            -e THEME_CAUTION \
+            -e CONTRIBUTORS_PAT \
+            ghcr.io/pmndrs/docs:3 pnpm run build
+        env:
+          MDX: docs
+          NEXT_PUBLIC_LIBNAME: Sky
+          NEXT_PUBLIC_LIBNAME_SHORT: sky
+          NEXT_PUBLIC_LIBNAME_DOTSUFFIX_LABEL: docs
+          NEXT_PUBLIC_LIBNAME_DOTSUFFIX_HREF: https://docs.pmnd.rs
+          BASE_PATH: ${{ steps.set-base-path.outputs.BASE_PATH }}
+          DIST_DIR: docs/out${{ steps.set-base-path.outputs.BASE_PATH }}
+          OUTPUT: export
+          HOME_REDIRECT: /getting-started/introduction
+          MDX_BASEURL: https://github.com/${{ github.repository }}/raw/${{ github.ref_name }}/docs
+          SOURCECODE_BASEURL: https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}
+          EDIT_BASEURL: https://github.com/${{ github.repository }}/edit/${{ github.ref_name }}/docs
+          NEXT_PUBLIC_URL: ${{ steps.configurepages.outputs.base_url }}
+          ICON: 🌅
+          LOGO: /logo.png
+          GITHUB: pmndrs/sky
+          DISCORD: https://discord.gg/poimandres
+          THEME_PRIMARY: '#323e48'
+          THEME_SCHEME: tonalSpot
+          THEME_CONTRAST: '0'
+          THEME_NOTE: '#1f6feb'
+          THEME_TIP: '#238636'
+          THEME_IMPORTANT: '#8957e5'
+          THEME_WARNING: '#d29922'
+          THEME_CAUTION: '#da3633'
+          CONTRIBUTORS_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- 2. Examples gallery, built with a /examples/ sub-base so its
+      # asset URLs resolve correctly once nested under the docs output.
+      - name: Build examples gallery
+        run: pnpm --filter @pmndrs/sky-example-vanilla build
+        env:
+          BASE_PATH: ${{ steps.set-base-path.outputs.BASE_PATH }}/examples/
+
+      # --- 3. Merge: copy the examples build into the docs output under
+      # /examples/. One directory tree, one Pages artifact below.
+      - name: Merge examples build into docs output
+        run: |
+          set -ex
+          DOCS_OUT="docs/out${{ steps.set-base-path.outputs.BASE_PATH }}"
+          test -d "$DOCS_OUT" # fail loudly if the docs build didn't land where expected
+          mkdir -p "$DOCS_OUT/examples"
+          cp -r examples/vanilla/dist/. "$DOCS_OUT/examples/"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/out${{ steps.set-base-path.outputs.BASE_PATH }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

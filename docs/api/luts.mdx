@@ -1,0 +1,118 @@
+---
+title: LUTs
+description: The four Hillaire lookup textures — resolutions, contracts, and the luminanceScale rule.
+---
+
+`@pmndrs/sky` bakes Hillaire's atmosphere integral into a small chain of
+lookup textures (LUTs) instead of raymarching the full integral every pixel
+every frame. [`SkyAtmosphereBaker`](./baker) owns and sequences them; you
+normally don't touch these classes directly, but they're exported
+(`import { TransmittanceLUT, MultiScatterLUT, SkyViewLUT, AerialPerspectiveLUT } from '@pmndrs/sky'`)
+for power users who want to swap a piece or drive the pipeline manually.
+
+## Pipeline order
+
+```
+Transmittance LUT ──┬──► MultiScatter LUT ──┬──► Sky-View LUT ──► sky mesh / cube bake
+                     │                        │
+                     └────────────────────────┴──► Aerial Perspective LUT ──► haze post-process
+```
+
+Transmittance and MultiScatter are sun-and-camera-independent within a
+given atmosphere (they only change when `AtmosphereParams` change).
+Sky-View depends on the sun direction and camera altitude. Aerial
+Perspective additionally depends on the camera's full transform (position
+and orientation) and re-renders every frame it's used.
+
+## `TransmittanceLUT`
+
+256×64 (default). A single fragment pass per texel that raymarches
+optical depth from a ground-shell point straight up through the
+atmosphere, storing transmittance (fraction of light that survives) as a
+function of `(viewHeight, viewZenithCosAngle)`. Re-rendered on
+`atmosDirty` only.
+
+## `MultiScatterLUT`
+
+32×32 (default). Approximates the infinite-bounce multiple-scattering
+contribution as a single extra LUT pass, sampling `TransmittanceLUT`.
+Re-rendered on `atmosDirty` only (same as Transmittance — sun/camera
+independent).
+
+## `SkyViewLUT`
+
+192×108 (default). The LUT the sky mesh actually samples per pixel — a
+horizon-packed `(azimuth, elevation)` parameterization storing final
+in-scattered sky luminance, integrated with 30 raymarch samples per texel
+using both `TransmittanceLUT` and `MultiScatterLUT`. Re-rendered whenever
+the sun (`sunDirty`) or camera altitude (`cameraDirty`) changes, or on
+`atmosDirty`.
+
+<Warning>
+  The Sky-View LUT's horizon-packed V parameterization assumes the camera is *inside* the atmosphere. As camera altitude
+  approaches `topRadius` (~100 km), the horizon angle collapses and the LUT degrades into visible concentric banding.
+  `SkyAtmosphereMesh` switches to a per-pixel raymarch fallback above `topRadius` to avoid this — see the [Planet-scale
+  guide](../guides/planet-scale).
+</Warning>
+
+## `AerialPerspectiveLUT`
+
+32×32×32 froxel volume (default; `x`/`y` screen-space, `z` squared-distributed
+depth slices) covering `kmPerSlice × resZ` km of camera-relative depth.
+Built via a WebGPU compute pass (`textureStore`, `instanceIndex`) rather
+than a fragment pass, since it produces a 3D texture. Each voxel ray-marches
+from the camera through the atmosphere for exactly its slice's depth,
+storing accumulated in-scattered luminance (RGB) and transmittance (alpha).
+Consumed by the [haze post-process](../guides/haze), not by the sky mesh
+itself.
+
+Re-renders every frame (`baker.updateAerialPerspective()`) — its content is
+camera-transform-dependent, so it sits outside the dirty-flag system that
+governs the other three LUTs.
+
+## `resolutions` / `LUT_RESOLUTIONS`
+
+```js
+import { LUT_RESOLUTIONS } from '@pmndrs/sky'
+```
+
+```js
+{
+  transmittance: { width: 256, height: 64 },
+  multiScatter: { width: 32, height: 32 },
+  skyView: { width: 192, height: 108 },
+  aerialPerspective: { x: 32, y: 32, z: 32, kmPerSlice: 8.0 },
+}
+```
+
+Override per-baker via `new SkyAtmosphereBaker(renderer, { lutResolutions })`
+(applies to Transmittance/MultiScatter/SkyView) and
+`{ apResolution, apKmPerSlice }` (Aerial Perspective). `Sky`'s `quality`
+option (`'low' | 'medium' | 'high'`) is a convenience wrapper around three
+preset `lutResolutions` bundles — see `src/Sky.ts`'s `QUALITY_PRESETS` if
+you want the exact numbers for `'low'`/`'high'`.
+
+## The `ILLUMINANCE_IS_ONE` contract
+
+This is the single most important thing to know if you're reading LUT
+values directly (debug readback, a custom shader sampling these textures,
+etc.):
+
+Hillaire's reference integrator passes `globalL = 1.0` for sun
+illuminance — every LUT therefore stores sky response **per unit sun
+illuminance**, not final display-ready luminance. Raw Sky-View / Aerial
+Perspective values are small (roughly `0.001`–`0.04`) and render as
+effectively black without an explicit scale-up.
+
+`SkyAtmosphereMesh.luminanceScale` (default `40`, set via `Sky`'s
+`exposure` constructor option / `setExposure(n)`) multiplies the Sky-View
+sample at composite time. The haze post-process (`applyHaze` /
+`createHazeOutputNode`) takes the same `luminanceScale` uniform as an
+argument specifically so its AP-LUT sample stays consistent with the sky
+background's brightness — **if you build a custom consumer of any of these
+LUTs, you must apply this scale yourself**, or the result will look
+unlit/black even though the LUT rendered correctly.
+
+The `40` default is tuned by eye against the reference renders, not
+derived from a physical sun-illuminance constant — treat it as an exposure
+knob, not a physically load-bearing number.

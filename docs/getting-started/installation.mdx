@@ -1,0 +1,69 @@
+---
+title: Installation
+description: Peer dependencies, WebGPU requirements, and package install.
+nav: 1
+---
+
+## Install
+
+```bash
+npm install @pmndrs/sky
+# or
+pnpm add @pmndrs/sky
+```
+
+## Peer dependencies
+
+| Package              | Version      | Required?                          |
+| -------------------- | ------------ | ---------------------------------- |
+| `three`              | `>=0.185.0`  | always                             |
+| `react`              | `>=18`       | only if you use the React bindings |
+| `react-dom`          | `>=18`       | only if you use the React bindings |
+| `@react-three/fiber` | `>=10.0.0-0` | only if you use the React bindings |
+
+The React peers are marked optional in `package.json` — a vanilla-only
+install doesn't need `react`, `react-dom`, or `@react-three/fiber` at all.
+
+`three@>=0.185.0` is a hard floor: the baker constructs its cube-bake target
+via `CubeRenderTarget` and filters it with `PMREMGenerator.fromCubemap(...)`
+(both `three/webgpu` APIs), and the reused-PMREM-target fix that keeps
+`environmentTexture` stable across bakes depends on the 0.185 WebGPU
+backend. Older `three` versions may partially work but aren't tested or
+supported.
+
+## WebGPU requirement
+
+`@pmndrs/sky` targets Three.js's **WebGPU renderer**
+(`THREE.WebGPURenderer` from `three/webgpu`) — it does not run on the
+classic `WebGLRenderer`. The atmosphere integration uses TSL compute
+passes (the aerial-perspective LUT) and TSL node materials throughout;
+these require the WebGPU backend.
+
+Practically:
+
+- Import renderer classes from `three/webgpu`, not `three`.
+- `await renderer.init()` before constructing a `Sky` — the renderer must
+  finish backend selection/initialization first.
+- Browser support follows Three.js's WebGPU support matrix (Chromium-based
+  browsers today; Safari/Firefox support is landing but check current
+  `caniuse` status for WebGPU before shipping to those browsers). Three.js's
+  WebGPU renderer transparently falls back to a WebGL2 code path in some
+  configurations, but `@pmndrs/sky`'s TSL compute pass (aerial-perspective
+  haze) specifically needs true WebGPU — disable
+  `enableAerialPerspective` if you need to support a WebGL fallback.
+
+## Minimal setup
+
+```js
+import * as THREE from 'three/webgpu'
+
+const renderer = new THREE.WebGPURenderer({ antialias: true })
+renderer.setSize(window.innerWidth, window.innerHeight)
+document.body.appendChild(renderer.domElement)
+
+await renderer.init()
+```
+
+Once the renderer is initialized, continue to
+[Your First Sky](./your-first-sky) to construct a `Sky` and attach it to a
+scene.

@@ -1,0 +1,184 @@
+---
+title: Aerial-perspective haze
+description: applyHaze, the AP LUT vs raymarch policies, and the known altitude-banding issue.
+---
+
+Aerial-perspective ("AP") haze is what makes distant geometry desaturate
+and blue-shift with distance, the way a real atmosphere does. It's an
+opt-in post-process on your scene's opaque geometry — the sky background
+itself already includes atmospheric scattering via the Sky-View LUT; haze
+is specifically about _surfaces_ under that same atmosphere.
+
+## Enabling it
+
+```js
+const sky = new Sky(renderer, {
+  preset: 'earth',
+  enableAerialPerspective: true, // default; must be true to use applyHaze
+})
+```
+
+## Wiring the post-process
+
+```js
+import { pass } from 'three/tsl'
+
+const scenePass = pass(scene, camera)
+const post = new THREE.RenderPipeline(renderer)
+post.outputNode = sky.applyHaze(scenePass.getTextureNode(), {
+  scenePass,
+  policy: 'auto', // 'auto' | 'ap' | 'raymarch'
+  strength: 1.0,
+})
+
+renderer.setAnimationLoop(() => {
+  sky.update(camera)
+  sky.updateAerialPerspective() // must run every frame — camera-dependent LUT
+  post.render()
+})
+```
+
+`sky.applyHaze(...)` is a thin wrapper over the lower-level
+`applyHaze(sceneColorNode, { sky, ...options })` function
+(`import { applyHaze } from '@pmndrs/sky'`), which itself builds a TSL
+output node via `createHazeOutputNode` (`src/sky/HazePostProcess.ts`). Use
+the free function directly if you're not going through a `Sky` instance.
+
+`updateAerialPerspective()` is separate from `sky.update()` because the AP
+LUT's froxels are camera-transform-dependent and must refresh every frame,
+independent of the dirty-flag system that governs the sky LUTs — see
+[Baker: dirty-flag semantics](../api/baker#dirty-flag-semantics).
+
+## Two integration methods, one output
+
+Haze on a given geometry pixel can come from either of two integrations,
+selected per-pixel by **policy**:
+
+- **AP LUT** — samples the pre-baked 32×32×32 aerial-perspective froxel
+  volume (see [LUTs](../api/luts)). Very cheap, but the volume only covers
+  `kmPerSlice × 32` km of camera-relative depth (256 km by default) and is
+  built assuming the camera sits inside the atmosphere looking roughly
+  toward the ground.
+- **Raymarch fallback** — integrates `integrateScatteredLuminance` directly
+  per pixel (same function the Sky-View LUT itself uses to bake). More
+  expensive per-pixel, but has no coverage limit and stays correct at any
+  camera altitude/orientation.
+
+### `policy` options
+
+| Policy             | Behavior                                                                                                                                                                                                                                                                                       |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `'auto'` (default) | Blends AP → raymarch by two independent weights, taking the max: **altitude** (`smoothstep` between `altitudeBlend.startKm`/`endKm`, default 50/100 km) and **coverage** (geometry past the AP LUT's total range always gets raymarched, blended in over the last `128` km before the cutoff). |
+| `'ap'`             | AP-first — only falls back to raymarch for geometry beyond the LUT's coverage distance.                                                                                                                                                                                                        |
+| `'raymarch'`       | Force raymarch for every geometry pixel, unconditionally. No LUT coverage limit, but costs a full per-pixel integration everywhere haze is visible.                                                                                                                                            |
+
+Switch policy live without rebuilding the pipeline:
+
+```js
+sky.setHazePolicy('raymarch')
+```
+
+### Altitude blend window (`'auto'` policy only)
+
+```js
+sky.setHazeAltitudeBlend({ startKm: 50, endKm: 100 })
+```
+
+Below `startKm` altitude, the AP LUT is used; above `endKm`, raymarch is
+fully active; smoothstep between. Tune this window for your scene's
+altitude range — a ground-level scene never needs to touch it (well below
+`startKm` by default), while planet-scale scenes (see the
+[Planet-scale guide](../guides/planet-scale)) may want to shift or narrow
+it. `component-03-planet.html` exposes `blendStartKm`/`blendEndKm` sliders.
+
+## Coverage: `apKmPerSlice`
+
+The AP LUT's total camera-relative coverage is `apKmPerSlice × 32` km
+(32 slices, fixed). The default `apKmPerSlice: 8.0` gives 256 km coverage,
+tuned for ground-level demos. Planet-scale scenes that need to see haze
+from further out should raise it:
+
+```js
+const sky = new Sky(renderer, {
+  enableAerialPerspective: true,
+  apKmPerSlice: 32.0, // 1024 km coverage
+})
+```
+
+Whatever value you pass here is threaded through automatically to
+`applyHaze` when you go through `sky.applyHaze(...)` — no separate
+argument to keep in sync.
+
+## `strength`
+
+```js
+sky.setHazeStrength(0.6) // 0 = no haze, 1 = physical default, >1 = exaggerated
+```
+
+Multiplies both the inscatter colour and the AP alpha (surface-occlusion)
+term. Useful as an art-direction knob independent of the physical
+atmosphere parameters.
+
+## Known issue: concentric banding at 50–100 km altitude (AP LUT only)
+
+<Warning>
+**D4 (open, deferred).** From roughly 50–100 km camera altitude, the
+`'ap'`/`'auto'` policy can show smooth concentric arcs (iso-distance
+contours around the nadir) in the haze over the planet surface. Confirmed
+clean at ground level and clean above `blendEndKm` (pure raymarch). The
+bands live specifically in the **AP-LUT branch** — `hazeMode: 'raymarch'`
+is unaffected, and lowering `blendEndKm` (which hands off to raymarch
+earlier) directly reduces band visibility.
+
+Root cause is still open. A dither/jitter fix attempt (adding sub-texel
+noise to the LUT's W sample and per-voxel jitter during the LUT build) was
+tried and reverted — it didn't remove the bands and made the haze visibly
+noisier. That result rules out a simple W-interpolation-kink explanation;
+current suspects are the 32×32 screen-space XY interpolation (froxel rays
+diverge strongly at altitude, and neighbouring texels can end up storing
+integrals of meaningfully different ray directions once the
+underground-froxel correction rewrites a voxel's ray) or banding baked
+into the stored values by that same correction. See `ROADMAP.md`'s "D4"
+entry for the full bisection notes if you're picking this up.
+
+**Workaround today:** force raymarch at altitude —
+
+```js
+sky.setHazePolicy('raymarch')
+// or, staying in 'auto' but handing off to raymarch earlier:
+sky.setHazeAltitudeBlend({ endKm: 40 })
+```
+
+</Warning>
+
+## Debugging
+
+`applyHaze`/`createHazeOutputNode` accept a `debugMode` string that swaps
+the output node's return value for a diagnostic view instead of the
+composited result — useful when bisecting haze issues:
+
+`'ap-rgb'`, `'ap-alpha'`, `'w'`, `'is-sky'`, `'beyond'`, `'lin-depth'`,
+`'view-z'`, `'rm-rgb'`, `'rm-alpha'`. See `src/sky/HazePostProcess.ts` for
+exactly what each mode returns — this is a debug-only surface, not a
+stable part of the public API.
+
+## `logarithmicDepthBuffer` and `useCameraFar`
+
+If your `WebGPURenderer` was constructed with `logarithmicDepthBuffer: true`,
+pass the same flag to `applyHaze` so its depth → distance reconstruction
+matches:
+
+```js
+sky.applyHaze(scenePass.getTextureNode(), {
+  scenePass,
+  logarithmicDepthBuffer: true,
+  useCameraFar: true, // see below
+})
+```
+
+`useCameraFar` opts into a `viewZ`-based sky-pixel test instead of the
+default linear-depth threshold. It defaults to `true` automatically when
+`camera.far > 1e6` — planet-scale cameras (`camera.far` in the 10⁷ m
+range) compress all real geometry into a thin sliver of `[0, 1]` linear
+depth, so the default test becomes unreliable; the `viewZ` test stays
+correct at any scale. See the [Planet-scale guide](../guides/planet-scale).

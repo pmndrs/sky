@@ -1,0 +1,149 @@
+---
+title: Planet-scale rendering
+description: planetCenter, radial camera frames, and flying from ground to orbit.
+---
+
+By default `@pmndrs/sky` uses a **flat-ground convention**: world `y` is
+treated as camera altitude, and "up" is always `+Y`. That's the right model
+for most scenes — a walking-scale or vehicle-scale environment where the
+ground is effectively flat within view distance.
+
+Planet-scale scenes (a camera that can fly from a few metres off the
+ground up to orbit, looking down at a visibly curved horizon) need a
+different frame: altitude as distance from a planet center, and "up" as
+the radial direction from that center. `@pmndrs/sky` supports this via the
+optional `planetCenter` parameter threaded through `Sky.update()` /
+`SkyAtmosphereBaker.setCamera()`.
+
+## Enabling planet mode
+
+```js
+const bottomRadiusM = sky.baker.atmosphereParams.bottomRadius * 1000
+const planetCenter = new THREE.Vector3(0, -bottomRadiusM, 0)
+
+renderer.setAnimationLoop(() => {
+  sky.update(camera, { planetCenter })
+  // ...
+})
+```
+
+That's the entire opt-in — everywhere else you use `Sky` normally. With
+`planetCenter` set, `setCamera` computes:
+
+- `viewHeightKm` as true radial distance from `planetCenter` (instead of
+  `bottomRadius + camera.position.y * 0.001`).
+- `cameraUp` as the normalized direction from `planetCenter` to the camera
+  (instead of fixed `+Y`).
+- `cameraPositionKm` in the planet-relative frame the LUTs expect.
+
+`bottomRadiusM = atmosphereParams.bottomRadius * 1000` sizes your planet
+geometry to exactly match the atmosphere model's ground shell — use this
+value (not an arbitrary radius) so the horizon in your rendered geometry
+lines up with the sky's own ground-shell assumption.
+
+## Why "up" matters
+
+The Sky-View LUT's sun-zenith parameter is baked relative to the camera's
+_local_ up. In flat mode that's always `+Y`, so it's fixed. In planet mode,
+flying around the sphere continuously changes what "up" means in world
+space — which means the _effective_ sun elevation (angle between sun and
+local up) changes as you move, even with a fixed world-space sun direction.
+The sun visibly "rises" and "sets" as you orbit the planet, which is
+physically correct.
+
+`SkyAtmosphereBaker.setCamera` re-derives this every call and forces a
+cube re-bake if the effective zenith drifted enough to matter — see
+[Baker: sun and camera](../api/baker#sun-and-camera).
+
+## The raymarch fallback above `topRadius`
+
+The Sky-View LUT's horizon-packed parameterization only works while the
+camera is inside the atmosphere. As altitude approaches `topRadius`
+(~100 km above `bottomRadius`), the horizon angle collapses in the LUT's
+V-axis mapping and you'd see concentric-ring artifacts. `SkyAtmosphereMesh`
+detects `viewHeight > topRadius` and switches to a per-pixel raymarch
+(30 samples, full multi-scatter feedback) instead of sampling the LUT —
+this is a hard switch, not a smooth blend, so expect a visible step
+around 99–101 km if you fly through that boundary slowly. This matches
+Hillaire's own reference implementation's behavior. See
+[LUTs: Sky-View LUT](../api/luts#skyviewlut).
+
+## A live sky mesh for fast altitude changes
+
+The baker's cube bake only refreshes when something is dirty (sun,
+atmosphere, or a meaningful camera-frame drift) — fine at ground level, but
+at planet scale altitude can change fast enough that the cube-bake cadence
+alone looks stepped. Add a live sky mesh to your own scene so it updates
+every frame:
+
+```js
+const liveSkyMesh = sky.baker.createSkyMesh({ scale: 4_000_000, showSunDisc: true })
+scene.add(liveSkyMesh)
+
+renderer.setAnimationLoop(() => {
+  liveSkyMesh.position.copy(camera.position) // keep the giant box centered on the camera
+  sky.update(camera, { planetCenter })
+  // ...
+})
+```
+
+The cube bake (and hence `environmentTexture`) still runs for IBL — the
+live mesh is purely a visual upgrade for the background, not a replacement
+for `attach()`.
+
+## Haze at planet scale
+
+Two things change for aerial-perspective haze at planet scale:
+
+1. **Coverage** — bump `apKmPerSlice` so the AP LUT covers a useful range
+   at high altitude: `apKmPerSlice: 32.0` gives 1024 km coverage (vs the
+   256 km default). See [Haze: coverage](../guides/haze#coverage-apkmperslice).
+2. **`useCameraFar`** — planet-scale cameras use a huge `camera.far`
+   (`20_000_000`+), which breaks the haze post-process's default
+   linear-depth sky-pixel test. Pass `useCameraFar: true` explicitly (or
+   rely on the automatic `camera.far > 1e6` heuristic) — see
+   [Haze: `logarithmicDepthBuffer` and `useCameraFar`](../guides/haze#logarithmicdepthbuffer-and-usecamerafar).
+
+<Warning>
+  There's a known concentric-banding artifact in the AP LUT specifically at 50–100 km camera altitude — see [Haze: known
+  issue](../guides/haze#known-issue-concentric-banding-at-50100-km-altitude-ap-lut-only) for the workaround
+  (`sky.setHazePolicy('raymarch')`).
+</Warning>
+
+## Camera controls: `PlanetFlightControls`
+
+Standard orbit controls (`camera-controls`, `OrbitControls`) rotate the
+camera _through space_ around a ground target — at planet scale that means
+huge sweeping arcs for what should be a small look-around, and
+dolly/orbit both perturb altitude as a side effect.
+
+`examples/vanilla/component-03-planet.html` and `05-planet-scale.html` use
+`PlanetFlightControls` instead — first-person controls with no target:
+dragging looks around from wherever the camera currently is, and the wheel
+is the only thing that changes position, purely radially (altitude), so
+altitude and view direction never interfere with each other.
+
+```js
+import { PlanetFlightControls } from '@sky/demo/planetFlightControls'
+
+const controls = new PlanetFlightControls(camera, renderer.domElement, {
+  planetCenter,
+  bottomRadiusM,
+  minAltitudeM: 60,
+})
+
+renderer.setAnimationLoop(() => {
+  controls.update(deltaSeconds)
+  // controls.getAltitudeM() / controls.setAltitudeM(m) for GUI wiring
+})
+```
+
+<Note>
+  `PlanetFlightControls` and the surface-placement helpers (`getPlanetCameraFrame`, `getPlanetLookAtTarget`,
+  `placeObjectOnPlanetSurface`, `createPlanetSurfacePatchGeometry`, etc., in `src/demo/planetScaleUtils.ts`) are
+  currently **demo infrastructure**, not part of the published `@pmndrs/sky` package — they're only reachable via the
+  workspace-internal `@sky/demo/...` Vite alias used inside `examples/vanilla`, not from the `@pmndrs/sky` npm package's
+  public exports. They're solid, tested code and a candidate for promotion to the public API (tracked on the project
+  roadmap) — if you need them today, vendor the relevant file from the repo rather than importing `@sky/...` from your
+  own project, which won't resolve outside this workspace.
+</Note>

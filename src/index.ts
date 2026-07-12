@@ -16,6 +16,7 @@ export { EARTH, mergeAtmosphereParams } from './core/AtmosphereParams'
 // vendoring the package.
 export { SkyAtmosphereBaker } from './sky/SkyAtmosphereBaker'
 export { SkyAtmosphereMesh } from './sky/SkyAtmosphereMesh'
+export { SkyHelper } from './sky/SkyHelper'
 export { createHazeOutputNode } from './sky/HazePostProcess'
 export { LUT_RESOLUTIONS } from './core/resolutions'
 export { TransmittanceLUT } from './sky/luts/TransmittanceLUT'

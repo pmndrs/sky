@@ -39,7 +39,7 @@
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky, presets } from '@pmndrs/sky'
+      import { Sky, presets, SkyHelper } from '@pmndrs/sky'
 
       const renderer = new THREE.WebGPURenderer({ antialias: true })
       renderer.setPixelRatio(window.devicePixelRatio)
@@ -113,6 +113,8 @@
         strength: 1.0,
       })
 
+      let skyHelper = null
+
       const state = {
         preset: 'earth',
         timeOfDay: 14.5,
@@ -124,6 +126,7 @@
         hazeStrength: 1.0,
         hazePolicy: 'auto',
         toneExposure: renderer.toneMappingExposure,
+        showHelper: false,
       }
       const gui = renderer.inspector.createParameters('Sky + Haze')
       gui.add(state, 'preset', Object.keys(presets)).onChange((v) => sky.setPreset(v))
@@ -137,6 +140,17 @@
       gui.add(state, 'hazePolicy', ['auto', 'ap', 'raymarch']).onChange((v) => sky.setHazePolicy(v))
       gui.add(state, 'toneExposure', 0, 2, 0.001).onChange((v) => {
         renderer.toneMappingExposure = v
+      })
+      gui.add(state, 'showHelper').onChange((v) => {
+        if (v) {
+          skyHelper = new SkyHelper(sky, { size: 20 })
+          skyHelper.position.set(0, 1, 0)
+          scene.add(skyHelper)
+        } else if (skyHelper) {
+          skyHelper.dispose()
+          scene.remove(skyHelper)
+          skyHelper = null
+        }
       })
 
       window.addEventListener('resize', () => {

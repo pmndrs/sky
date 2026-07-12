@@ -33,14 +33,14 @@
   </head>
   <body>
     <div id="info">
-      Planet-scale — sphere ground, orbit-altitude camera, extended AP coverage.<br />
+      Planet-scale — sphere ground, first-person flight camera, extended AP coverage. Drag to look; scroll to
+      climb/descend.<br />
       Stable counterpart: <a href="/examples/04-live-sky.html" style="color: #fc9">04-live-sky</a> · LUT res:
       <a href="?" style="color: #fc9">default</a> /
       <a href="?hires=1" style="color: #fc9">hires</a>
     </div>
     <script type="module">
       import * as THREE from 'three/webgpu'
-      import CameraControls from 'camera-controls'
       import { Inspector } from 'three/addons/inspector/Inspector.js'
 
       import { pass, uniform } from 'three/tsl'
@@ -48,16 +48,8 @@
       import { SkyAtmosphereBaker } from '@sky/sky/SkyAtmosphereBaker'
       import { createHazeOutputNode } from '@sky/sky/HazePostProcess'
       import { createStartGate, logStage } from '@sky/demo/startGate'
-      import {
-        clampCameraToMinAltitude,
-        createPlanetSurfacePatchGeometry,
-        getPlanetCameraFrame,
-        getPlanetAltitudeM,
-        getPlanetLookAtTarget,
-        placeObjectOnPlanetSurface,
-      } from '@sky/demo/planetScaleUtils'
-
-      CameraControls.install({ THREE })
+      import { createPlanetSurfacePatchGeometry, placeObjectOnPlanetSurface } from '@sky/demo/planetScaleUtils'
+      import { PlanetFlightControls } from '@sky/demo/planetFlightControls'
 
       const _q = new URLSearchParams(window.location.search)
       const debugMode = _q.get('debug')
@@ -232,33 +224,15 @@
         }
 
         const clock = new THREE.Clock()
-        const cameraControls = new CameraControls(camera, renderer.domElement)
-        const cameraTarget = getPlanetLookAtTarget({
-          position: camera.position,
+        // First-person flight controls: drag looks around from wherever the
+        // camera is, wheel moves it radially (altitude only). No ground
+        // target, no orbit — see planetFlightControls.ts for why the old
+        // camera-controls orbit model was wrong at planet scale.
+        const controls = new PlanetFlightControls(camera, renderer.domElement, {
           planetCenter,
           bottomRadiusM,
-          distanceM: INITIAL_LOOK_DISTANCE_M,
+          minAltitudeM: MIN_CAMERA_ALTITUDE,
         })
-        cameraControls.setLookAt(
-          camera.position.x,
-          camera.position.y,
-          camera.position.z,
-          cameraTarget.x,
-          cameraTarget.y,
-          cameraTarget.z,
-          false,
-        )
-        cameraControls.minDistance = 100
-        cameraControls.maxDistance = 8_000_000
-        cameraControls.smoothTime = 0.12
-        cameraControls.draggingSmoothTime = 0.04
-        cameraControls.azimuthRotateSpeed = 2.5
-        cameraControls.polarRotateSpeed = 2.0
-        cameraControls.dollySpeed = 2.0
-        cameraControls.truckSpeed = 80.0
-        cameraControls.dollyToCursor = true
-        cameraControls.infinityDolly = true
-        cameraControls.colliderMeshes = [localGround]
 
         markStage(4, 'running')
 
@@ -334,22 +308,6 @@
           // artefacts from IBL contributions.
           iblOn: true,
         }
-        const setCameraAltitude = (altitudeM, enableTransition = true) => {
-          cameraControls.getTarget(cameraTarget)
-          const frame = getPlanetCameraFrame(camera.position, planetCenter, bottomRadiusM)
-          const nextPosition = planetCenter.clone().add(frame.up.multiplyScalar(bottomRadiusM + altitudeM))
-          const delta = nextPosition.clone().sub(camera.position)
-          cameraTarget.add(delta)
-          cameraControls.setLookAt(
-            nextPosition.x,
-            nextPosition.y,
-            nextPosition.z,
-            cameraTarget.x,
-            cameraTarget.y,
-            cameraTarget.z,
-            enableTransition,
-          )
-        }
         gui.add(eff, 'sunElevation', -5, 90, 0.1).onChange(() => {
           baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
           updateSunLight()
@@ -423,36 +381,17 @@
           const delta = clock.getDelta()
 
           if (pendingAltitude !== null) {
-            setCameraAltitude(pendingAltitude, false)
+            controls.setAltitudeM(pendingAltitude)
             pendingAltitude = null
           }
 
-          cameraControls.update(delta)
-          cameraControls.getTarget(cameraTarget)
+          controls.update(delta)
 
-          const unclampedAltitude = getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM)
-          const clampedAltitude = clampCameraToMinAltitude({
-            camera,
-            target: cameraTarget,
-            planetCenter,
-            bottomRadiusM,
-            minAltitudeM: MIN_CAMERA_ALTITUDE,
-          })
           // Mirror the camera's real altitude to the GUI only on meaningful
           // change — every mirrored write costs an echoed onChange dispatch.
-          if (Math.abs(clampedAltitude - eff.cameraAltitude) > Math.max(0.5, clampedAltitude * 0.001)) {
-            publishAltitude(clampedAltitude)
-          }
-          if (clampedAltitude !== unclampedAltitude) {
-            cameraControls.setLookAt(
-              camera.position.x,
-              camera.position.y,
-              camera.position.z,
-              cameraTarget.x,
-              cameraTarget.y,
-              cameraTarget.z,
-              false,
-            )
+          const altitude = controls.getAltitudeM()
+          if (Math.abs(altitude - eff.cameraAltitude) > Math.max(0.5, altitude * 0.001)) {
+            publishAltitude(altitude)
           }
 
           // Sky-mesh box must follow the camera. RenderPipeline passes

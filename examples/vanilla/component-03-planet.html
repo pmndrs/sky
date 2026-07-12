@@ -32,24 +32,19 @@
     </style>
   </head>
   <body>
-    <div id="info">@pmndrs/sky · planet-scale ground→orbit. Drag to look; scroll to dolly altitude.</div>
+    <div id="info">@pmndrs/sky · planet-scale ground→orbit. Drag to look around; scroll to climb/descend.</div>
     <script type="module">
       import * as THREE from 'three/webgpu'
       import { pass } from 'three/tsl'
-      import CameraControls from 'camera-controls'
       import { Inspector } from 'three/addons/inspector/Inspector.js'
 
       import { Sky, presets } from '@pmndrs/sky'
       import {
         createPlanetSurfacePatchGeometry,
         placeObjectOnPlanetSurface,
-        getPlanetCameraFrame,
-        getPlanetAltitudeM,
-        clampCameraToMinAltitude,
         getPlanetLookAtTarget,
       } from '@sky/demo/planetScaleUtils'
-
-      CameraControls.install({ THREE })
+      import { PlanetFlightControls } from '@sky/demo/planetFlightControls'
 
       const renderer = new THREE.WebGPURenderer({ antialias: false, logarithmicDepthBuffer: true })
       renderer.setPixelRatio(window.devicePixelRatio)
@@ -162,30 +157,28 @@
       const liveSkyMesh = sky.baker.createSkyMesh({ scale: 4_000_000, showSunDisc: true })
       scene.add(liveSkyMesh)
 
-      const clock = new THREE.Clock()
-      const cameraControls = new CameraControls(camera, renderer.domElement)
-      const cameraTarget = getPlanetLookAtTarget({
+      // Establish the initial look direction (tangent-facing, matching the
+      // old cameraControls target) before handing off to the flight
+      // controls, which pick up the camera's current orientation at
+      // construction.
+      const initialLookTarget = getPlanetLookAtTarget({
         position: camera.position,
         planetCenter,
         bottomRadiusM,
         distanceM: 30_000,
       })
-      cameraControls.setLookAt(
-        camera.position.x,
-        camera.position.y,
-        camera.position.z,
-        cameraTarget.x,
-        cameraTarget.y,
-        cameraTarget.z,
-        false,
-      )
-      cameraControls.minDistance = 100
-      cameraControls.maxDistance = 8_000_000
-      cameraControls.dollySpeed = 2.0
-      cameraControls.truckSpeed = 80.0
-      cameraControls.dollyToCursor = true
-      cameraControls.infinityDolly = true
-      cameraControls.colliderMeshes = [localGround]
+      camera.lookAt(initialLookTarget)
+
+      const clock = new THREE.Clock()
+      // First-person flight controls: drag looks around from wherever the
+      // camera is, wheel moves it radially (altitude only). No ground
+      // target, no orbit — see planetFlightControls.ts for why the old
+      // camera-controls orbit model was wrong at planet scale.
+      const controls = new PlanetFlightControls(camera, renderer.domElement, {
+        planetCenter,
+        bottomRadiusM,
+        minAltitudeM: MIN_CAMERA_ALTITUDE,
+      })
 
       // Vanilla `applyHaze` pipeline. Logarithmic depth buffer is on, so
       // we set the matching flag on the haze decode so depth → distance
@@ -266,26 +259,6 @@
       hazeGui.add(state, 'blendStartKm', 1, 200, 1).onChange((v) => sky.setHazeAltitudeBlend({ startKm: v }))
       hazeGui.add(state, 'blendEndKm', 1, 250, 1).onChange((v) => sky.setHazeAltitudeBlend({ endKm: v }))
 
-      function setCameraAltitude(altitudeM) {
-        cameraControls.getTarget(cameraTarget)
-        const frame = getPlanetCameraFrame(camera.position, planetCenter, bottomRadiusM)
-        const nextPosition = planetCenter.clone().add(frame.up.multiplyScalar(bottomRadiusM + altitudeM))
-        const delta = nextPosition.clone().sub(camera.position)
-        cameraTarget.add(delta)
-        // Non-animated: an animated transition here spans many frames, and the
-        // per-frame altitude mirror would keep republishing in-transit values
-        // while the user (or the clamp) is also steering — one owner per frame.
-        cameraControls.setLookAt(
-          nextPosition.x,
-          nextPosition.y,
-          nextPosition.z,
-          cameraTarget.x,
-          cameraTarget.y,
-          cameraTarget.z,
-          false,
-        )
-      }
-
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight
         camera.updateProjectionMatrix()
@@ -296,36 +269,17 @@
         const delta = clock.getDelta()
 
         if (pendingAltitude !== null) {
-          setCameraAltitude(pendingAltitude)
+          controls.setAltitudeM(pendingAltitude)
           pendingAltitude = null
         }
 
-        cameraControls.update(delta)
-        cameraControls.getTarget(cameraTarget)
+        controls.update(delta)
 
-        const unclamped = getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM)
-        const clamped = clampCameraToMinAltitude({
-          camera,
-          target: cameraTarget,
-          planetCenter,
-          bottomRadiusM,
-          minAltitudeM: MIN_CAMERA_ALTITUDE,
-        })
         // Mirror to the GUI only on meaningful change — every mirrored write
         // costs an echoed onChange dispatch from listen().
-        if (Math.abs(clamped - state.cameraAltitude) > Math.max(0.5, clamped * 0.001)) {
-          publishAltitude(clamped)
-        }
-        if (clamped !== unclamped) {
-          cameraControls.setLookAt(
-            camera.position.x,
-            camera.position.y,
-            camera.position.z,
-            cameraTarget.x,
-            cameraTarget.y,
-            cameraTarget.z,
-            false,
-          )
+        const altitude = controls.getAltitudeM()
+        if (Math.abs(altitude - state.cameraAltitude) > Math.max(0.5, altitude * 0.001)) {
+          publishAltitude(altitude)
         }
 
         // Sky-mesh follows the camera so its giant box stays around it.

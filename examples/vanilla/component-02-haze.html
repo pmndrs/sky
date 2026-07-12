@@ -63,9 +63,20 @@
       const scene = new THREE.Scene()
       sky.attach(scene)
 
-      const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000)
-      camera.position.set(0, 8, 30)
-      camera.lookAt(0, 4, 0)
+      // Aerial-perspective haze is a *distance-integrated* effect — the AP
+      // LUT accumulates in-scattered light along kilometres of ray, and
+      // Earth's default (turbidity 1) atmosphere is genuinely close to
+      // transparent over sub-kilometre ranges. The scene previously placed
+      // its farthest "mountain" at 1.5 km (camera.far = 2000), so the AP
+      // alpha/inscatter at every geometry pixel was almost zero — haze only
+      // became visible once the `exposure` slider was cranked far past its
+      // physical default, amplifying a near-zero signal. See 03-aerial-
+      // perspective.html, which spreads geometry 2 km – 70 km out and is
+      // the reference for "looks like real haze". Camera/ground/mountain
+      // scale below mirrors that demo so the effect is visible at defaults.
+      const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 100000)
+      camera.position.set(0, 40, 150)
+      camera.lookAt(0, 20, -2000)
 
       // Direct sun light so distant lit geometry sits in the sky's luminance
       // range (avoids the silhouette-fringe artifact documented in CLAUDE.md).
@@ -73,35 +84,41 @@
       scene.add(sun)
 
       const ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(4000, 4000),
+        new THREE.PlaneGeometry(200000, 200000),
         new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.95 }),
       )
       ground.rotation.x = -Math.PI / 2
       scene.add(ground)
 
-      // "Mountains" — cones at varying distances so haze gradient is visible.
+      // "Mountains" — cones at varying distances (1.5 km – 50 km) so the
+      // haze gradient is visible; lateral spread scales with distance so
+      // each row still sits inside the camera's field of view.
       const mountainMat = new THREE.MeshStandardMaterial({ color: 0x6a6a6a, roughness: 0.95 })
-      const distances = [60, 100, 180, 300, 500, 900, 1500]
+      const distances = [1500, 3000, 6000, 12000, 22000, 35000, 50000]
       for (const d of distances) {
         for (let i = -3; i <= 3; i++) {
-          const h = 8 + Math.random() * 18
-          const cone = new THREE.Mesh(new THREE.ConeGeometry(h * 0.6, h, 8), mountainMat)
-          cone.position.set(i * 35 + Math.random() * 10, h / 2, -d)
+          const h = 300 + Math.random() * 500
+          const cone = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 8), mountainMat)
+          cone.scale.set(500, h, 500)
+          const lateral = i * d * 0.06 + (Math.random() - 0.5) * d * 0.02
+          cone.position.set(lateral, h / 2, -d)
           scene.add(cone)
         }
       }
 
+      // Foreground mirror ball, kept close to the camera's start position so
+      // it stays a legible reflective element at the new (larger) scene scale.
       const mirror = new THREE.Mesh(
-        new THREE.SphereGeometry(2, 64, 64),
+        new THREE.SphereGeometry(10, 64, 64),
         new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1.0, roughness: 0.0 }),
       )
-      mirror.position.set(0, 4, 0)
+      mirror.position.set(0, 15, -30)
       scene.add(mirror)
 
       const controls = new OrbitControls(camera, renderer.domElement)
-      controls.target.set(0, 4, 0)
+      controls.target.set(0, 20, -2000)
       controls.minDistance = 5
-      controls.maxDistance = 200
+      controls.maxDistance = 60000
       controls.update()
 
       // Vanilla post-process pipeline using `applyHaze` as the output node.
@@ -143,7 +160,7 @@
       })
       gui.add(state, 'showHelper').onChange((v) => {
         if (v) {
-          skyHelper = new SkyHelper(sky, { size: 20 })
+          skyHelper = new SkyHelper(sky, { size: 40 })
           skyHelper.position.set(0, 1, 0)
           scene.add(skyHelper)
         } else if (skyHelper) {

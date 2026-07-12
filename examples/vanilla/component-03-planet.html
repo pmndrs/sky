@@ -237,16 +237,26 @@
         renderer.toneMappingExposure = v
       })
 
-      // Single-owner altitude sync: the animate loop mirrors the camera's
-      // actual altitude back into `state.cameraAltitude` for GUI display.
-      // Guard that write with `syncingAltitude` so a GUI implementation that
-      // fires onChange on programmatic updates can't re-trigger
-      // setCameraAltitude from its own mirror — that feedback loop (slider →
-      // animated transition → loop writes in-transit altitude → onChange →
-      // new transition …) made the altitude oscillate without converging.
-      let syncingAltitude = false
-      const altitudeController = gui.add(state, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 500_000, 1).onChange((v) => {
-        if (!syncingAltitude) setCameraAltitude(v)
+      // Altitude wiring. The Inspector's listen() polls the bound property
+      // every rAF and re-dispatches onChange — deferred by one more rAF — when
+      // it was changed externally, so a synchronous guard flag around the
+      // loop's mirror write can't stop the echo (the flag is long cleared by
+      // the time onChange runs). Break the loop by value instead: onChange
+      // only records a pending request (ignoring echoes of values we mirrored
+      // ourselves), and the animate loop is the single writer that applies it.
+      let pendingAltitude = null
+      const mirroredAltitudes = [state.cameraAltitude]
+      const publishAltitude = (v) => {
+        mirroredAltitudes.push(v)
+        if (mirroredAltitudes.length > 4) mirroredAltitudes.shift()
+        state.cameraAltitude = v
+      }
+      const isMirrorEcho = (v) => mirroredAltitudes.some((m) => Math.abs(v - m) < 0.5)
+      // Max 200 km — the Inspector's drag granularity is hardcoded to
+      // (max - min) / 100 per pixel, so a tighter range gives usable drags.
+      // Type in the number field for exact values.
+      const altitudeController = gui.add(state, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 200_000, 1).onChange((v) => {
+        if (!isMirrorEcho(v)) pendingAltitude = v
       })
       altitudeController.listen?.()
 
@@ -284,20 +294,29 @@
 
       renderer.setAnimationLoop(async () => {
         const delta = clock.getDelta()
+
+        if (pendingAltitude !== null) {
+          setCameraAltitude(pendingAltitude)
+          pendingAltitude = null
+        }
+
         cameraControls.update(delta)
         cameraControls.getTarget(cameraTarget)
 
         const unclamped = getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM)
-        syncingAltitude = true
-        state.cameraAltitude = clampCameraToMinAltitude({
+        const clamped = clampCameraToMinAltitude({
           camera,
           target: cameraTarget,
           planetCenter,
           bottomRadiusM,
           minAltitudeM: MIN_CAMERA_ALTITUDE,
         })
-        syncingAltitude = false
-        if (state.cameraAltitude !== unclamped) {
+        // Mirror to the GUI only on meaningful change — every mirrored write
+        // costs an echoed onChange dispatch from listen().
+        if (Math.abs(clamped - state.cameraAltitude) > Math.max(0.5, clamped * 0.001)) {
+          publishAltitude(clamped)
+        }
+        if (clamped !== unclamped) {
           cameraControls.setLookAt(
             camera.position.x,
             camera.position.y,

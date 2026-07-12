@@ -358,9 +358,29 @@
           baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
           updateSunLight()
         })
-        const altitudeController = gui
-          .add(eff, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 500000, 1)
-          .onChange(() => setCameraAltitude(eff.cameraAltitude))
+        // Altitude wiring. The Inspector's listen() polls the bound property
+        // every rAF and re-dispatches onChange (one rAF later) when it was
+        // changed externally — so "slider → camera + loop → state mirror" is
+        // a feedback loop: slider → transition → mirror publishes in-transit
+        // altitude → echoed onChange → new transition → … Break it by value:
+        // onChange only records a pending request (ignoring echoes of our own
+        // mirror writes), and the animate loop is the single writer that
+        // applies it, without a transition.
+        let pendingAltitude = null
+        const mirroredAltitudes = [eff.cameraAltitude]
+        const publishAltitude = (v) => {
+          mirroredAltitudes.push(v)
+          if (mirroredAltitudes.length > 4) mirroredAltitudes.shift()
+          eff.cameraAltitude = v
+        }
+        const isMirrorEcho = (v) => mirroredAltitudes.some((m) => Math.abs(v - m) < 0.5)
+        // Max 200 km: covers the topRadius (~100 km) transition plus space
+        // views, and keeps the Inspector's drag granularity — hardcoded to
+        // (max - min) / 100 per pixel — from being uselessly coarse. Type in
+        // the number field for exact values.
+        const altitudeController = gui.add(eff, 'cameraAltitude', MIN_CAMERA_ALTITUDE, 200000, 1).onChange((v) => {
+          if (!isMirrorEcho(v)) pendingAltitude = v
+        })
         altitudeController.listen?.()
         gui.add(eff, 'exposure', 0, 2, 0.01).onChange(() => {
           renderer.toneMappingExposure = eff.exposure
@@ -401,18 +421,29 @@
 
         renderer.setAnimationLoop(async () => {
           const delta = clock.getDelta()
+
+          if (pendingAltitude !== null) {
+            setCameraAltitude(pendingAltitude, false)
+            pendingAltitude = null
+          }
+
           cameraControls.update(delta)
           cameraControls.getTarget(cameraTarget)
 
           const unclampedAltitude = getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM)
-          eff.cameraAltitude = clampCameraToMinAltitude({
+          const clampedAltitude = clampCameraToMinAltitude({
             camera,
             target: cameraTarget,
             planetCenter,
             bottomRadiusM,
             minAltitudeM: MIN_CAMERA_ALTITUDE,
           })
-          if (eff.cameraAltitude !== unclampedAltitude) {
+          // Mirror the camera's real altitude to the GUI only on meaningful
+          // change — every mirrored write costs an echoed onChange dispatch.
+          if (Math.abs(clampedAltitude - eff.cameraAltitude) > Math.max(0.5, clampedAltitude * 0.001)) {
+            publishAltitude(clampedAltitude)
+          }
+          if (clampedAltitude !== unclampedAltitude) {
             cameraControls.setLookAt(
               camera.position.x,
               camera.position.y,

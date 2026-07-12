@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>07 — Space-to-ground cinematic descent</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      Space-to-ground — cinematic descent from orbit to the surface. Click or scroll to take over free flight at any
+      time.<br />
+      <span id="timeline-status">Phase: cinematic 0.0s / 45.0s</span><br />
+      Related: <a href="/examples/05-planet-scale.html" style="color: #fc9">05-planet-scale</a>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+
+      import { pass, uniform } from 'three/tsl'
+
+      import { SkyAtmosphereBaker } from '@sky/sky/SkyAtmosphereBaker'
+      import { createHazeOutputNode } from '@sky/sky/HazePostProcess'
+      import { createStartGate, logStage } from '@sky/demo/startGate'
+      import {
+        createPlanetSurfacePatchGeometry,
+        getPlanetAltitudeM,
+        placeObjectOnPlanetSurface,
+      } from '@sky/demo/planetScaleUtils'
+      import { PlanetFlightControls } from '@sky/demo/planetFlightControls'
+
+      const _q = new URLSearchParams(window.location.search)
+      const debugMode = _q.get('debug')
+      // Orbit / planet-scale: default log-Z for depth precision; compare with `?logDepth=0`.
+      const useLogDepth = _q.get('logDepth') !== '0'
+
+      // AP coverage policy — 32 km/slice × 32 slices ≈ 1024 km, matching
+      // 05-planet-scale. The cinematic starts well outside this coverage
+      // (400 km altitude) and relies on the haze post-process's raymarch
+      // fallback until it descends within range.
+      const AP_KM_PER_SLICE = 32.0
+      const MIN_CAMERA_ALTITUDE = 20.0
+      const LOCAL_GROUND_PATCH_RADIUS_M = 140_000.0
+      const LOCAL_GROUND_PATCH_OFFSET_M = 2.0
+      const HAZE_MODES = {
+        auto: 0,
+        ap: 1,
+        raymarch: 2,
+      }
+
+      //* Cinematic descent timeline =====================================
+      //
+      // Parametric, tween-lib-free timeline driven straight off the clock
+      // in the animate loop. Two eased curves share progress `p` in [0, 1]:
+      //
+      //  - altitude: exponential ease-out (`easeExpoOut`) — steep initial
+      //    slope (fast through empty space where nothing nearby changes
+      //    much) that flattens out through the atmosphere (slow, controlled
+      //    approach near the surface where geometry detail matters).
+      //  - look direction (pitch/yaw): smoothstep — a gentler, more linear
+      //    sweep from "limb-gazing" (steep downward pitch, taking in the
+      //    planet's curved edge against space) to "horizon-gazing" (near-
+      //    level pitch, the ordinary flight-camera framing used once you're
+      //    close to the ground).
+      //
+      // The camera is driven directly (position + quaternion) during the
+      // cinematic — PlanetFlightControls only stores yaw/pitch/altitude as
+      // *private* fields with no external setters (see planetFlightControls.ts),
+      // so there is no way to hand it a scripted yaw/pitch target. Instead we
+      // construct PlanetFlightControls lazily at the handoff moment (either
+      // the descent finishing on its own, or the user interacting with the
+      // canvas), by which point its constructor reads the camera's *current*
+      // position/orientation and re-derives its own basis/pitch from that —
+      // so the handoff is a no-op for the camera (no jump), it just changes
+      // who's driving from the next frame on.
+      const CINEMATIC_START_ALTITUDE_M = 400_000.0
+      const CINEMATIC_END_ALTITUDE_M = 300.0
+      const CINEMATIC_DURATION_S = 45.0
+      // Larger k = more front-loaded (faster through space, slower near the
+      // end). 5 puts roughly the first third of the timeline through the
+      // bulk of the altitude drop.
+      const CINEMATIC_ALTITUDE_EASE_K = 5.0
+      const CINEMATIC_START_PITCH_RAD = THREE.MathUtils.degToRad(-45) // limb-gazing: steep down, planet curve + space in frame
+      const CINEMATIC_END_PITCH_RAD = THREE.MathUtils.degToRad(-2) // horizon-gazing: near-level, terrain ahead
+      const CINEMATIC_START_YAW_RAD = 0.0
+      const CINEMATIC_END_YAW_RAD = THREE.MathUtils.degToRad(20) // slow drift so the descent isn't perfectly axis-locked
+
+      // Fixed tangent-plane basis for the scripted camera pose — identical
+      // convention to PlanetFlightControls.establishBasis (forward = world
+      // +Z, projected off `up`; right = forward × up). The cinematic only
+      // ever moves the camera radially above the origin, so `up` never
+      // changes and this basis is valid for the whole descent.
+      const CINEMATIC_UP = new THREE.Vector3(0, 1, 0)
+      const CINEMATIC_BASIS_FORWARD = new THREE.Vector3(0, 0, 1)
+      const CINEMATIC_BASIS_RIGHT = new THREE.Vector3().crossVectors(CINEMATIC_BASIS_FORWARD, CINEMATIC_UP).normalize()
+
+      // Sun placement: setSun's spherical convention (SkyAtmosphereBaker.ts)
+      // is `theta = azimuth`, `x = sin(phi)*cos(theta)`, `z = sin(phi)*sin(theta)`
+      // with phi = 90 - elevation. PlanetFlightControls / getPlanetLookAtTarget's
+      // yaw-0 bearing is world +Z (DEFAULT_BEARING_REFERENCE). Solving for the
+      // sun's XZ direction to be parallel to +Z (i.e. "ahead" of the scripted
+      // camera path) gives azimuth = 90. At the limb-gazing start pose the
+      // horizon sits near the top of frame, so a low sun (elevation 10) ahead
+      // of the camera grazes the limb there — a terminator/rim-light look —
+      // then reads as a warm horizon glow once pitch levels out near the
+      // ground.
+      const SUN_ELEVATION_DEG = 10.0
+      const SUN_AZIMUTH_DEG = 90.0
+
+      // Exposure keyframes — altitude-keyed (not time-keyed) log-lerp so it
+      // stays correct if the user takes over free flight and moves the
+      // camera themselves after handoff, not just during the scripted
+      // descent. Space needs a much lower exposure (bright limb glow against
+      // near-black sky background, no atmosphere to soften it); the surface
+      // at a 10° sun elevation is a twilight-lit scene and reads better
+      // brighter.
+      const EXPOSURE_ALTITUDE_SPACE_M = CINEMATIC_START_ALTITUDE_M
+      const EXPOSURE_ALTITUDE_SURFACE_M = CINEMATIC_END_ALTITUDE_M
+      const EXPOSURE_AT_SPACE = 0.15
+      const EXPOSURE_AT_SURFACE_TWILIGHT = 0.65
+
+      function easeExpoOut(p, k) {
+        if (k <= 0) return p
+        return (1 - Math.exp(-k * p)) / (1 - Math.exp(-k))
+      }
+
+      function smoothstep01(p) {
+        return p * p * (3 - 2 * p)
+      }
+
+      function computeExposureForAltitude(altitudeM) {
+        const clamped = THREE.MathUtils.clamp(altitudeM, EXPOSURE_ALTITUDE_SURFACE_M, EXPOSURE_ALTITUDE_SPACE_M)
+        const logAlt = Math.log(clamped)
+        const logSurface = Math.log(EXPOSURE_ALTITUDE_SURFACE_M)
+        const logSpace = Math.log(EXPOSURE_ALTITUDE_SPACE_M)
+        const t = (logAlt - logSurface) / (logSpace - logSurface)
+        return THREE.MathUtils.lerp(EXPOSURE_AT_SURFACE_TWILIGHT, EXPOSURE_AT_SPACE, t)
+      }
+
+      const gate = createStartGate({
+        label: 'Start Space-to-ground demo',
+        stages: [
+          'create WebGPU renderer',
+          'renderer.init()',
+          'baker (LUTs + cube + AP @ 1024 km)',
+          'build planet scene',
+          'set up haze post-process',
+          'cinematic descent controller',
+          'render loop',
+        ],
+      })
+
+      gate.run(async ({ markStage }) => {
+        markStage(0, 'running')
+        const renderer = new THREE.WebGPURenderer({ antialias: false, logarithmicDepthBuffer: useLogDepth })
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = EXPOSURE_AT_SPACE
+        renderer.inspector = new Inspector()
+        document.body.appendChild(renderer.domElement)
+        markStage(1, 'running')
+
+        await logStage('renderer.init()', () => renderer.init())
+        markStage(2, 'running')
+
+        // Far plane large enough to enclose the full planet sphere when
+        // looking down from orbit. Earth radius ≈ 6.36 Mm so 20 Mm
+        // comfortably covers the diameter plus altitude headroom.
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 20_000_000)
+        camera.position.set(0, CINEMATIC_START_ALTITUDE_M, 0)
+        camera.up.copy(CINEMATIC_UP)
+        camera.lookAt(
+          camera.position
+            .clone()
+            .add(
+              CINEMATIC_BASIS_FORWARD.clone()
+                .multiplyScalar(Math.cos(CINEMATIC_START_PITCH_RAD))
+                .addScaledVector(CINEMATIC_UP, Math.sin(CINEMATIC_START_PITCH_RAD)),
+            ),
+        )
+
+        const baker = await logStage('SkyAtmosphereBaker', async () => {
+          const b = new SkyAtmosphereBaker(renderer, {
+            cubeSize: 256,
+            enableAerialPerspective: true,
+            apKmPerSlice: AP_KM_PER_SLICE,
+          })
+          b.setSun({ elevation: SUN_ELEVATION_DEG, azimuth: SUN_AZIMUTH_DEG })
+          b.setCamera(camera)
+          b.update()
+          await b.updateAerialPerspective()
+          await renderer.getContext().queue?.onSubmittedWorkDone?.()
+          return b
+        })
+        markStage(3, 'running')
+
+        const scene = new THREE.Scene()
+
+        // Live sky mesh. Sky-View LUT is sampled per-pixel against the
+        // current camera; raymarch fallback above topRadius (~100 km) —
+        // exercised for most of the space leg of the descent.
+        const skyMesh = baker.createSkyMesh()
+        scene.add(skyMesh)
+
+        // IBL — baked cube → PMREM. Baked at the skyScene origin (planet
+        // surface), so at altitude it's "what the sky looks like FROM the
+        // ground" rather than from the camera's actual position. Fine for
+        // this demo — mostly matters once the local ground patch is close.
+        scene.environment = baker.environmentTexture
+
+        const bottomRadiusM = baker.atmosphereParams.bottomRadius * 1000
+        const planetCenter = new THREE.Vector3(0, -bottomRadiusM, 0)
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x6a6055, roughness: 0.95, metalness: 0.0 })
+        const ground = new THREE.Mesh(new THREE.SphereGeometry(bottomRadiusM, 128, 64), groundMat)
+        ground.position.copy(planetCenter)
+        scene.add(ground)
+
+        const localGround = new THREE.Mesh(
+          createPlanetSurfacePatchGeometry({
+            bottomRadiusM,
+            patchRadiusM: LOCAL_GROUND_PATCH_RADIUS_M,
+            patchAltitudeM: LOCAL_GROUND_PATCH_OFFSET_M,
+          }),
+          groundMat,
+        )
+        localGround.position.copy(planetCenter)
+        scene.add(localGround)
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 4.0)
+        scene.add(sunLight)
+
+        const sunVec = new THREE.Vector3()
+        const updateSunLight = () => {
+          sunVec.copy(baker._sunVec).multiplyScalar(50000)
+          sunLight.position.copy(sunVec)
+          sunLight.target.position.set(0, 0, 0)
+        }
+        updateSunLight()
+
+        // Mountain scatter — visible once the descent gets low enough for
+        // haze/lit-surface detail to read, and gives the horizon-gazing end
+        // pose something to look at besides flat ground.
+        const mountainGeom = new THREE.ConeGeometry(1, 1, 12)
+        const mountainMat = new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 0.9 })
+        for (let i = 1; i <= 12; i++) {
+          const dist = i * 2000
+          const angle = ((i % 4) - 1.5) * 0.4
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 400 + Math.random() * 400
+          m.scale.set(600, h, 600)
+          placeObjectOnPlanetSurface(m, {
+            planetCenter,
+            bottomRadiusM,
+            distanceM: dist,
+            bearingRad: angle,
+            heightM: h,
+            baseOffsetM: h * 0.5 + LOCAL_GROUND_PATCH_OFFSET_M,
+          })
+          scene.add(m)
+        }
+        for (let i = 0; i < 6; i++) {
+          const dist = 30000 + i * 8000
+          const angle = (i - 2.5) * 0.15
+          const m = new THREE.Mesh(mountainGeom, mountainMat)
+          const h = 1500
+          m.scale.set(1500, h, 1500)
+          placeObjectOnPlanetSurface(m, {
+            planetCenter,
+            bottomRadiusM,
+            distanceM: dist,
+            bearingRad: angle,
+            heightM: h,
+            baseOffsetM: h * 0.5 + LOCAL_GROUND_PATCH_OFFSET_M,
+          })
+          scene.add(m)
+        }
+
+        const clock = new THREE.Clock()
+
+        //* Cinematic driver ================================================
+        //
+        // `controls` stays null for the whole scripted descent — see the big
+        // comment above. It's constructed once, at handoff, and from that
+        // frame on owns the camera exactly like 05-planet-scale.
+        let controls = null
+        let cinematicActive = true
+        let cinematicElapsedS = 0
+        let currentAltitudeM = CINEMATIC_START_ALTITUDE_M
+        const _cinematicForward = new THREE.Vector3()
+        const _cinematicTarget = new THREE.Vector3()
+        let lastLoggedMilestone = -1
+
+        const applyCinematicPose = (p) => {
+          const altEase = easeExpoOut(p, CINEMATIC_ALTITUDE_EASE_K)
+          const altitudeM = THREE.MathUtils.lerp(CINEMATIC_START_ALTITUDE_M, CINEMATIC_END_ALTITUDE_M, altEase)
+          const lookP = smoothstep01(p)
+          const pitchRad = THREE.MathUtils.lerp(CINEMATIC_START_PITCH_RAD, CINEMATIC_END_PITCH_RAD, lookP)
+          const yawRad = THREE.MathUtils.lerp(CINEMATIC_START_YAW_RAD, CINEMATIC_END_YAW_RAD, lookP)
+
+          camera.position.set(0, altitudeM, 0)
+          camera.up.copy(CINEMATIC_UP)
+
+          const cosPitch = Math.cos(pitchRad)
+          _cinematicForward
+            .copy(CINEMATIC_BASIS_FORWARD)
+            .multiplyScalar(Math.cos(yawRad) * cosPitch)
+            .addScaledVector(CINEMATIC_BASIS_RIGHT, Math.sin(yawRad) * cosPitch)
+            .addScaledVector(CINEMATIC_UP, Math.sin(pitchRad))
+            .normalize()
+          _cinematicTarget.copy(camera.position).add(_cinematicForward)
+          camera.lookAt(_cinematicTarget)
+
+          currentAltitudeM = altitudeM
+          return altitudeM
+        }
+
+        const handoffToFreeFlight = (reason) => {
+          if (controls) return
+          cinematicActive = false
+          controls = new PlanetFlightControls(camera, renderer.domElement, {
+            planetCenter,
+            bottomRadiusM,
+            minAltitudeM: MIN_CAMERA_ALTITUDE,
+          })
+          console.log(
+            `[cinematic] handoff to free flight (${reason}) at t=${cinematicElapsedS.toFixed(1)}s altitude=${currentAltitudeM.toFixed(0)}m`,
+          )
+        }
+
+        const restartCinematic = () => {
+          if (controls) {
+            controls.dispose()
+            controls = null
+          }
+          cinematicActive = true
+          cinematicElapsedS = 0
+          lastLoggedMilestone = -1
+          applyCinematicPose(0)
+          console.log('[cinematic] descent restarted: altitude 400km -> 300m over 45s')
+        }
+
+        // Capture-phase so this sees the event before anything else,
+        // including a not-yet-constructed PlanetFlightControls. Once
+        // `controls` exists these become no-ops (guarded), so it's safe to
+        // leave them attached for the demo's whole lifetime.
+        const cancelCinematicOnInput = (event) => {
+          if (!cinematicActive || controls) return
+          handoffToFreeFlight(event.type === 'wheel' ? 'user wheel input' : 'user pointer input')
+        }
+        renderer.domElement.addEventListener('pointerdown', cancelCinematicOnInput, { capture: true })
+        renderer.domElement.addEventListener('wheel', cancelCinematicOnInput, { capture: true, passive: true })
+
+        console.log('[cinematic] descent started: altitude 400km -> 300m over 45s')
+        applyCinematicPose(0)
+
+        markStage(4, 'running')
+
+        const scenePass = pass(scene, camera)
+        const luminanceScaleU = baker.sky.luminanceScale
+        const invProjU = uniform(camera.projectionMatrixInverse.clone())
+        const cameraWorldU = uniform(camera.matrixWorld.clone())
+        const cameraPositionKmU = uniform(baker.cameraPositionKm.clone())
+        // camera.far is large (20 Mm) for orbit views; opt-in to the
+        // viewZ-based sky-pixel test so AP doesn't double up the sky-mesh's
+        // gradient at the top of the screen.
+        const cameraFarU = uniform(camera.far)
+        const hazeStrengthU = uniform(1.0)
+        const hazeModeU = uniform(HAZE_MODES.auto)
+        // KNOWN ISSUE D4 (ROADMAP.md): the AP LUT branch shows concentric
+        // "wave" banding at ~50-100 km camera altitude (froxel screen-space
+        // interpolation artefact, still open/deferred). This demo's descent
+        // passes straight through that altitude band, so default the haze
+        // policy raymarch-dominant: a low blendStartKm/blendEndKm makes the
+        // auto ramp hand off from AP to the clean per-pixel raymarch well
+        // before 50 km, trading a bit of AP-LUT detail up close for a
+        // banding-free descent. Sliders stay exposed so this remains
+        // tweakable (e.g. to reproduce D4 for further debugging).
+        const raymarchBlendStartKmU = uniform(8.0)
+        const raymarchBlendEndKmU = uniform(24.0)
+        const raymarchCoverageBlendKmU = uniform(128.0)
+
+        const renderPipeline = new THREE.RenderPipeline(renderer)
+        renderPipeline.outputNode = createHazeOutputNode({
+          scenePass,
+          aerialPerspectiveTexture: baker.aerialPerspectiveTexture,
+          luminanceScale: luminanceScaleU,
+          invProjUniform: invProjU,
+          cameraWorldUniform: cameraWorldU,
+          cameraFarUniform: cameraFarU,
+          logarithmicDepthBuffer: useLogDepth,
+          hazeModeUniform: hazeModeU,
+          raymarchBlendStartKm: raymarchBlendStartKmU,
+          raymarchBlendEndKm: raymarchBlendEndKmU,
+          raymarchCoverageBlendKm: raymarchCoverageBlendKmU,
+          hazeStrength: hazeStrengthU,
+          kmPerSlice: AP_KM_PER_SLICE,
+          // Per-pixel raymarch fallback — geometry past 1024 km integrates
+          // the real atmosphere instead of clamping to slice 31 of the AP
+          // LUT. Required for the orbit leg of the descent; without this
+          // the far hemisphere of the planet reads as unhazed.
+          enableRaymarchFallback: true,
+          atmosphereUniforms: baker.atmosphereUniforms,
+          sunDirection: baker.sky.sunDirection,
+          viewHeightKm: baker.sky.viewHeight,
+          cameraPositionKm: cameraPositionKmU,
+          transmittanceLUT: baker.transmittanceLUT.texture,
+          multiScatterLUT: baker.multiScatterLUT.texture,
+          debugMode,
+        })
+
+        const gui = renderer.inspector.createParameters('Atmosphere')
+        const eff = {
+          sunElevation: SUN_ELEVATION_DEG,
+          sunAzimuth: SUN_AZIMUTH_DEG,
+          // Manual exposure — only applied while `autoExposure` is off.
+          exposure: EXPOSURE_AT_SPACE,
+          autoExposure: true,
+          hazeStrength: 1.0,
+          hazeOn: true,
+          skyMeshOn: true,
+          hazeMode: 'auto',
+          blendStartKm: raymarchBlendStartKmU.value,
+          blendEndKm: raymarchBlendEndKmU.value,
+          coverageBlendKm: raymarchCoverageBlendKmU.value,
+          iblOn: true,
+        }
+        gui.add(eff, 'sunElevation', -5, 90, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        gui.add(eff, 'sunAzimuth', -180, 180, 0.1).onChange(() => {
+          baker.setSun({ elevation: eff.sunElevation, azimuth: eff.sunAzimuth })
+          updateSunLight()
+        })
+        gui.add(eff, 'autoExposure').onChange(() => {
+          if (!eff.autoExposure) renderer.toneMappingExposure = eff.exposure
+        })
+        gui.add(eff, 'exposure', 0, 2, 0.01).onChange(() => {
+          if (!eff.autoExposure) renderer.toneMappingExposure = eff.exposure
+        })
+        gui.add(eff, 'hazeStrength', 0, 3, 0.01).onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+        gui.add(eff, 'hazeOn').onChange(() => {
+          hazeStrengthU.value = eff.hazeOn ? eff.hazeStrength : 0
+        })
+        gui.add(eff, 'skyMeshOn').onChange(() => {
+          skyMesh.visible = eff.skyMeshOn
+        })
+        gui.add(eff, 'iblOn').onChange(() => {
+          scene.environment = eff.iblOn ? baker.environmentTexture : null
+        })
+
+        const hazePolicyGui = renderer.inspector.createParameters('Haze policy')
+        hazePolicyGui.add(eff, 'hazeMode', Object.keys(HAZE_MODES)).onChange(() => {
+          hazeModeU.value = HAZE_MODES[eff.hazeMode]
+        })
+        hazePolicyGui.add(eff, 'blendStartKm', 1, 200, 1).onChange(() => {
+          raymarchBlendStartKmU.value = eff.blendStartKm
+        })
+        hazePolicyGui.add(eff, 'blendEndKm', 1, 250, 1).onChange(() => {
+          raymarchBlendEndKmU.value = eff.blendEndKm
+        })
+        hazePolicyGui.add(eff, 'coverageBlendKm', 1, 512, 1).onChange(() => {
+          raymarchCoverageBlendKmU.value = eff.coverageBlendKm
+        })
+
+        const cinematicGui = renderer.inspector.createParameters('Cinematic')
+        const cinematicActions = {
+          'Replay descent': () => restartCinematic(),
+        }
+        cinematicGui.add(cinematicActions, 'Replay descent')
+
+        window.addEventListener('resize', () => {
+          camera.aspect = window.innerWidth / window.innerHeight
+          camera.updateProjectionMatrix()
+          renderer.setSize(window.innerWidth, window.innerHeight)
+        })
+
+        const timelineStatusEl = document.getElementById('timeline-status')
+
+        markStage(5, 'running')
+        markStage(6, 'running')
+
+        renderer.setAnimationLoop(async () => {
+          const delta = clock.getDelta()
+
+          if (cinematicActive) {
+            cinematicElapsedS += delta
+            const p = THREE.MathUtils.clamp(cinematicElapsedS / CINEMATIC_DURATION_S, 0, 1)
+            applyCinematicPose(p)
+
+            const milestone = Math.floor(p * 4) // 0, 1(25%), 2(50%), 3(75%)
+            if (milestone > lastLoggedMilestone && milestone < 4) {
+              lastLoggedMilestone = milestone
+              console.log(
+                `[cinematic] t=${cinematicElapsedS.toFixed(1)}s (${(p * 100).toFixed(0)}%) altitude=${currentAltitudeM.toFixed(0)}m`,
+              )
+            }
+
+            if (p >= 1) {
+              handoffToFreeFlight('descent complete')
+            }
+          } else if (controls) {
+            controls.update(delta)
+            currentAltitudeM = controls.getAltitudeM()
+          }
+
+          if (timelineStatusEl) {
+            timelineStatusEl.textContent = cinematicActive
+              ? `Phase: cinematic ${cinematicElapsedS.toFixed(1)}s / ${CINEMATIC_DURATION_S.toFixed(1)}s · altitude ${currentAltitudeM.toFixed(0)}m`
+              : `Phase: free flight · altitude ${currentAltitudeM.toFixed(0)}m`
+          }
+
+          if (eff.autoExposure) {
+            renderer.toneMappingExposure = computeExposureForAltitude(currentAltitudeM)
+          }
+
+          // Sky-mesh box must follow the camera. RenderPipeline passes
+          // don't trigger onBeforeRender consistently, so set it here.
+          skyMesh.position.copy(camera.position)
+
+          baker.setCamera(camera, { planetCenter })
+          invProjU.value.copy(camera.projectionMatrixInverse)
+          cameraWorldU.value.copy(camera.matrixWorld)
+          cameraPositionKmU.value.copy(baker.cameraPositionKm)
+
+          try {
+            baker.update()
+          } catch (err) {
+            console.error('[animate] baker.update() failed:', err)
+            renderer.setAnimationLoop(null)
+            return
+          }
+
+          await baker.updateAerialPerspective()
+
+          if (eff.iblOn && scene.environment !== baker.environmentTexture) {
+            scene.environment = baker.environmentTexture
+          }
+
+          await renderPipeline.renderAsync()
+        })
+
+        // Sanity: getPlanetAltitudeM should agree with the scripted
+        // altitude at t=0 (both read straight off camera.position).
+        console.log(
+          `[cinematic] initial altitude check: scripted=${currentAltitudeM.toFixed(0)}m measured=${getPlanetAltitudeM(camera.position, planetCenter, bottomRadiusM).toFixed(0)}m`,
+        )
+      })
+    </script>
+  </body>
+</html>

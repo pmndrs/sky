@@ -14,7 +14,9 @@
     "aerial-perspective",
     "r3f",
     "react-three-fiber",
-    "pmndrs"
+    "pmndrs",
+    "lut",
+    "bruneton"
   ],
   "author": "Dennis Smolek <dennis@smolek.dev>",
   "license": "MIT",

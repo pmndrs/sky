@@ -13,7 +13,6 @@ import {
   instanceIndex,
   textureStore,
   uniform,
-  vec2,
   vec4,
   ivec3,
   float,
@@ -22,9 +21,6 @@ import {
   normalize,
   length,
   select,
-  fract,
-  sin,
-  dot,
 } from 'three/tsl'
 
 import { integrateScatteredLuminance, moveToTopAtmosphere } from '../../backends/tsl/atmosphere.tsl'
@@ -310,13 +306,6 @@ export class AerialPerspectiveLUT {
       const moved = moveToTopAtmosphere(camPosKm, worldDirV, params)
       const startPos = moved.newPos.toVar()
 
-      // Per-voxel jitter — same rationale as the post-process raymarch
-      // (HazePostProcess): a fixed sample-segment offset makes every voxel's
-      // quadrature error coherent, and because dt varies per slice the error
-      // aligns into slice-frequency bands (concentric iso-distance arcs when
-      // viewed from altitude). A voxel-index hash decorrelates it.
-      const hash01 = fract(sin(dot(vec2(fx.add(fz.mul(37.0)), fy), vec2(12.9898, 78.233))).mul(43758.5453))
-
       // --- integrate (with multi-scatter feedback this time) ---
       const result = integrateScatteredLuminance({
         worldPos: startPos,
@@ -325,16 +314,10 @@ export class AerialPerspectiveLUT {
         params: params,
         transmittanceLUT: transmittanceTex,
         multiScatterLUT: multiScatterTex,
-        // 30 fixed samples means up to ~33 km steps on the far slices at
-        // 32 km/slice coverage, with per-slice-varying quadrature error.
-        // 64 matches the haze raymarch fallback the planet demo validates
-        // against. (SebH scales per slice — 2*(sliceId+1), RenderSkyRay-
-        // Marching.hlsl:707 — worth adopting if Loop gains node bounds.)
-        sampleCount: 64,
+        sampleCount: 30,
         ground: false,
         mieRayPhase: true,
         tMaxOverride: tMax,
-        sampleJitter: hash01,
       })
 
       // Mean transmittance (HLSL line 714) → alpha = 1 - meanT so consumer

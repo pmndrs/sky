@@ -232,22 +232,9 @@ export function createHazeOutputNode({
     const distAlongRayM = abs(viewZ).div(cosFromAxis)
     const distKm = distAlongRayM.mul(0.001)
 
-    // Shared per-pixel hash — dithers the AP W sample below and seeds the
-    // raymarch fallback's sample jitter.
-    const hash01 = fract(sin(dot(u, vec2(12.9898, 78.233))).mul(43758.5453))
-
     // AP LUT W axis: w = sqrt(slice/resZ) where slice = distKm/kmPerSlice.
-    // Slices are uniform in w-space, so a constant ±half-texel dither in w is
-    // the correct decorrelation amplitude at every distance — it turns the
-    // trilinear C1 kinks at slice boundaries (visible from altitude as
-    // concentric iso-distance bands over the planet) into per-pixel noise.
-    // Near the camera slices are km-dense, so the same dither is invisible.
     const sliceN = distKm.div(float(kmPerSlice)).div(float(resZ))
-    const w = clamp(
-      sqrt(clamp(sliceN, float(0.0), float(1.0))).add(hash01.sub(0.5).div(float(resZ))),
-      float(0.0),
-      float(1.0),
-    )
+    const w = sqrt(clamp(sliceN, float(0.0), float(1.0)))
 
     // IMPORTANT — force level-0 sampling. `texture3D(...)` defaults to
     // derivative-based mip selection. At silhouette pixels the screen-space
@@ -372,13 +359,14 @@ export function createHazeOutputNode({
         // Per-pixel hash in [0, 1] — breaks the coherent
         // sample-position alignment that caused horizontal banding
         // in transmittance (visible at 50–105 km altitude in
-        // `?debug=rm-alpha`). Cheap one-line hash off uv (hash01,
-        // hoisted above and shared with the AP W dither); not blue
+        // `?debug=rm-alpha`). Cheap one-line hash off uv; not blue
         // noise but good enough to fully scramble the pattern at
         // the resolutions we use. Replaces the canonical fixed
         // `SAMPLE_SEGMENT_T = 0.3` offset with a per-pixel value
         // so adjacent pixels' samples no longer line up at the
         // same altitudes.
+        const hash01 = fract(sin(dot(u, vec2(12.9898, 78.233))).mul(43758.5453))
+
         const result = integrateScatteredLuminance({
           worldPos: startPos,
           worldDir: worldDir,

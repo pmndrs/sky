@@ -82,6 +82,33 @@ altitude changes along the radial axis, no distant orbit target. Applies to
 `05`, `06`, `component-03`, and is a prerequisite for the space-to-ground and
 Outer Wilds demos (Track 3).
 
+### D4 — Concentric "wave" bands in AP haze at 50–100 km altitude (OPEN, deferred)
+
+From ~50–100 km camera altitude, smooth concentric arcs (iso-distance contours
+around the nadir) appear in the haze over the planet surface. Clean at ground
+level; clean above `blendEndKm` (pure raymarch). Known facts from bisection:
+
+- Bands live in the **AP-LUT branch**: `hazeMode=raymarch` is clean, and
+  `blendEndKm` (which scales the AP↔raymarch mix) directly modulates band
+  visibility. `?hires=1` (TLUT/MS resolution) has **no effect**.
+- **Tried and reverted** (`4827ff0`, reverted in `97e3003`): ±half-texel
+  per-pixel dither on the sample `w` + LUT build at 64 samples with per-voxel
+  jitter (mirroring the validated raymarch). Result: bands persisted AND the
+  haze went visibly noisy — worse overall. The failure is informative: if a
+  half-slice W dither doesn't break up the bands, the W-interpolation-kink
+  hypothesis is wrong or incomplete. Next suspects: the 32×32 **screen-space
+  XY** interpolation (froxel rays diverge strongly at altitude, and the
+  underground-froxel correction rewrites ray dir/tMax per voxel → neighbouring
+  XY texels store integrals of genuinely different rays); or banding baked
+  into the stored values by the correction itself. A `?debug=ap-alpha`
+  screenshot at a banding altitude, compared against `?debug=rm-alpha`, would
+  discriminate content-vs-addressing before any next fix attempt.
+- SebH's reference never exhibits this because its AP coverage is 128 km
+  (8 km far-slice spacing) vs our 1024 km in demo 05; his build also scales
+  samples per slice (`2*(sliceId+1)`, RenderSkyRayMarching.hlsl:707).
+- Workaround available today: at high altitude use `hazeMode=raymarch` (or
+  lower `blendEndKm` so the auto ramp hands off earlier).
+
 ## Workstreams
 
 Model tiers chosen for token economy: **[H]** Haiku (mechanical), **[S]** Sonnet

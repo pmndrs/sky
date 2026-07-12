@@ -118,6 +118,21 @@ const cosFromAxis = abs(rayDirView.normalize().z)
 const distAlongRayM = abs(viewZ) / cosFromAxis
 ```
 
+### Screen-space LUT builds must match the consumer's UV convention (AP Y-flip)
+
+The haze post-process reconstructs rays with `ndc.y = 1 - 2*uv.y` (WebGPU
+v-down screen UV) and samples the AP LUT at that same uv. The LUT build
+originally filled rows bottom-up (row 0 = ndc.y −1) — a perfect mirror of
+the froxel field about screen centre. **Symptom:** in AP mode, haze on the
+lower screen _clears_ below a line that moves opposite to camera pitch,
+increasingly wrong with altitude; invisible at ground level (view is
+horizon-symmetric); raymarch mode looks correct. The raymarch/AP A/B is
+the discriminator: both modes share the distance reconstruction, so
+"raymarch right, AP wrong" isolates LUT content/addressing. Fixed by
+building rows top-down (`ndcY = 1 - 2*(y+0.5)/resY`,
+`AerialPerspectiveLUT.ts`). For any new screen-space LUT, assert build and
+sample agree on the V direction before debugging anything else.
+
 ### AP underground-froxel correction (the real fix for the horizon cliff)
 
 SebH's `RenderCameraVolumePS` (RenderSkyRayMarching.hlsl ~668-680) does

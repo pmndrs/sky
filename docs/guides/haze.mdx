@@ -52,7 +52,7 @@ independent of the dirty-flag system that governs the sky LUTs — see
 ## Composing with other effects (bloom, AO, grading)
 
 The first argument to `applyHaze` is the **composite base**: haze is applied
-over whatever node you pass, so effects that should sit *under* the haze
+over whatever node you pass, so effects that should sit _under_ the haze
 (bloom, AO, color work) must be composed into that node first. Any vec4
 screen-space TSL expression works, not just a raw pass texture node:
 

@@ -251,6 +251,25 @@ binary cached. After non-trivial shader edits, **hard-reload**
 shader behavior. The MS LUT "black" mystery during phase 1b debugging was
 partly stale build cache.
 
+### `applyHaze` now really composites over its first argument (2026-08-09)
+
+`applyHaze(sceneColorNode, opts)` used to `void sceneColorNode` and let
+`createHazeOutputNode` read `scenePass.getTextureNode('output')` directly —
+so a consumer composing bloom/AO before haze had that work silently
+discarded (found by the Paris hero demo, where haze-on made bloom vanish
+with no error). `createHazeOutputNode` now takes an optional
+`sceneColorNode` used as the composite base; `applyHaze` passes its first
+argument through. A caller-supplied node is used **directly** (screen-space
+TSL expressions and texture nodes both evaluate at the fragment's UV); only
+the internal fallback texture node gets an explicit `.sample(u)`. Don't
+"simplify" this back to sampling the scenePass — that re-introduces the bug.
+Docs: `docs/guides/haze.mdx` § "Composing with other effects".
+
+Same session also confirmed two React-bindings fixes that predate it
+(esbuild `jsx: 'automatic'` in build.config.ts; `@react-three/fiber/webgpu`
+import in src/react/Sky.tsx) — both were required for the `./react` entry to
+work at all in a consumer.
+
 ### The benign `<!DOCTYPE` JSON parse error
 
 Every page logs `Uncaught (in promise) SyntaxError: Unexpected token '<'`

@@ -49,6 +49,34 @@ LUT's froxels are camera-transform-dependent and must refresh every frame,
 independent of the dirty-flag system that governs the sky LUTs — see
 [Baker: dirty-flag semantics](../api/baker#dirty-flag-semantics).
 
+## Composing with other effects (bloom, AO, grading)
+
+The first argument to `applyHaze` is the **composite base**: haze is applied
+over whatever node you pass, so effects that should sit *under* the haze
+(bloom, AO, color work) must be composed into that node first. Any vec4
+screen-space TSL expression works, not just a raw pass texture node:
+
+```js
+import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js'
+
+const color = scenePass.getTextureNode('output')
+const emissive = scenePass.getTextureNode('emissive')
+
+let graph = color.add(bloom(emissive, 0.5, 0.5))
+graph = sky.applyHaze(graph, { scenePass }) // haze over scene + bloom
+post.outputNode = graph // temporal resolve (TRAA/FSR) goes after this
+```
+
+Sky pixels keep the base color unchanged (the cube background already
+contains atmospheric scattering), so bloom that spills over the sky
+survives too.
+
+> **History:** before 2026-08-09 `applyHaze` ignored `sceneColorNode` and
+> composited over `scenePass.getTextureNode('output')` directly, silently
+> discarding anything composed before it — the documented composition
+> pattern above did not work. If haze appears to "eat" your bloom/AO, you
+> are on a build older than that fix.
+
 ## Two integration methods, one output
 
 Haze on a given geometry pixel can come from either of two integrations,

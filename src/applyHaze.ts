@@ -106,13 +106,9 @@ export function applyHaze(
   if (useCameraFar === undefined) useCameraFar = seedFar > 1e6
   if (useCameraFar && !sky._cameraFar) sky._cameraFar = uniform(seedFar)
 
-  // `sceneColorNode` is accepted for API symmetry with future operators
-  // (bloom-then-haze, etc.). Today's `createHazeOutputNode` reads colour
-  // off the scenePass directly; future revisions will accept the node.
-  void sceneColorNode
-
   return createHazeOutputNode({
     scenePass,
+    sceneColorNode,
     aerialPerspectiveTexture: ap.texture,
     luminanceScale: baker.sky.luminanceScale,
     invProjUniform: ap.invProjUniform,

@@ -26,6 +26,13 @@ import { createHazeDepthNodes } from './hazeScenePassDepth'
 
 interface CreateHazeOutputNodeArgs {
   scenePass: any
+  /**
+   * Scene-color node to composite the haze over. Optional; falls back to
+   * `scenePass.getTextureNode('output')`. Pass a composed graph (bloom, AO,
+   * grading…) so the haze goes on top of it instead of the raw scene pass —
+   * without this, every effect composed before the haze is silently discarded.
+   */
+  sceneColorNode?: any
   aerialPerspectiveTexture: any
   luminanceScale: any
   invProjUniform: any
@@ -139,6 +146,7 @@ interface CreateHazeOutputNodeArgs {
  */
 export function createHazeOutputNode({
   scenePass,
+  sceneColorNode = null,
   aerialPerspectiveTexture,
   luminanceScale,
   invProjUniform,
@@ -187,7 +195,7 @@ export function createHazeOutputNode({
     }
   }
 
-  const sceneColor = scenePass.getTextureNode('output')
+  const sceneColor = sceneColorNode ?? scenePass.getTextureNode('output')
   // `PassNode` uses `perspectiveDepthToViewZ` for `getViewZNode` — correct for
   // default depth, wrong when `logarithmicDepthBuffer` is on; see hazeScenePassDepth.js
   const { viewZNode, linearDepthNode } = createHazeDepthNodes(scenePass, logarithmicDepthBuffer)
@@ -198,7 +206,10 @@ export function createHazeOutputNode({
 
   return Fn(() => {
     const u = uv()
-    const baseColor = sceneColor.sample(u)
+    // A caller-supplied node is already a screen-space expression (texture
+    // nodes auto-sample at the fragment's uv); only the internal fallback
+    // texture node needs the explicit sample.
+    const baseColor = sceneColorNode ? sceneColor : sceneColor.sample(u)
 
     // IMPORTANT — distance metric correctness.
     //

@@ -98,6 +98,9 @@ export class SkyAtmosphereBaker {
   _cameraPositionKm: Vector3
   _cameraUp: Vector3
   _cameraAltitudeM: number
+  _lastSkyViewHeightKm: number
+  _lastSkyViewZenith: number
+  _lastCubeZenith: number
 
   constructor(
     renderer: any,
@@ -232,6 +235,13 @@ export class SkyAtmosphereBaker {
     this._cameraUp = new Vector3(0.0, 1.0, 0.0)
     this._skyViewSunZenith = 1.0 // sunVec(+Y) · cameraUp(+Y) at construction
     this._cameraAltitudeM = 1.0
+
+    // State at the last SkyView render / cube bake, recorded in update().
+    // setCamera() compares against these to decide whether anything actually
+    // changed — NaN guarantees the first comparison reads as "changed".
+    this._lastSkyViewHeightKm = NaN
+    this._lastSkyViewZenith = NaN
+    this._lastCubeZenith = NaN
   }
 
   get texture(): Texture {
@@ -302,9 +312,13 @@ export class SkyAtmosphereBaker {
     // the planet) — re-derive it every camera update. Also refresh the cube
     // bake when the frame drifts meaningfully: background + IBL are baked
     // from the same LUT and would otherwise keep the stale sun frame.
-    const prevZenith = this._skyViewSunZenith
+    //
+    // Both comparisons run against the state at the LAST render (recorded in
+    // update()), not the previous frame. Frame-to-frame deltas can each stay
+    // under threshold while slowly accumulating unbounded drift — a slow
+    // planet orbit would otherwise never re-bake the cube.
     this._syncSkyViewSunFrame()
-    if (Math.abs(this._skyViewSunZenith - prevZenith) > 1e-3) {
+    if (!(Math.abs(this._skyViewSunZenith - this._lastCubeZenith) <= 1e-3)) {
       this.cubeDirty = true
     }
 
@@ -312,7 +326,15 @@ export class SkyAtmosphereBaker {
       this.aerialPerspectiveLUT.setCamera(camera, { planetCenter })
     }
 
-    this.cameraDirty = true
+    // Only mark the SkyView LUT stale when an input it actually reads has
+    // changed. `Sky.update(camera)` calls setCamera unconditionally every
+    // frame; before this guard that re-rendered the SkyView LUT per frame
+    // even with a fully static camera and sun.
+    const heightChanged = !(Math.abs(viewHeightKm - this._lastSkyViewHeightKm) <= 1e-6)
+    const zenithChanged = !(Math.abs(this._skyViewSunZenith - this._lastSkyViewZenith) <= 1e-6)
+    if (heightChanged || zenithChanged) {
+      this.cameraDirty = true
+    }
   }
 
   /**
@@ -471,6 +493,13 @@ export class SkyAtmosphereBaker {
       this.skyViewLUT.render()
     }
 
+    if (skyDirty) {
+      // Record what the SkyView LUT was rendered with, so setCamera() can
+      // skip re-marking it dirty until an input meaningfully changes.
+      this._lastSkyViewHeightKm = this.sky.viewHeight.value
+      this._lastSkyViewZenith = this._skyViewSunZenith
+    }
+
     // 2. Cube bake — sun disc OFF to keep PMREM clean (see PLAN.md risk #3).
     // Skip the cube re-bake if only camera moved without other state change
     // (the IBL doesn't care about main-camera position).
@@ -504,6 +533,9 @@ export class SkyAtmosphereBaker {
       } else {
         this.pmremGenerator.fromCubemap(this.cubeRenderTarget.texture, this._pmremTarget)
       }
+
+      // The cube now holds this sun frame; drift is measured from here.
+      this._lastCubeZenith = this._skyViewSunZenith
     }
 
     this.sunDirty = false

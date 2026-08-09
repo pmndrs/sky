@@ -48,6 +48,14 @@ interface CreateHazeOutputNodeArgs {
   raymarchBlendEndKm?: any
   raymarchCoverageBlendKm?: any
   enableRaymarchFallback?: boolean
+  /**
+   * Sample count for the per-pixel raymarch fallback. Default 64 — chosen to
+   * keep 1000+ km grazing rays band-free at orbit altitude (see the comment at
+   * the integrator call). Ground-level scenes whose raymarch rays stay short
+   * can drop this to 32 (or SebH's production-equivalent ~14) for a cheaper
+   * shader. Build-time constant: changing it requires rebuilding the node.
+   */
+  raymarchSampleCount?: number
   atmosphereUniforms?: any
   sunDirection?: any
   viewHeightKm?: any
@@ -162,6 +170,7 @@ export function createHazeOutputNode({
   raymarchBlendEndKm = null,
   raymarchCoverageBlendKm = null,
   enableRaymarchFallback = false,
+  raymarchSampleCount = 64,
   atmosphereUniforms = null,
   sunDirection = null,
   viewHeightKm = null,
@@ -313,7 +322,17 @@ export function createHazeOutputNode({
     // docs at the top of this file.
     const forceRaymarch = raymarchOnlyUniform ? raymarchOnlyUniform.greaterThan(float(0.5)) : null
     const raymarchWeight = forceRaymarch ? forceRaymarch.select(float(1.0), policyWeight) : policyWeight
-    const useRaymarch = raymarchWeight.greaterThan(float(0.0))
+    // Sky pixels are excluded: their depth sits at the far plane, so with a
+    // large `camera.far` (planet demos use 20,000 km) `distKm` puts every sky
+    // pixel past AP coverage and into this branch — where the 64-sample
+    // integration runs and is then thrown away by the final `isSky` mix.
+    // That silently burned more GPU time than everything else in the haze
+    // pass combined. SebH's reference does the same exclusion the other way
+    // round: `RenderRayMarchingPS` early-outs `DepthBufferValue == 1.0` pixels
+    // to a SkyView LUT sample before any per-pixel marching (FASTSKY path,
+    // RenderSkyRayMarching.hlsl:318-341). Our sky mesh already IS that LUT
+    // sample, so sky pixels have nothing to compute here.
+    const useRaymarch = raymarchWeight.greaterThan(float(0.0)).and(isSky.not())
 
     // Debug bisection — JS-side mode select (compiles to one branch).
     if (debugMode === 'ap-rgb') return vec4(ap.rgb.mul(luminanceScale).mul(5.0), 1.0)
@@ -391,7 +410,7 @@ export function createHazeOutputNode({
           // produces visible rings/banding closer to the planet
           // horizon. 64 samples (~16 km/step on a 1000 km ray) cleans
           // it up at modest cost — geometry pixels only, not sky.
-          sampleCount: 64,
+          sampleCount: raymarchSampleCount,
           ground: false, // we already have the surface in the scene; don't double-count
           mieRayPhase: true,
           tMaxOverride: distKmVar,

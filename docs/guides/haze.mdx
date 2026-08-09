@@ -92,6 +92,15 @@ selected per-pixel by **policy**:
   expensive per-pixel, but has no coverage limit and stays correct at any
   camera altitude/orientation.
 
+Sky pixels never take either path — the sky mesh already renders the full
+Sky-View LUT integration behind the geometry, so the post-process passes
+their colour through untouched. The raymarch fallback runs at 64 samples
+per pixel by default (band-free on 1000 km grazing rays at orbit
+altitude); ground-level scenes whose raymarched geometry stays close can
+cheapen the shader with `applyHaze(node, { raymarchSampleCount: 32 })`.
+This is a build-time constant, not a live uniform — call `applyHaze`
+again to change it.
+
 ### `policy` options
 
 | Policy             | Behavior                                                                                                                                                                                                                                                                                       |

@@ -64,7 +64,7 @@ whose inputs haven't changed:
 | `atmosDirty`  | `setAtmosphereParams(partial)`                                                                   | Transmittance + MultiScatter + SkyView + cube bake + PMREM (full chain)      |
 | `sunDirty`    | `setSun({ elevation, azimuth })`                                                                 | SkyView + cube bake + PMREM (Transmittance/MultiScatter don't depend on sun) |
 | `cubeDirty`   | `markCubeDirty()`, or indirectly by the above, or a meaningful camera-frame drift in planet mode | Cube bake + PMREM only                                                       |
-| `cameraDirty` | `setCamera(camera, opts)`                                                                        | SkyView (viewHeight) — the AP LUT is refreshed separately, see below         |
+| `cameraDirty` | `setCamera(camera, opts)`, only when viewHeight or the local sun zenith actually changed         | SkyView (viewHeight) — the AP LUT is refreshed separately, see below         |
 
 `update()` is a no-op if nothing is dirty. This is why calling `sky.update(camera)`
 every frame is cheap once the sun/atmosphere have settled — most frames it's

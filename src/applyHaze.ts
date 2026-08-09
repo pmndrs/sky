@@ -11,6 +11,7 @@ interface ApplyHazeOptions {
   logarithmicDepthBuffer?: boolean
   useCameraFar?: boolean
   includeSkyCubeBlend?: boolean
+  raymarchSampleCount?: number
   debugMode?: string | null
 }
 
@@ -56,6 +57,11 @@ interface ApplyHazeOptions {
  *   creates a `cameraFar` uniform refreshed each frame in `sky.update`.
  *   Defaults to `true` when `camera.far > 1e6`, else `false`.
  * @param {boolean} [options.includeSkyCubeBlend=false]  legacy shim — see HazePostProcess.js
+ * @param {number} [options.raymarchSampleCount=64]      samples per pixel on the
+ *   raymarch fallback path (geometry past AP coverage / raymarch policy). 64
+ *   keeps orbit-altitude grazing rays band-free; ground-level scenes can use
+ *   32 or lower for a cheaper shader. Build-time constant — rebuild the node
+ *   (call `applyHaze` again) to change it.
  * @param {string} [options.debugMode]                   AP debug mode passthrough
  * @returns {THREE.Node} vec4 output node
  */
@@ -70,6 +76,7 @@ export function applyHaze(
     logarithmicDepthBuffer = false,
     useCameraFar,
     includeSkyCubeBlend = false,
+    raymarchSampleCount = 64,
     debugMode = null,
   }: ApplyHazeOptions = {},
 ): any {
@@ -126,6 +133,7 @@ export function applyHaze(
     // rebuild. Users wanting the smaller AP-only shader can call
     // `createHazeOutputNode` directly.
     enableRaymarchFallback: true,
+    raymarchSampleCount,
     atmosphereUniforms: baker.atmosphereUniforms,
     sunDirection: baker.sky.sunDirection,
     viewHeightKm: baker.sky.viewHeight,

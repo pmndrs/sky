@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>@pmndrs/sky — Paris city rotation</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+        font-variant-numeric: tabular-nums;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">@pmndrs/sky · Paris city rotation — <span id="fps">…</span></div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { pass } from 'three/tsl'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { Sky, presets } from '@pmndrs/sky'
+
+      // ---------------------------------------------------------------------
+      // Simplified port of the paris-mini-site-hero "hero demo" (Stage 1):
+      // Faraz's block city + a landmark tower, slow orbit, real Paris solar
+      // position, and @pmndrs/sky as the only light source authority. The
+      // hero's FSR3/SSGI/bloom stages are intentionally absent — this page is
+      // the sky + haze template for city-scale projects, and an A/B bench for
+      // the haze post-process (`haze` toggle + FPS readout).
+      //
+      // Scale note (the trap the hero demo hit): @pmndrs/sky reads camera
+      // height in METRES. The city is authored at ~400 units; at 1 unit = 1 m
+      // that's a 400 m town where atmospheric extinction is invisible. A root
+      // WORLD_SCALE of 5 puts the tower at ~330 m and the city span at ~2 km
+      // (matching real Paris), where haze is a physical quantity rather than
+      // an art knob.
+      // ---------------------------------------------------------------------
+
+      const WORLD_SCALE = 5
+      const PARIS_LATITUDE = 48.8566
+      const CONFERENCE_DAY_OF_YEAR = 176 // 2026-06-25
+
+      const renderer = new THREE.WebGPURenderer({ antialias: true })
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      renderer.toneMappingExposure = 0.5
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      renderer.inspector = new Inspector()
+      document.body.appendChild(renderer.domElement)
+
+      await renderer.init()
+
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        timeOfDay: 20.5, // golden hour over Paris in late June
+        latitude: PARIS_LATITUDE,
+        dayOfYear: CONFERENCE_DAY_OF_YEAR,
+        north: '+Z',
+        exposure: 40,
+        sunDisc: true,
+        enableAerialPerspective: true,
+      })
+
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+
+      // Sun-tracking directional light (keeps lit faces in the sky's
+      // luminance range — see the silhouette-fringe gotcha in CLAUDE.md).
+      const sun = sky.createSun({ intensity: 4, castShadow: true, shadowMapSize: 2048 })
+      sun.attach(scene)
+      // City span is ~2 km; a tight default shadow frustum clips it.
+      sun.light.shadow.camera.left = -450 * WORLD_SCALE
+      sun.light.shadow.camera.right = 450 * WORLD_SCALE
+      sun.light.shadow.camera.top = 450 * WORLD_SCALE
+      sun.light.shadow.camera.bottom = -450 * WORLD_SCALE
+      sun.light.shadow.camera.near = 1
+      sun.light.shadow.camera.far = 6000 * WORLD_SCALE
+
+      // --- camera: locked slow orbit around the tower --------------------
+      const camera = new THREE.PerspectiveCamera(
+        30,
+        window.innerWidth / window.innerHeight,
+        0.2 * WORLD_SCALE,
+        1400 * WORLD_SCALE,
+      )
+      camera.position.set(180 * WORLD_SCALE, 45 * WORLD_SCALE, 180 * WORLD_SCALE)
+
+      const controls = new OrbitControls(camera, renderer.domElement)
+      controls.target.set(0, 33 * WORLD_SCALE, 0) // mid-tower
+      controls.enableDamping = true
+      controls.autoRotate = true
+      controls.autoRotateSpeed = 0.5
+      // Keep the orbit just above level with the horizon (hero locks 93°).
+      controls.minPolarAngle = THREE.MathUtils.degToRad(60)
+      controls.maxPolarAngle = THREE.MathUtils.degToRad(95)
+      controls.update()
+
+      // --- city ----------------------------------------------------------
+      // Deterministic PRNG (mulberry32) so every reload measures the same
+      // Paris — perf numbers are meaningless on a reshuffled city.
+      function makeRng(seed) {
+        let a = seed >>> 0
+        return () => {
+          a = (a + 0x6d2b79f5) >>> 0
+          let t = Math.imul(a ^ (a >>> 15), 1 | a)
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+        }
+      }
+
+      const world = new THREE.Group()
+      world.scale.setScalar(WORLD_SCALE)
+      scene.add(world)
+
+      const INNER_RADIUS = 12
+      const OUTER_RADIUS = 400
+      const HIGH_RISES = 300
+      const LOW_RISES = 10000
+      const TREES = 20000
+
+      function buildCity() {
+        const random = makeRng(0x9e3779b9)
+        const dummy = new THREE.Object3D()
+        const mesh = new THREE.InstancedMesh(
+          new THREE.BoxGeometry(1, 1, 1),
+          new THREE.MeshStandardMaterial({ color: 'white', roughness: 0.85, metalness: 0.1 }),
+          HIGH_RISES + LOW_RISES,
+        )
+        mesh.castShadow = true
+        mesh.receiveShadow = true
+        // Single instanced mesh spanning the whole city: culling is
+        // all-or-nothing and never triggers while the city is in frame.
+        mesh.frustumCulled = false
+
+        let i = 0
+
+        // Tall high-rises: sparse, outer band only, so the foreground stays
+        // low and the skyline rises behind it.
+        const highRiseStart = INNER_RADIUS + (OUTER_RADIUS - INNER_RADIUS) * 0.55
+        for (let n = 0; n < HIGH_RISES; n++) {
+          const angle = random() * Math.PI * 2
+          const radius = highRiseStart + Math.pow(random(), 0.5) * (OUTER_RADIUS - highRiseStart)
+          const distanceFactor = (radius - INNER_RADIUS) / (OUTER_RADIUS - INNER_RADIUS)
+          const sizeScale = THREE.MathUtils.lerp(1, 2.4, distanceFactor)
+          const width = THREE.MathUtils.lerp(1.5, 8, random()) * sizeScale
+          const depth = THREE.MathUtils.lerp(1.5, 8, random()) * sizeScale
+          const height =
+            THREE.MathUtils.lerp(10, 30, Math.pow(random(), 1.2)) * THREE.MathUtils.lerp(0.8, 1.6, distanceFactor)
+          dummy.position.set(Math.cos(angle) * radius, height / 2, Math.sin(angle) * radius)
+          dummy.scale.set(width, height, depth)
+          dummy.rotation.y = random() * Math.PI * 2
+          dummy.updateMatrix()
+          mesh.setMatrixAt(i++, dummy.matrix)
+        }
+
+        // Haussmann low-rise carpet: dense, small, near-uniform height.
+        for (let n = 0; n < LOW_RISES; n++) {
+          const angle = random() * Math.PI * 2
+          const t = Math.pow(random(), 0.85)
+          const radius = INNER_RADIUS + t * (OUTER_RADIUS - INNER_RADIUS)
+          const distanceFactor = (radius - INNER_RADIUS) / (OUTER_RADIUS - INNER_RADIUS)
+          const sizeScale = THREE.MathUtils.lerp(0.5, 2, distanceFactor)
+          const width = THREE.MathUtils.lerp(1.2, 3.5, random()) * sizeScale
+          const depth = THREE.MathUtils.lerp(1.2, 3.5, random()) * sizeScale
+          const height = THREE.MathUtils.lerp(2, 4, random()) * THREE.MathUtils.lerp(0.6, 1.4, distanceFactor)
+          dummy.position.set(Math.cos(angle) * radius, height / 2, Math.sin(angle) * radius)
+          dummy.scale.set(width, height, depth)
+          dummy.rotation.y = random() * Math.PI * 2
+          dummy.updateMatrix()
+          mesh.setMatrixAt(i++, dummy.matrix)
+        }
+
+        mesh.instanceMatrix.needsUpdate = true
+        return mesh
+      }
+
+      function buildTrees() {
+        const random = makeRng(0x85ebca6b)
+        const dummy = new THREE.Object3D()
+        const mesh = new THREE.InstancedMesh(
+          // 80 tris vs the default sphere's 960 — invisible at ~8 px.
+          new THREE.IcosahedronGeometry(1, 1),
+          new THREE.MeshStandardMaterial({ color: 'white', roughness: 0.95, metalness: 0 }),
+          TREES,
+        )
+        mesh.receiveShadow = true // 20k shadow CASTERS buy nothing at this size
+        mesh.frustumCulled = false
+
+        for (let n = 0; n < TREES; n++) {
+          const angle = random() * Math.PI * 2
+          const t = Math.pow(random(), 0.85)
+          const radius = INNER_RADIUS + t * (OUTER_RADIUS - INNER_RADIUS)
+          const distanceFactor = (radius - INNER_RADIUS) / (OUTER_RADIUS - INNER_RADIUS)
+          const sizeScale = THREE.MathUtils.lerp(0.6, 2, distanceFactor)
+          const height = THREE.MathUtils.lerp(1, 3, random()) * sizeScale
+          const spread = THREE.MathUtils.lerp(0.5, 1.1, random()) * sizeScale
+          dummy.position.set(Math.cos(angle) * radius, height / 2, Math.sin(angle) * radius)
+          dummy.scale.set(spread, height * 0.5, spread)
+          dummy.rotation.y = random() * Math.PI * 2
+          dummy.updateMatrix()
+          mesh.setMatrixAt(n, dummy.matrix)
+        }
+
+        mesh.instanceMatrix.needsUpdate = true
+        return mesh
+      }
+
+      // Landmark tower stand-in (the hero loads a GLTF): four tapered tiers
+      // to ~66 units — ~330 m at WORLD_SCALE 5, the real tower's height.
+      function buildTower() {
+        const group = new THREE.Group()
+        const mat = new THREE.MeshStandardMaterial({ color: 0x8a7660, roughness: 0.6, metalness: 0.4 })
+        const tiers = [
+          { y0: 0, y1: 20, r0: 8, r1: 4.5 },
+          { y0: 20, y1: 38, r0: 4.5, r1: 2.6 },
+          { y0: 38, y1: 58, r0: 2.6, r1: 1.1 },
+          { y0: 58, y1: 66, r0: 1.1, r1: 0.35 },
+        ]
+        for (const { y0, y1, r0, r1 } of tiers) {
+          const h = y1 - y0
+          const tier = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, h, 4, 1), mat)
+          tier.position.y = y0 + h / 2
+          tier.rotation.y = Math.PI / 4
+          tier.castShadow = true
+          tier.receiveShadow = true
+          group.add(tier)
+        }
+        return group
+      }
+
+      const ground = new THREE.Mesh(
+        new THREE.CircleGeometry(OUTER_RADIUS * 2.2, 64),
+        new THREE.MeshStandardMaterial({ color: 0x4a4a48, roughness: 0.95 }),
+      )
+      ground.rotation.x = -Math.PI / 2
+      ground.receiveShadow = true
+      world.add(ground)
+
+      world.add(buildCity())
+      world.add(buildTrees())
+      world.add(buildTower())
+
+      // --- post-process: aerial-perspective haze -------------------------
+      // Both output nodes are built once; the toggle swaps which one the
+      // pipeline presents. RenderPipeline only recompiles when `needsUpdate`
+      // is set — assigning outputNode alone silently keeps the old shader.
+      const scenePass = pass(scene, camera)
+      const post = new THREE.RenderPipeline(renderer)
+      const plainNode = scenePass.getTextureNode('output')
+      const hazeNode = sky.applyHaze(plainNode, { scenePass, policy: 'auto', strength: 1.0 })
+
+      const state = {
+        haze: true,
+        hazeStrength: 1.0,
+        hazePolicy: 'auto',
+        timeOfDay: 20.5,
+        exposure: 40,
+        turbidity: 1.0,
+        preset: 'earth',
+        autoRotate: true,
+        autoRotateSpeed: 0.5,
+        toneExposure: renderer.toneMappingExposure,
+      }
+
+      function applyHazeToggle() {
+        post.outputNode = state.haze ? hazeNode : plainNode
+        post.needsUpdate = true
+      }
+      applyHazeToggle()
+
+      const gui = renderer.inspector.createParameters('Paris city')
+      gui.add(state, 'haze').onChange(applyHazeToggle)
+      gui.add(state, 'hazeStrength', 0, 3, 0.05).onChange((v) => sky.setHazeStrength(v))
+      gui.add(state, 'hazePolicy', ['auto', 'ap', 'raymarch']).onChange((v) => sky.setHazePolicy(v))
+      gui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => sky.setTimeOfDay(v))
+      gui.add(state, 'exposure', 1, 200, 1).onChange((v) => sky.setExposure(v))
+      gui.add(state, 'turbidity', 0, 10, 0.05).onChange((v) => sky.setTurbidity(v))
+      gui.add(state, 'preset', Object.keys(presets)).onChange((v) => sky.setPreset(v))
+      gui.add(state, 'autoRotate').onChange((v) => (controls.autoRotate = v))
+      gui.add(state, 'autoRotateSpeed', 0, 10, 0.1).onChange((v) => (controls.autoRotateSpeed = v))
+      gui.add(state, 'toneExposure', 0, 2, 0.001).onChange((v) => {
+        renderer.toneMappingExposure = v
+      })
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight
+        camera.updateProjectionMatrix()
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      })
+
+      // --- loop ----------------------------------------------------------
+      const fpsEl = document.getElementById('fps')
+      let frames = 0
+      let lastStamp = performance.now()
+
+      renderer.setAnimationLoop(() => {
+        controls.update()
+        sky.update(camera)
+        // The AP LUT is camera-relative and refreshes per frame — but only
+        // when the haze node that consumes it is presenting.
+        if (state.haze) sky.updateAerialPerspective()
+        post.render()
+
+        frames++
+        const now = performance.now()
+        if (now - lastStamp >= 500) {
+          const fps = (frames * 1000) / (now - lastStamp)
+          const ms = (now - lastStamp) / frames
+          fpsEl.textContent = `${fps.toFixed(0)} FPS · ${ms.toFixed(2)} ms`
+          frames = 0
+          lastStamp = now
+        }
+      })
+    </script>
+  </body>
+</html>

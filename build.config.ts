@@ -27,6 +27,14 @@ export default defineBuildConfig({
     emitCJS: true,
     esbuild: {
       target: 'es2020',
+      // esbuild here does NOT pick up `jsx: "react-jsx"` from tsconfig.json, and
+      // its own default is the classic transform. That emitted
+      // `React.createElement(...)` into dist/react.mjs while the source only
+      // imports hooks and types from 'react' — so every consumer of `<Sky>` hit
+      // a runtime `ReferenceError: React is not defined` on first render.
+      //
+      // `automatic` uses react/jsx-runtime, which the bundle imports itself.
+      jsx: 'automatic',
     },
   },
 })

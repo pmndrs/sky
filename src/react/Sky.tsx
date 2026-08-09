@@ -1,6 +1,16 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
+// The WebGPU entry, not the root one. This package is WebGPU-only, and R3F's
+// root entry is a separate ~670 KB bundle that imports three's WebGL build for
+// `WebGLRenderer` / `WebGLCubeRenderTarget`. Importing it here dragged the whole
+// WebGL path into WebGPU-only consumers, and outright broke them when this
+// package was consumed from a linked checkout: the root entry resolved against a
+// `three` that maps to `three.webgpu.js`, which has no `WebGLCubeRenderTarget`.
+//
+// Safe for consumers on either entry: both share one context object via
+// `globalThis[Symbol.for('@react-three/fiber.context')]`, so `useThree()` here
+// still sees a Canvas created from the root entry.
+import { useFrame, useThree } from '@react-three/fiber/webgpu'
 
 import { Sky as VanillaSky } from '../Sky'
 import { SkyContext } from './SkyContext'

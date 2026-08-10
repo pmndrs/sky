@@ -13,10 +13,10 @@ _Last audited: 2026-07-12, branch `feat/pmndrs-monorepo`._
 | three                                                                                          | ✅ 0.185.1 (`@types/three` 0.185)                                                                                                                                                                                              |
 | Vanilla examples (21 demos incl. parity harness)                                               | ✅ vite-build verified; browser smoke test still pending                                                                                                                                                                       |
 | React example                                                                                  | ⛔ blocked upstream — r3f canary imports `WebGLCubeRenderTarget` from `three/webgpu` (not exported there; fix is to use `CubeRenderTarget`). Not fixed as of `10.0.0-canary.2c50459`. One-line bump here once the alpha ships. |
-| Repo                                                                                           | ⚠️ 3 commits on `feat/pmndrs-monorepo`, unpushed; remote still `DennisSmolek/SebH-TSL-Sky`                                                                                                                                     |
+| Repo                                                                                           | ✅ live at `pmndrs/sky` — full history pushed 2026-08-10, origin re-pointed, CI green on Actions                                                                                                                               |
 | npm                                                                                            | ⚠️ `@pmndrs/sky` unpublished; trusted publisher (`pmndrs/sky` → `publish.yml`) not yet registered on npmjs                                                                                                                     |
-| Docs                                                                                           | ⛔ none (`README` only)                                                                                                                                                                                                        |
-| Demo site                                                                                      | ⛔ none                                                                                                                                                                                                                        |
+| Docs                                                                                           | ✅ live at https://pmndrs.github.io/sky/ — docs.yml verified on real Actions 2026-08-10 (two fixes: pmndrs/docs v3 has no `<Note>`/`<Warning>` MDX components; chown root-owned docker output)                                 |
+| Demo site                                                                                      | ✅ live at https://pmndrs.github.io/sky/examples/ (22 demos incl. component-04-city)                                                                                                                                           |
 
 ## Known defects
 
@@ -245,3 +245,21 @@ helps debugging D1 by visualizing the sun frame).
   top of `docs.yml` for the full limitation writeup. Linted clean with
   `actionlint`; **not executed on GitHub Actions** — unverified beyond
   static analysis.
+
+**2026-08-10 — pmndrs launch push + haze perf wave:**
+
+- ✅ 0.1 done differently than planned: `pmndrs/sky` was a README stub, full
+  history force-pushed over it (push needed `http.postBuffer` bump — HTTP 400
+  on chunked transfer), origin re-pointed. CI green on first Actions run.
+- ✅ 2.3-verify: docs.yml green on run 3 (fix 1: `<Note>`/`<Warning>` →
+  blockquotes, memo corrected; fix 2: chown docker-owned `docs/out`). Site +
+  examples gallery verified serving.
+- ✅ Haze perf: sky-pixel raymarch gate + SkyView rebuild gating (`01cfac1`),
+  `raymarchFallback`/`raymarchSampleCount` options, React `<Sky>` now drives
+  the per-frame AP update (`a100229`). SebH parity audit:
+  `research/sebh-parity-audit.md` — verdict: no quality drift, headroom is
+  scaling counts down. Follow-ups filed as pmndrs/sky issues #1–5.
+- ✅ component-04-city: vanilla Paris-rotation demo (haze A/B bench + FPS).
+- ⏳ Still open before v0.2.0: react example r3f-alpha.3 bump (0.4), browser
+  verification of `01cfac1` + component-04 (0.3/1.2), npm trusted publisher
+  (0.2), then tag.

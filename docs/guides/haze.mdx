@@ -165,35 +165,33 @@ atmosphere parameters.
 
 ## Known issue: concentric banding at 50–100 km altitude (AP LUT only)
 
-<Warning>
-**D4 (open, deferred).** From roughly 50–100 km camera altitude, the
-`'ap'`/`'auto'` policy can show smooth concentric arcs (iso-distance
-contours around the nadir) in the haze over the planet surface. Confirmed
-clean at ground level and clean above `blendEndKm` (pure raymarch). The
-bands live specifically in the **AP-LUT branch** — `hazeMode: 'raymarch'`
-is unaffected, and lowering `blendEndKm` (which hands off to raymarch
-earlier) directly reduces band visibility.
-
-Root cause is still open. A dither/jitter fix attempt (adding sub-texel
-noise to the LUT's W sample and per-voxel jitter during the LUT build) was
-tried and reverted — it didn't remove the bands and made the haze visibly
-noisier. That result rules out a simple W-interpolation-kink explanation;
-current suspects are the 32×32 screen-space XY interpolation (froxel rays
-diverge strongly at altitude, and neighbouring texels can end up storing
-integrals of meaningfully different ray directions once the
-underground-froxel correction rewrites a voxel's ray) or banding baked
-into the stored values by that same correction. See `ROADMAP.md`'s "D4"
-entry for the full bisection notes if you're picking this up.
-
-**Workaround today:** force raymarch at altitude —
-
-```js
-sky.setHazePolicy('raymarch')
-// or, staying in 'auto' but handing off to raymarch earlier:
-sky.setHazeAltitudeBlend({ endKm: 40 })
-```
-
-</Warning>
+> **Warning:**
+> **D4 (open, deferred).** From roughly 50–100 km camera altitude, the
+> `'ap'`/`'auto'` policy can show smooth concentric arcs (iso-distance
+> contours around the nadir) in the haze over the planet surface. Confirmed
+> clean at ground level and clean above `blendEndKm` (pure raymarch). The
+> bands live specifically in the **AP-LUT branch** — `hazeMode: 'raymarch'`
+> is unaffected, and lowering `blendEndKm` (which hands off to raymarch
+> earlier) directly reduces band visibility.
+>
+> Root cause is still open. A dither/jitter fix attempt (adding sub-texel
+> noise to the LUT's W sample and per-voxel jitter during the LUT build) was
+> tried and reverted — it didn't remove the bands and made the haze visibly
+> noisier. That result rules out a simple W-interpolation-kink explanation;
+> current suspects are the 32×32 screen-space XY interpolation (froxel rays
+> diverge strongly at altitude, and neighbouring texels can end up storing
+> integrals of meaningfully different ray directions once the
+> underground-froxel correction rewrites a voxel's ray) or banding baked
+> into the stored values by that same correction. See `ROADMAP.md`'s "D4"
+> entry for the full bisection notes if you're picking this up.
+>
+> **Workaround today:** force raymarch at altitude —
+>
+> ```js
+> sky.setHazePolicy('raymarch')
+> // or, staying in 'auto' but handing off to raymarch earlier:
+> sky.setHazeAltitudeBlend({ endKm: 40 })
+> ```
 
 ## Debugging
 

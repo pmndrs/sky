@@ -16,7 +16,11 @@ is already wildcarded; the workflow publishing to Pages is the whole hookup.
 - Required frontmatter: `title`, `description`. Optional: `nav` (number,
   ordering within a section), `image`, `sourcecode`.
 - Assets (logo, favicon, images) live inside `docs/`, referenced relatively.
-- Custom components available in MDX: `<Intro>`, `<Warning>`, `<Note>`, etc.
+- Custom components available in MDX (verified against pmndrs/docs v3 source,
+  2026-08-10 — the first docs build failed on this): `<Code>`, `<Codesandbox>`,
+  `<Details>`, `<Entries>`, `<Gha>`, `<Img>`, `<Intro>`, `<Keypoints>`,
+  `<Link>`, `<Mermaid>`, `<People>`, `<Sandpack>`, `<Summary>`, `<Toc>`.
+  There is **no** `<Note>` or `<Warning>` — use markdown blockquotes.
 - Code blocks: GFM triple-backtick; Sandpack live examples supported (see r3f).
 
 Verbatim example (r3f `docs/getting-started/introduction.mdx`):

@@ -48,12 +48,11 @@ using both `TransmittanceLUT` and `MultiScatterLUT`. Re-rendered whenever
 the sun (`sunDirty`) or camera altitude (`cameraDirty`) changes, or on
 `atmosDirty`.
 
-<Warning>
-  The Sky-View LUT's horizon-packed V parameterization assumes the camera is *inside* the atmosphere. As camera altitude
-  approaches `topRadius` (~100 km), the horizon angle collapses and the LUT degrades into visible concentric banding.
-  `SkyAtmosphereMesh` switches to a per-pixel raymarch fallback above `topRadius` to avoid this — see the [Planet-scale
-  guide](../guides/planet-scale).
-</Warning>
+> **Warning:**
+> The Sky-View LUT's horizon-packed V parameterization assumes the camera is _inside_ the atmosphere. As camera altitude
+> approaches `topRadius` (~100 km), the horizon angle collapses and the LUT degrades into visible concentric banding.
+> `SkyAtmosphereMesh` switches to a per-pixel raymarch fallback above `topRadius` to avoid this — see the [Planet-scale
+> guide](../guides/planet-scale).
 
 ## `AerialPerspectiveLUT`
 

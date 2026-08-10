@@ -75,12 +75,11 @@ Vector fields (`rayleighScattering`, `mieScattering`, etc.) accept a
 `THREE.Vector3`, a plain `{x, y, z}`, or a `[x, y, z]` array anywhere a
 partial override is accepted — `mergeAtmosphereParams` normalizes them.
 
-<Note>
-  `sunIlluminance` here is a *parameter of the atmosphere model*, not the display-brightness knob you want for
-  day-to-day tuning — the LUTs are baked with sun illuminance normalized to `1.0` regardless of this field (the
-  `ILLUMINANCE_IS_ONE` contract — see [LUTs](../api/luts)). Use `sky.setExposure(n)` / the `exposure` constructor option
-  to control brightness.
-</Note>
+> **Note:**
+> `sunIlluminance` here is a _parameter of the atmosphere model_, not the display-brightness knob you want for
+> day-to-day tuning — the LUTs are baked with sun illuminance normalized to `1.0` regardless of this field (the
+> `ILLUMINANCE_IS_ONE` contract — see [LUTs](../api/luts)). Use `sky.setExposure(n)` / the `exposure` constructor option
+> to control brightness.
 
 ## `EARTH` defaults
 

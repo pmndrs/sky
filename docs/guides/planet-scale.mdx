@@ -104,11 +104,10 @@ Two things change for aerial-perspective haze at planet scale:
    rely on the automatic `camera.far > 1e6` heuristic) — see
    [Haze: `logarithmicDepthBuffer` and `useCameraFar`](../guides/haze#logarithmicdepthbuffer-and-usecamerafar).
 
-<Warning>
-  There's a known concentric-banding artifact in the AP LUT specifically at 50–100 km camera altitude — see [Haze: known
-  issue](../guides/haze#known-issue-concentric-banding-at-50100-km-altitude-ap-lut-only) for the workaround
-  (`sky.setHazePolicy('raymarch')`).
-</Warning>
+> **Warning:**
+> There's a known concentric-banding artifact in the AP LUT specifically at 50–100 km camera altitude — see [Haze: known
+> issue](../guides/haze#known-issue-concentric-banding-at-50100-km-altitude-ap-lut-only) for the workaround
+> (`sky.setHazePolicy('raymarch')`).
 
 ## Camera controls: `PlanetFlightControls`
 
@@ -138,12 +137,11 @@ renderer.setAnimationLoop(() => {
 })
 ```
 
-<Note>
-  `PlanetFlightControls` and the surface-placement helpers (`getPlanetCameraFrame`, `getPlanetLookAtTarget`,
-  `placeObjectOnPlanetSurface`, `createPlanetSurfacePatchGeometry`, etc., in `src/demo/planetScaleUtils.ts`) are
-  currently **demo infrastructure**, not part of the published `@pmndrs/sky` package — they're only reachable via the
-  workspace-internal `@sky/demo/...` Vite alias used inside `examples/vanilla`, not from the `@pmndrs/sky` npm package's
-  public exports. They're solid, tested code and a candidate for promotion to the public API (tracked on the project
-  roadmap) — if you need them today, vendor the relevant file from the repo rather than importing `@sky/...` from your
-  own project, which won't resolve outside this workspace.
-</Note>
+> **Note:**
+> `PlanetFlightControls` and the surface-placement helpers (`getPlanetCameraFrame`, `getPlanetLookAtTarget`,
+> `placeObjectOnPlanetSurface`, `createPlanetSurfacePatchGeometry`, etc., in `src/demo/planetScaleUtils.ts`) are
+> currently **demo infrastructure**, not part of the published `@pmndrs/sky` package — they're only reachable via the
+> workspace-internal `@sky/demo/...` Vite alias used inside `examples/vanilla`, not from the `@pmndrs/sky` npm package's
+> public exports. They're solid, tested code and a candidate for promotion to the public API (tracked on the project
+> roadmap) — if you need them today, vendor the relevant file from the repo rather than importing `@sky/...` from your
+> own project, which won't resolve outside this workspace.

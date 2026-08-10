@@ -51,15 +51,14 @@ new Sky(renderer, options?)
 | `sky.sunElevation` / `sky.sunAzimuth` | Current sun direction in degrees, as last set via `setTimeOfDay`/`setSunDirection`/etc.                                  |
 | `sky.stars`                           | The `SkyNight` instance if `enableStars()` was called, else `null`.                                                      |
 
-<Note>
-`sky.mesh` is the mesh the baker renders into its private cube camera — it
-is not attached to your scene and won't appear unless you add it yourself.
-If you want a *live* sky mesh in your own scene (one that updates every
-frame instead of only on cube re-bake, useful at planet scale where
-altitude changes fast), use `sky.baker.createSkyMesh({ scale, showSunDisc })`
-instead — see `examples/vanilla/component-03-planet.html` for a working
-example.
-</Note>
+> **Note:**
+> `sky.mesh` is the mesh the baker renders into its private cube camera — it
+> is not attached to your scene and won't appear unless you add it yourself.
+> If you want a _live_ sky mesh in your own scene (one that updates every
+> frame instead of only on cube re-bake, useful at planet scale where
+> altitude changes fast), use `sky.baker.createSkyMesh({ scale, showSunDisc })`
+> instead — see `examples/vanilla/component-03-planet.html` for a working
+> example.
 
 ## Lifecycle
 
@@ -71,12 +70,11 @@ example.
 | `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                        |
 | `dispose()`                 | Detaches and disposes the baker (LUT render targets, PMREM generator, sky mesh geometry/material). |
 
-<Warning>
-  `dispose()` does **not** dispose helper objects created via `createSun`, `createGround`, `createGroundedSkybox`,
-  `createMoon`, or `enableStars` — those own their own GPU resources (a `DirectionalLight`, geometry/material, or an
-  HDRI texture) and must be disposed separately by the caller. This is a known gap the docs are flagging for the library
-  maintainer; check the individual helper class for its own `dispose()` method.
-</Warning>
+> **Warning:**
+> `dispose()` does **not** dispose helper objects created via `createSun`, `createGround`, `createGroundedSkybox`,
+> `createMoon`, or `enableStars` — those own their own GPU resources (a `DirectionalLight`, geometry/material, or an
+> HDRI texture) and must be disposed separately by the caller. This is a known gap the docs are flagging for the library
+> maintainer; check the individual helper class for its own `dispose()` method.
 
 ### `update(camera, opts?)`
 

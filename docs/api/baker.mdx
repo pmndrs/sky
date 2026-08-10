@@ -70,11 +70,10 @@ whose inputs haven't changed:
 every frame is cheap once the sun/atmosphere have settled — most frames it's
 just a camera-height comparison.
 
-<Note>
-  `updateAerialPerspective()` is **not** part of the dirty-flag system — the AP LUT's froxels are camera-relative, so it
-  must re-render every frame the camera moves, regardless of any other dirty state. Call it explicitly each frame if
-  you've wired `applyHaze`.
-</Note>
+> **Note:**
+> `updateAerialPerspective()` is **not** part of the dirty-flag system — the AP LUT's froxels are camera-relative, so it
+> must re-render every frame the camera moves, regardless of any other dirty state. Call it explicitly each frame if
+> you've wired `applyHaze`.
 
 ## Sun and camera
 

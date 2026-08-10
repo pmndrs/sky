@@ -101,6 +101,13 @@ cheapen the shader with `applyHaze(node, { raymarchSampleCount: 32 })`.
 This is a build-time constant, not a live uniform — call `applyHaze`
 again to change it.
 
+Scenes whose geometry never exceeds AP coverage (a city under the default
+256 km cap) can drop the fallback from the shader entirely with
+`applyHaze(node, { raymarchFallback: false })` — the haze node shrinks to
+a LUT sample + composite, which compiles dramatically faster inside large
+post-processing megashaders (bloom + AO + temporal resolve). With it off,
+`policy: 'raymarch'` and the altitude blend are inert.
+
 ### `policy` options
 
 | Policy             | Behavior                                                                                                                                                                                                                                                                                       |

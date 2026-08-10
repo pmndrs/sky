@@ -84,6 +84,9 @@ export class Sky {
   _hazeRaymarchOnly?: any
   _hazeAltStart?: any
   _hazeAltEnd?: any
+  /** Set by `applyHaze` — signals that the AP LUT has a consumer and needs
+   *  its per-frame `updateAerialPerspective()` refresh. */
+  _hazeApplied?: boolean
   _night?: any
 
   constructor(

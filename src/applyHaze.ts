@@ -11,6 +11,7 @@ interface ApplyHazeOptions {
   logarithmicDepthBuffer?: boolean
   useCameraFar?: boolean
   includeSkyCubeBlend?: boolean
+  raymarchFallback?: boolean
   raymarchSampleCount?: number
   debugMode?: string | null
 }
@@ -57,6 +58,13 @@ interface ApplyHazeOptions {
  *   creates a `cameraFar` uniform refreshed each frame in `sky.update`.
  *   Defaults to `true` when `camera.far > 1e6`, else `false`.
  * @param {boolean} [options.includeSkyCubeBlend=false]  legacy shim — see HazePostProcess.js
+ * @param {boolean} [options.raymarchFallback=true]      compile the per-pixel
+ *   raymarch fallback into the shader. Default on so live policy switching
+ *   works. Pass `false` for scenes whose geometry never exceeds AP coverage
+ *   (a city under the default 256 km cap): the haze shader shrinks to a LUT
+ *   sample + composite — much smaller WGSL, dramatically faster pipeline
+ *   compile. With it off, `policy: 'raymarch'` and altitude blending are
+ *   inert (geometry past coverage clamps to the LUT's last slice).
  * @param {number} [options.raymarchSampleCount=64]      samples per pixel on the
  *   raymarch fallback path (geometry past AP coverage / raymarch policy). 64
  *   keeps orbit-altitude grazing rays band-free; ground-level scenes can use
@@ -76,6 +84,7 @@ export function applyHaze(
     logarithmicDepthBuffer = false,
     useCameraFar,
     includeSkyCubeBlend = false,
+    raymarchFallback = true,
     raymarchSampleCount = 64,
     debugMode = null,
   }: ApplyHazeOptions = {},
@@ -89,6 +98,14 @@ export function applyHaze(
   if (!ap) {
     throw new Error('applyHaze: Sky was constructed with `enableAerialPerspective: false`.')
   }
+
+  if (!raymarchFallback && policy === 'raymarch') {
+    console.warn("applyHaze: policy 'raymarch' has no effect with raymarchFallback: false.")
+  }
+
+  // Lets the React <Sky> binding (and any other frame driver) know the AP
+  // LUT now has a consumer and needs its per-frame refresh.
+  sky._hazeApplied = true
 
   // --- Sky-owned uniforms (lazy + reseed on every applyHaze() call) ---
   if (!sky._hazeStrength) sky._hazeStrength = uniform(strength)
@@ -129,10 +146,10 @@ export function applyHaze(
     cameraWorldUniform: ap.cameraWorldUniform,
     cameraFarUniform: useCameraFar ? sky._cameraFar : null,
     logarithmicDepthBuffer,
-    // Always wire the raymarch path so live policy switching works without
-    // rebuild. Users wanting the smaller AP-only shader can call
-    // `createHazeOutputNode` directly.
-    enableRaymarchFallback: true,
+    // On by default so live policy switching works without rebuild; scenes
+    // that never exceed AP coverage can pass `raymarchFallback: false` for a
+    // far smaller shader (see the option's JSDoc).
+    enableRaymarchFallback: raymarchFallback,
     raymarchSampleCount,
     atmosphereUniforms: baker.atmosphereUniforms,
     sunDirection: baker.sky.sunDirection,

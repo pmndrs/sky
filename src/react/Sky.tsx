@@ -175,6 +175,11 @@ export function Sky({
 
   useFrame((state) => {
     sky.update(state.camera)
+    // The AP LUT is camera-relative and must refresh per frame — but only
+    // once haze actually has a consumer (`applyHaze` sets `_hazeApplied`).
+    // Without this, haze on the React path sampled a stale LUT that never
+    // tracked the camera; every consumer had to drive the update themselves.
+    if (sky._hazeApplied) void sky.updateAerialPerspective()
   })
 
   return <SkyContext.Provider value={sky}>{children}</SkyContext.Provider>

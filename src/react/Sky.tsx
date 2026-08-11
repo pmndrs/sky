@@ -15,6 +15,33 @@ import { useFrame, useThree } from '@react-three/fiber/webgpu'
 import { Sky as VanillaSky } from '../Sky'
 import { SkyContext } from './SkyContext'
 
+/**
+ * StrictMode-safe disposal bookkeeping (see the attach effect). One pending
+ * timer per instance: scheduled on effect cleanup, canceled if the same
+ * instance re-attaches within the tick (the StrictMode remount), fired for
+ * real unmounts and instance swaps.
+ */
+const pendingDisposal = new Map<VanillaSky, ReturnType<typeof setTimeout>>()
+
+function cancelScheduledDispose(sky: VanillaSky) {
+  const timer = pendingDisposal.get(sky)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    pendingDisposal.delete(sky)
+  }
+}
+
+function scheduleDispose(sky: VanillaSky) {
+  cancelScheduledDispose(sky)
+  pendingDisposal.set(
+    sky,
+    setTimeout(() => {
+      pendingDisposal.delete(sky)
+      sky.dispose()
+    }, 0),
+  )
+}
+
 export interface SkyProps {
   preset?: string
   quality?: string
@@ -110,10 +137,21 @@ export function Sky({
   }, [renderer, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice])
 
   useEffect(() => {
+    cancelScheduledDispose(sky)
     sky.attach(scene)
     return () => {
       sky.detach()
-      sky.dispose()
+      // Disposal is DEFERRED one tick and cancelable, never synchronous.
+      // React StrictMode runs every effect as mount → cleanup → mount in
+      // dev; a synchronous `sky.dispose()` here destroyed the memoized
+      // instance's internals (dome mesh, LUT/cube targets) and then
+      // re-attached the husk. Symptom: the sky renders its first bake
+      // forever — every live setter (time of day, turbidity, latitude…)
+      // silently re-bakes an EMPTY sky scene into a texture no pipeline
+      // samples, with zero errors. The StrictMode remount re-runs this
+      // effect synchronously after cleanup, which cancels the pending
+      // disposal; a real unmount (or instance swap) lets it fire.
+      scheduleDispose(sky)
     }
   }, [sky, scene])
 

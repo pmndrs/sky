@@ -16,6 +16,24 @@ The main scene uses `baker.environmentTexture` (PMREM-filtered) for IBL and
 
 ## Gotchas that have already burned a session each
 
+### React StrictMode disposed the memoized Sky and froze it at its first bake (fixed 2026-08-12)
+
+The react binding's attach effect used to run `sky.detach(); sky.dispose()`
+synchronously in its cleanup. StrictMode's dev-mode mount → cleanup → mount
+cycle therefore **disposed the `useMemo`'d instance's internals** (sky-scene
+dome mesh, LUT/cube render targets) and re-attached the husk. Symptom, with
+zero console errors: the sky renders its construction-time bake forever —
+every live setter (`setTimeOfDay`, `setTurbidity`, `setLatitude`, mirror…)
+re-bakes an **empty** sky scene into a recreated texture that no long-lived
+pipeline samples, while the screen keeps showing the original bake through a
+cached GPU binding. Uniform-backed knobs (`setExposure`, `setHazeStrength`)
+keep working, which makes it look like "some sliders are dead".
+`src/react/Sky.tsx` now defers disposal one cancelable tick
+(`scheduleDispose`/`cancelScheduledDispose`) so the StrictMode remount
+cancels it and real unmounts still dispose. Never make that cleanup
+synchronous again, and mirror the pattern for any future memoized
+GPU-resource owner in the react bindings.
+
 ### TSL `.toVar()` inside a JS-unrolled loop produces a giant shader
 
 If a loop body calls `integrateScatteredLuminance` (or any function with

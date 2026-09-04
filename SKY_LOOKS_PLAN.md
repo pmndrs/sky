@@ -3,59 +3,59 @@
 ROADMAP track 4.4, which supersedes the old 4.4 "gradient mode" + 4.5 "Ghibli
 LUTs" rows. Research: [`research/stylized-ghibli-sky.md`](research/stylized-ghibli-sky.md).
 
-**State:** slices 1–4 written, `pnpm run ci` green, **zero shader code verified
-on a GPU**. Branch is `feat/sky-looks` off `main` (`c31d74a`), everything
-uncommitted.
+**State:** slices 1–4 written and **verified on a real WebGPU adapter**
+(headless Chromium, Metal). `pnpm run ci` green. Branch `feat/sky-looks` off
+`main`; first checkpoint commit `5c4cbc7`. Slice 5 not started.
 
 ---
 
-## 1. Start here — the verification gate
+## 1. Verification — done
 
-Slices 2, 3 and 4 are all shader code. None of it has compiled. The session that
-wrote it had no `chrome-devtools-mcp` and the repo has no playwright, so the
-CLAUDE.md browser loop could not be run. `pnpm run ci` passing means it builds
-and typechecks — nothing more.
+Verified 2026-09-04 with a headless-WebGPU Playwright script, now in the repo:
 
 ```
-pnpm --filter @pmndrs/sky-example-vanilla dev
-# http://localhost:5173/component-01-baked.html → "Look" GUI folder
+pnpm --filter @pmndrs/sky-example-vanilla dev      # note the port Vite prints
+cd examples/vanilla && BASE=http://localhost:<port>/ node scripts/verify-looks.mjs
 ```
 
-| #   | Check                                                       | What it proves                                                             |
-| --- | ----------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | Console clean on load (ignore the benign `<!DOCTYPE` error) | WGSL compiles at all                                                       |
-| 2   | `look: physical` is **pixel-identical to before**           | the `chroma 0, value 0` identity holds in the shader, not just the algebra |
-| 3   | `ghibli-day`, drag `chroma`                                 | hue shifts, brightness roughly holds                                       |
-| 4   | same, drag `value` / `intensity`                            | brightness moves                                                           |
-| 5   | `ghibli (track)`, scrub `timeOfDay` through dawn            | cross-fade around −6°..15° elevation                                       |
-| 6   | mirror sphere + ground pick up the look                     | cube → PMREM → IBL path works                                              |
-| 7   | `component-02-haze.html`                                    | haze hue follows the sky, no silhouette fringe                             |
+Both demos expose `window.__sky` for this. Results (960×540, pixelmatch
+threshold 0.04, fraction of pixels changed):
 
-Check 2 is the important one. If it fails, `applyLook` is not an identity at
-zero and everything downstream is suspect.
+| Check                                         | Result                          | Verdict                         |
+| --------------------------------------------- | ------------------------------- | ------------------------------- |
+| console errors/warnings, both demos           | 0                               | ✅                              |
+| identity look (chroma 0, value 0) vs physical | 0.0003                          | ✅ identity holds in the shader |
+| `setLook(null)` vs physical                   | 0.0002                          | ✅                              |
+| ghibli-day chroma-only, mean luminance        | 97.8 → 98.4                     | ✅ chroma preserves luminance   |
+| ghibli-day value=1, mean luminance            | 97.8 → 78.2                     | ✅ value moves it               |
+| `ghibli` track at +17° vs +4.5° vs −27°       | day / dusk / night bands chosen | ✅ elevation keying             |
+| haze demo, ghibli-dusk vs physical            | 0.67                            | ✅ AP retints                   |
+| haze demo, cleared vs physical                | 0.0002                          | ✅                              |
 
-Likely failure modes, in order: `.element(i)` index typing inside the TSL
-`Loop`; `luminance()` overload resolution; `uniformArray` element type
-inference (positions are `float`, colors `vec3`, eases `vec2`).
+Eyeballed frames (contact sheet was sent to the maintainer): dusk palette reads
+warm peach; night look lifts the sky from black — the moonlight case; haze on
+the mountains matches the sky with no visible silhouette fringe.
 
----
+### Caveats from the run
 
-## 2. Uncommitted
+- **Sun tint not visually confirmed.** `ghibli-dusk` with and without `sunTint`
+  rendered near-identically from the demo camera — the sun sits behind/beside
+  it, so `lightViewCosAngle ≤ 0` over most visible sky and the lobe weight is
+  ~0. The path compiles and runs; its look needs a camera facing the sun.
+- **`ghibli-day` reads flat grey-white at low camera elevation.** That is the
+  memo's `#e8f3f7` horizon stop doing exactly what it says. Art-direction
+  question, not a bug: a lower horizon stop (`at: -0.1`) or a more saturated
+  horizon colour would bring the cerulean in sooner.
+- Two process notes for whoever reads the earlier session log: an earlier
+  "Vite transforms all modules" check hit port 5173, which belonged to an
+  unrelated project — it proved nothing. And a frame labelled "dawn" at 06:18
+  was actually a +17° sun (June, lat 37.7°) — the track correctly chose the day
+  look, which is the elevation-vs-clock-time point made in the design.
 
-16 files, nothing committed. `git status` is the inventory. Committing before
-further work is recommended — a fresh session doing `git diff` gets nothing
-useful right now.
+## 2. Commits
 
-New: `src/looks.ts`, `src/backends/tsl/look.tsl.ts`, `src/sky/LookUniforms.ts`,
-`tests/looks.test.ts`, `tests/lookUniforms.test.ts`, this file.
-
-Modified: `src/Sky.ts`, `src/applyHaze.ts`, `src/index.ts`,
-`src/backends/tsl/atmosphere.tsl.ts`, `src/sky/HazePostProcess.ts`,
-`src/sky/SkyAtmosphereBaker.ts`, `src/sky/SkyAtmosphereMesh.ts`,
-`types/three-tsl.d.ts`, `ROADMAP.md`,
-`examples/vanilla/component-01-baked.html`.
-
----
+- `5c4cbc7` — slices 1–4, labelled unverified at the time.
+- (next) — verification script, `window.__sky` exposure in both demos, this doc.
 
 ## 3. Design decisions — settled, don't re-litigate
 
@@ -150,14 +150,14 @@ against, so pushing its luminance toward the ramp would blow out near geometry.
 
 ## 5. Slice status
 
-| Slice                                  | State                              |
-| -------------------------------------- | ---------------------------------- |
-| 1 · `src/looks.ts`                     | ✅ 38 tests                        |
-| 2 · TSL node + uniforms                | ✅ 7 tests — **unverified on GPU** |
-| 3 · mesh/baker/`Sky` wiring + demo GUI | ✅ — **unverified on GPU**         |
-| 3b · browser verification              | ⛔ **the gate** (§1)               |
-| 4 · haze retint                        | ✅ — **unverified on GPU**         |
-| 5 · Unreal knobs, React props, docs    | ⬜ not started                     |
+| Slice                                  | State                                             |
+| -------------------------------------- | ------------------------------------------------- |
+| 1 · `src/looks.ts`                     | ✅ 38 tests                                       |
+| 2 · TSL node + uniforms                | ✅ 7 tests, verified on GPU                       |
+| 3 · mesh/baker/`Sky` wiring + demo GUI | ✅ verified on GPU                                |
+| 3b · browser verification              | ✅ §1 — repeatable via `scripts/verify-looks.mjs` |
+| 4 · haze retint                        | ✅ verified on GPU                                |
+| 5 · Unreal knobs, React props, docs    | ⬜ not started                                    |
 
 ---
 

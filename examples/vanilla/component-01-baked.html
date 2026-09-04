@@ -158,6 +158,10 @@
         renderer.setSize(window.innerWidth, window.innerHeight)
       })
 
+      // Exposed for scripted verification / console poking (SKY_LOOKS_PLAN.md §1).
+      window.__sky = sky
+      window.__renderer = renderer
+
       renderer.setAnimationLoop(() => {
         sky.update(camera)
         controls.update()

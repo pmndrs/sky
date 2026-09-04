@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 // The WebGPU entry, not the root one. This package is WebGPU-only, and R3F's
 // root entry is a separate ~670 KB bundle that imports three's WebGL build for
 // `WebGLRenderer` / `WebGLCubeRenderTarget`. Importing it here dragged the whole
@@ -14,33 +14,6 @@ import { useFrame, useThree } from '@react-three/fiber/webgpu'
 
 import { Sky as VanillaSky } from '../Sky'
 import { SkyContext } from './SkyContext'
-
-/**
- * StrictMode-safe disposal bookkeeping (see the attach effect). One pending
- * timer per instance: scheduled on effect cleanup, canceled if the same
- * instance re-attaches within the tick (the StrictMode remount), fired for
- * real unmounts and instance swaps.
- */
-const pendingDisposal = new Map<VanillaSky, ReturnType<typeof setTimeout>>()
-
-function cancelScheduledDispose(sky: VanillaSky) {
-  const timer = pendingDisposal.get(sky)
-  if (timer !== undefined) {
-    clearTimeout(timer)
-    pendingDisposal.delete(sky)
-  }
-}
-
-function scheduleDispose(sky: VanillaSky) {
-  cancelScheduledDispose(sky)
-  pendingDisposal.set(
-    sky,
-    setTimeout(() => {
-      pendingDisposal.delete(sky)
-      sky.dispose()
-    }, 0),
-  )
-}
 
 export interface SkyProps {
   preset?: string
@@ -65,15 +38,44 @@ export interface SkyProps {
   children?: ReactNode
 }
 
+/** Construction inputs; changing any of them rebuilds the instance. */
+interface SkyConfig {
+  renderer: any
+  scene: any
+  preset: string
+  quality: string
+  cubeSize: number
+  enableAerialPerspective: boolean
+  apKmPerSlice: number
+}
+
+/** The live instance and the config it was built from. */
+interface SkyResource {
+  sky: VanillaSky
+  config: SkyConfig
+}
+
+function sameConfig(a: SkyConfig, b: SkyConfig) {
+  return (
+    a.renderer === b.renderer &&
+    a.scene === b.scene &&
+    a.preset === b.preset &&
+    a.quality === b.quality &&
+    a.cubeSize === b.cubeSize &&
+    a.enableAerialPerspective === b.enableAerialPerspective &&
+    a.apKmPerSlice === b.apKmPerSlice
+  )
+}
+
 /**
- * `<Sky>` — mounts a vanilla `Sky` instance against the active R3F renderer
- * and scene, drives `update(camera)` per frame, and publishes the instance
- * via context for `useSky()` consumers.
+ * `<Sky>` — resource boundary around one vanilla `Sky` instance. A single
+ * effect constructs, attaches and disposes it; `children` render only once
+ * it exists, so `useSky()` is never `null` inside the boundary.
  *
- * Construction-time options (cause a remount when changed):
+ * Construction-time options (rebuild the instance and remount `children`):
  *   `preset`, `quality`, `cubeSize`, `enableAerialPerspective`, `apKmPerSlice`
  *
- * Imperative props (applied via setters; no remount):
+ * Imperative props (applied via setters; no rebuild):
  *   `timeOfDay`, `latitude`, `dayOfYear`, `sunDirection`, `north`,
  *   `exposure`, `sunDisc`, `turbidity`, `groundAlbedo`, `atmosphere`,
  *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `mirrorBelowHorizon`
@@ -87,33 +89,37 @@ export interface SkyProps {
  * `<AutoHaze />` and call `sky.applyHaze` from your own
  * `useRenderPipeline` callback (use `useSky()` to grab the instance).
  */
-export function Sky({
-  preset = 'earth',
-  quality = 'medium',
-  cubeSize = 256,
-  atmosphere,
-  enableAerialPerspective = true,
-  apKmPerSlice = 8.0,
-  mirrorBelowHorizon = false,
-  exposure = 40,
-  north = '+Z',
-  sunDisc = true,
-  timeOfDay,
-  latitude,
-  dayOfYear,
-  sunDirection,
-  turbidity,
-  groundAlbedo,
-  hazeStrength,
-  hazePolicy,
-  hazeAltitudeBlend,
-  children,
-}: SkyProps) {
+export function Sky(props: SkyProps) {
+  const {
+    preset = 'earth',
+    quality = 'medium',
+    cubeSize = 256,
+    atmosphere,
+    enableAerialPerspective = true,
+    apKmPerSlice = 8.0,
+    mirrorBelowHorizon = false,
+    exposure = 40,
+    north = '+Z',
+    sunDisc = true,
+    timeOfDay,
+    latitude,
+    dayOfYear,
+    sunDirection,
+    turbidity,
+    groundAlbedo,
+    children,
+  } = props
+
   const renderer = useThree((s) => s.gl)
   const scene = useThree((s) => s.scene)
 
-  const sky = useMemo(() => {
-    return new VanillaSky(renderer, {
+  const config: SkyConfig = { renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice }
+  const [resource, setResource] = useState<SkyResource | null>(null)
+
+  useEffect(() => {
+    // Imperative props seed the first bake; `SkyController` re-applies them
+    // once mounted, so they are not deps of this effect.
+    const sky = new VanillaSky(renderer, {
       preset,
       quality,
       cubeSize,
@@ -131,30 +137,46 @@ export function Sky({
       turbidity,
       groundAlbedo,
     })
-
-    // Reconstruct only on options that affect LUT layout / cube target sizing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderer, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice])
-
-  useEffect(() => {
-    cancelScheduledDispose(sky)
     sky.attach(scene)
-    return () => {
-      sky.detach()
-      // Disposal is DEFERRED one tick and cancelable, never synchronous.
-      // React StrictMode runs every effect as mount → cleanup → mount in
-      // dev; a synchronous `sky.dispose()` here destroyed the memoized
-      // instance's internals (dome mesh, LUT/cube targets) and then
-      // re-attached the husk. Symptom: the sky renders its first bake
-      // forever — every live setter (time of day, turbidity, latitude…)
-      // silently re-bakes an EMPTY sky scene into a texture no pipeline
-      // samples, with zero errors. The StrictMode remount re-runs this
-      // effect synchronously after cleanup, which cancels the pending
-      // disposal; a real unmount (or instance swap) lets it fire.
-      scheduleDispose(sky)
-    }
-  }, [sky, scene])
+    setResource({ sky, config: { renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice } })
 
+    return () => {
+      sky.dispose()
+      setResource((current) => (current?.sky === sky ? null : current))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice])
+
+  // Nothing renders against an instance whose config no longer matches: it is
+  // disposed and replaced by the effect in this same commit.
+  if (!resource || !sameConfig(resource.config, config)) return null
+
+  return (
+    <SkyContext.Provider value={resource.sky}>
+      <SkyController sky={resource.sky} {...props} />
+      {children}
+    </SkyContext.Provider>
+  )
+}
+
+/** Applies the imperative props to the live instance and drives `update()` per frame. */
+function SkyController({
+  sky,
+  mirrorBelowHorizon = false,
+  exposure = 40,
+  north = '+Z',
+  sunDisc = true,
+  timeOfDay,
+  latitude,
+  dayOfYear,
+  sunDirection,
+  turbidity,
+  groundAlbedo,
+  atmosphere,
+  hazeStrength,
+  hazePolicy,
+  hazeAltitudeBlend,
+}: SkyProps & { sky: VanillaSky }) {
   useEffect(() => {
     if (typeof timeOfDay === 'number') sky.setTimeOfDay(timeOfDay)
   }, [sky, timeOfDay])
@@ -220,5 +242,5 @@ export function Sky({
     if (sky._hazeApplied) void sky.updateAerialPerspective()
   })
 
-  return <SkyContext.Provider value={sky}>{children}</SkyContext.Provider>
+  return null
 }

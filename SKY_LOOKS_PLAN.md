@@ -3,9 +3,9 @@
 ROADMAP track 4.4, which supersedes the old 4.4 "gradient mode" + 4.5 "Ghibli
 LUTs" rows. Research: [`research/stylized-ghibli-sky.md`](research/stylized-ghibli-sky.md).
 
-**State:** slices 1–4 written and **verified on a real WebGPU adapter**
+**State:** all five slices done and **verified on a real WebGPU adapter**
 (headless Chromium, Metal). `pnpm run ci` green. Branch `feat/sky-looks` off
-`main`; first checkpoint commit `5c4cbc7`. Slice 5 not started.
+`main`. Ready for review / PR.
 
 ---
 
@@ -55,7 +55,8 @@ the mountains matches the sky with no visible silhouette fringe.
 ## 2. Commits
 
 - `5c4cbc7` — slices 1–4, labelled unverified at the time.
-- (next) — verification script, `window.__sky` exposure in both demos, this doc.
+- `3dea0c2` — verification script, `window.__sky` exposure in both demos.
+- (next) — slice 5: Unreal knobs, React props, looks guide, CLAUDE.md gotcha.
 
 ## 3. Design decisions — settled, don't re-litigate
 
@@ -157,35 +158,40 @@ against, so pushing its luminance toward the ramp would blow out near geometry.
 | 3 · mesh/baker/`Sky` wiring + demo GUI | ✅ verified on GPU                                |
 | 3b · browser verification              | ✅ §1 — repeatable via `scripts/verify-looks.mjs` |
 | 4 · haze retint                        | ✅ verified on GPU                                |
-| 5 · Unreal knobs, React props, docs    | ⬜ not started                                    |
+| 5 · Unreal knobs, React props, docs    | ✅ verified on GPU (see §6)                       |
 
 ---
 
-## 6. Slice 5 — remaining
+## 6. Slice 5 — done
 
-**Tier 1** (feeds the LUT bake, so rebake — set at preset load, not scrubbed),
-into `setAtmosphere` with convenience scalars alongside `setTurbidity`:
-`multiScatteringFactor` (Unreal's openly non-physical MS gain), mie absorption
-colour/scale, rayleigh colour, ground albedo, density distributions.
+Shipped:
 
-**Tier 2** (uniforms, no LUT rebake):
+| Knob                                       | Tier               | Cost                         | Where                                                                                                                                                |
+| ------------------------------------------ | ------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sky.setMultiScatteringFactor(n)`          | 1 — feeds the bake | atmos-dirty, full LUT rebake | `AtmosphereParams.multiScatteringFactor`; multiplied at the MS sample site in **both** `core/wgsl/luts.wgsl.ts` and `backends/tsl/atmosphere.tsl.ts` |
+| `sky.setSkyLuminanceFactor(color)`         | 2 — uniform        | cube + PMREM                 | mesh, after `applyLook`; haze applies the same uniform after its retint                                                                              |
+| `sky.setAerialPerspectiveDistanceScale(n)` | 2 — uniform        | nothing dirty                | scales `distKm` in `HazePostProcess` before slice lookup                                                                                             |
 
-```js
-sky.setSkyLuminanceFactor('#ffeedd') // per-channel; cubeDirty only
-sky.setAerialPerspectiveDistanceScale(2) // W-coord scale at AP sample; zero dirty flags
-sky.setTransmittanceMinSunElevation(-2) // the sunset-goes-black hack
-```
+React: `look`, `lookTrack`, `skyLuminanceFactor`, `apDistanceScale`,
+`multiScatteringFactor` props on `<Sky>`; matching setters on `SkyContext`.
+Docs: `docs/guides/looks.mdx` (new), section appended to `docs/guides/haze.mdx`.
 
-Keep `luminanceScale` (the 40× ILLUMINANCE_IS_ONE normalization) separate from
-`skyLuminanceFactor` — different jobs, merging them muddles the units story.
+**Dropped: `transmittanceMinSunElevation`.** Unreal's
+`TransmittanceMinLightElevationAngle` clamps the sun _light's_ transmittance
+colour. `SkySun` here is a plain `DirectionalLight` with a fixed colour — it
+never samples the transmittance LUT — so there is nothing to clamp. Belongs
+with a future "sun colour from atmosphere" feature (adjacent to ROADMAP 4.1),
+not here.
 
-**React props:** `look`, `lookTrack` on `SkyProps`, mirroring the flat-prop
-convention in `src/react/Sky.tsx`.
+**Bug found by the verify script:** `multiScatteringFactor` first shipped
+TSL-only and had zero visible effect (diff 0.0003). The LUTs are built by the
+WGSL backend; the TSL twin only runs in the raymarch fallbacks. Now recorded
+as a CLAUDE.md gotcha. Both twins carry the multiply.
 
-**Docs:** a looks guide under `docs/guides/`, and the haze guide needs a note
-that AP inherits the look automatically.
+## 7. Next
 
-Unreal ships tiers 1 and 2 and **no** colour remap. Both its tiers are coherent
-across sky/AP/IBL for free because they never leave the physical domain. Our
-look layer is the tier Unreal doesn't have, and it's the only one where haze
-coherence had to be built rather than inherited.
+- Open a PR from `feat/sky-looks`.
+- Art-direction pass on `ghibli-day`'s near-white horizon (see §1 caveats).
+- Sun-tint lobe: confirm visually from a sun-facing camera.
+- Optional: extend `verify-looks.mjs` to the planet-scale demo so the
+  above-`topRadius` raymarch branch is exercised with a look assigned.

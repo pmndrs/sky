@@ -440,6 +440,19 @@ export class SkyAtmosphereBaker {
     this.cubeDirty = true
   }
 
+  /**
+   * Per-channel sky tint (Unreal `SkyLuminanceFactor`). Uniform on the sky
+   * mesh, so only cube + PMREM re-bake. Haze shares the same uniform via
+   * `applyHaze`, so AP inscatter is graded identically.
+   */
+  setSkyLuminanceFactor(factor: Vector3 | { x: number; y: number; z: number } | number[]): void {
+    const v = this.sky.skyLuminanceFactor.value as Vector3
+    if (factor instanceof Vector3) v.copy(factor)
+    else if (Array.isArray(factor)) v.fromArray(factor)
+    else v.set(factor.x, factor.y, factor.z)
+    this.cubeDirty = true
+  }
+
   markCubeDirty(): void {
     this.cubeDirty = true
   }

@@ -584,7 +584,10 @@ export function integrateScatteredLuminance({
       const msUvX = msUvRaw.x.add(float(0.5).div(msRes)).mul(msRes.div(msRes.add(float(1.0))))
       const msUvY = msUvRaw.y.add(float(0.5).div(msRes)).mul(msRes.div(msRes.add(float(1.0))))
       const multiScatteredLuminance = texture(multiScatterLUT, vec2(msUvX, msUvY)).rgb
-      S = directInScatter.add(multiScatteredLuminance.mul(medium.scattering))
+      // `multiScatteringFactor` is Unreal's artistic gain on this term; 1 is
+      // physical. Scaling at the sample site covers every consumer of the MS
+      // LUT (SkyView, AP, both raymarch fallbacks) with one multiply.
+      S = directInScatter.add(multiScatteredLuminance.mul(medium.scattering).mul(params.multiScatteringFactor))
     } else {
       S = directInScatter
     }

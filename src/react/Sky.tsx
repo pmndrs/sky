@@ -35,6 +35,16 @@ export interface SkyProps {
   hazeStrength?: number
   hazePolicy?: any
   hazeAltitudeBlend?: any
+  /** Stylized look: a registered name, an inline definition, or `null` for physical. See the looks guide. */
+  look?: string | Record<string, any> | null
+  /** Keyframed look that follows sun elevation (e.g. `'ghibli'`). Overrides `look` while set. */
+  lookTrack?: string | any[] | null
+  /** Unreal `SkyLuminanceFactor`: per-channel grade after the look. Hex string, Color, Vector3 or [r,g,b]. */
+  skyLuminanceFactor?: any
+  /** Unreal `AerialPerspectiveViewDistanceScale`: haze per metre. 1 = physical. */
+  apDistanceScale?: number
+  /** Unreal `MultiScatteringFactor`: gain on multiple scattering. 1 = physical. Rebakes LUTs. */
+  multiScatteringFactor?: number
   children?: ReactNode
 }
 
@@ -78,7 +88,9 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  * Imperative props (applied via setters; no rebuild):
  *   `timeOfDay`, `latitude`, `dayOfYear`, `sunDirection`, `north`,
  *   `exposure`, `sunDisc`, `turbidity`, `groundAlbedo`, `atmosphere`,
- *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `mirrorBelowHorizon`
+ *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `mirrorBelowHorizon`,
+ *   `look`, `lookTrack`, `skyLuminanceFactor`, `apDistanceScale`,
+ *   `multiScatteringFactor`
  *
  * Aerial-perspective haze post-process: render an `<AutoHaze />` child
  * (imported from `tsl-sky/react/auto-haze`). It calls `useRenderPipeline`
@@ -176,6 +188,11 @@ function SkyController({
   hazeStrength,
   hazePolicy,
   hazeAltitudeBlend,
+  look,
+  lookTrack,
+  skyLuminanceFactor,
+  apDistanceScale,
+  multiScatteringFactor,
 }: SkyProps & { sky: VanillaSky }) {
   useEffect(() => {
     if (typeof timeOfDay === 'number') sky.setTimeOfDay(timeOfDay)
@@ -228,6 +245,25 @@ function SkyController({
   useEffect(() => {
     if (hazePolicy) sky.setHazePolicy(hazePolicy)
   }, [sky, hazePolicy])
+
+  // A track wins over a single look while set; clearing the track falls back
+  // to whatever `look` says (setLook(undefined) is skipped, null = physical).
+  useEffect(() => {
+    if (lookTrack != null) sky.setLookTrack(lookTrack)
+    else if (look !== undefined) sky.setLook(look)
+  }, [sky, look, lookTrack])
+
+  useEffect(() => {
+    if (skyLuminanceFactor != null) sky.setSkyLuminanceFactor(skyLuminanceFactor)
+  }, [sky, skyLuminanceFactor])
+
+  useEffect(() => {
+    if (typeof apDistanceScale === 'number') sky.setAerialPerspectiveDistanceScale(apDistanceScale)
+  }, [sky, apDistanceScale])
+
+  useEffect(() => {
+    if (typeof multiScatteringFactor === 'number') sky.setMultiScatteringFactor(multiScatteringFactor)
+  }, [sky, multiScatteringFactor])
 
   useEffect(() => {
     if (hazeAltitudeBlend) sky.setHazeAltitudeBlend(hazeAltitudeBlend)

@@ -53,6 +53,19 @@ const lum = (p) => {
   for (let i = 0; i < d.length; i += 4) s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]
   return +(s / (d.length / 4)).toFixed(2)
 }
+const meanRGB = (p) => {
+  const d = p.data,
+    n = d.length / 4
+  let r = 0,
+    g = 0,
+    b = 0
+  for (let i = 0; i < d.length; i += 4) {
+    r += d[i]
+    g += d[i + 1]
+    b += d[i + 2]
+  }
+  return [r / n, g / n, b / n].map((x) => +x.toFixed(1))
+}
 const setLook = (page, arg) =>
   page.evaluate((a) => {
     window.__sky.setLook(a)
@@ -139,6 +152,25 @@ await page.evaluate(() => {
 await settle(page, 60)
 const G = await shot(page, '07-track-day')
 
+await page.evaluate(() => {
+  window.__sky.setLookTrack(null)
+  window.__sky.setLook(null)
+  window.__sky.setTimeOfDay(14.5)
+})
+await settle(page, 60)
+const P2 = await shot(page, '08-physical-again')
+await page.evaluate(() => window.__sky.setSkyLuminanceFactor([1.0, 0.6, 0.6]))
+await settle(page, 60)
+const R = await shot(page, '09-skyLuminanceFactor-red')
+await page.evaluate(() => window.__sky.setSkyLuminanceFactor([1, 1, 1]))
+await settle(page, 60)
+await page.evaluate(() => window.__sky.setMultiScatteringFactor(3.0))
+await settle(page, 150) // full LUT rebake
+const M = await shot(page, '10-multiScatteringFactor-3')
+await page.evaluate(() => window.__sky.setMultiScatteringFactor(1.0))
+await settle(page, 150)
+const M0 = await shot(page, '11-multiScatteringFactor-back-to-1')
+
 report.baked = {
   'identity vs physical (want ~0)': diff(A, B),
   'ghibli chroma-only vs physical (want >0)': diff(A, C),
@@ -147,6 +179,11 @@ report.baked = {
   'meanLum chroma-only (want ≈ physical)': lum(C),
   'meanLum value=1 (want ≠ physical)': lum(D),
   'track dawn vs track day (want >0)': diff(F, G),
+  'skyLuminanceFactor [1,.6,.6]: meanRGB physical → tinted': [meanRGB(P2), meanRGB(R)],
+  'skyLuminanceFactor: G/R ratio drops (want yes)':
+    +(meanRGB(R)[1] / meanRGB(R)[0]).toFixed(3) < +(meanRGB(P2)[1] / meanRGB(P2)[0]).toFixed(3),
+  'multiScatteringFactor 3 vs 1 (want >0)': diff(P2, M),
+  'multiScatteringFactor back to 1 vs physical (want ~0)': diff(P2, M0),
 }
 report.logs.baked = logs.filter((l) => /error|warn/i.test(l) && !BENIGN.test(l))
 await page.close()
@@ -155,14 +192,25 @@ await page.close()
 ;({ page, logs } = await open(browser, 'component-02-haze.html'))
 await page.waitForFunction(() => window.__sky, null, { timeout: 30000 })
 await settle(page, 120)
-const H0 = await shot(page, '10-haze-physical')
+const H0 = await shot(page, '20-haze-physical')
 await setLook(page, { preset: 'ghibli-dusk', chroma: 1, value: 0 })
 await settle(page, 60)
-const H1 = await shot(page, '11-haze-ghibli-dusk')
+const H1 = await shot(page, '21-haze-ghibli-dusk')
 await setLook(page, null)
 await settle(page, 60)
-const H2 = await shot(page, '12-haze-cleared')
-report.haze = { 'look vs physical (want >0)': diff(H0, H1), 'cleared vs physical (want ~0)': diff(H0, H2) }
+const H2 = await shot(page, '22-haze-cleared')
+await page.evaluate(() => window.__sky.setAerialPerspectiveDistanceScale(3.0))
+await settle(page, 30)
+const H3 = await shot(page, '13-haze-apDistanceScale-3')
+await page.evaluate(() => window.__sky.setAerialPerspectiveDistanceScale(1.0))
+await settle(page, 30)
+const H4 = await shot(page, '14-haze-apDistanceScale-back')
+report.haze = {
+  'look vs physical (want >0)': diff(H0, H1),
+  'cleared vs physical (want ~0)': diff(H0, H2),
+  'apDistanceScale 3 vs 1 (want >0)': diff(H0, H3),
+  'apDistanceScale back to 1 vs physical (want ~0)': diff(H0, H4),
+}
 report.logs.haze = logs.filter((l) => /error|warn/i.test(l) && !BENIGN.test(l))
 
 await browser.close()

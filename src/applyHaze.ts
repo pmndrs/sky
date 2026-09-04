@@ -130,6 +130,11 @@ export function applyHaze(
   if (useCameraFar === undefined) useCameraFar = seedFar > 1e6
   if (useCameraFar && !sky._cameraFar) sky._cameraFar = uniform(seedFar)
 
+  // Created here if the user hasn't touched it yet, so the shader always has
+  // a node to bind and `setAerialPerspectiveDistanceScale` works before or
+  // after `applyHaze`.
+  if (!sky._apDistanceScale) sky._apDistanceScale = uniform(1.0)
+
   return createHazeOutputNode({
     scenePass,
     sceneColorNode,
@@ -158,6 +163,8 @@ export function applyHaze(
     // chance of the two drifting out of sync.
     lookUniforms: baker.sky.lookUniforms,
     upVector: baker.sky.upVector,
+    skyLuminanceFactor: baker.sky.skyLuminanceFactor,
+    apDistanceScale: sky._apDistanceScale,
     viewHeightKm: baker.sky.viewHeight,
     // Planet-frame camera position — already updated each frame by
     // AerialPerspectiveLUT.setCamera (called via baker.setCamera). When

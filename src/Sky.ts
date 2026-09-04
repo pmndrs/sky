@@ -1,4 +1,5 @@
-import { Vector3 } from 'three/webgpu'
+import { Color, Vector3 } from 'three/webgpu'
+import { uniform } from 'three/tsl'
 
 import { SkyAtmosphereBaker } from './sky/SkyAtmosphereBaker'
 import { GroundedSkybox } from './sky/GroundedSkybox'
@@ -86,6 +87,7 @@ export class Sky {
   _elevation!: number
   _azimuth!: number
   _lookTrack: LookTrack | null = null
+  _apDistanceScale: any = null
   _cameraFar?: any
   _hazeStrength?: any
   _hazePolicy?: any
@@ -360,6 +362,52 @@ export class Sky {
 
   setAtmosphere(partial: any) {
     this.baker.setAtmosphereParams(partial)
+    return this
+  }
+
+  /**
+   * Unreal's `MultiScatteringFactor` — a gain on the multiple-scattering term.
+   * 1 is physical; above that is an openly non-physical "lusher, hazier" knob.
+   * Feeds the LUT bake (atmosphere-dirty), so set it at preset-load time
+   * rather than scrubbing it per frame.
+   */
+  setMultiScatteringFactor(value: number) {
+    this.baker.setAtmosphereParams({ multiScatteringFactor: value })
+    return this
+  }
+
+  /**
+   * Unreal's `SkyLuminanceFactor` — a per-channel tint applied to the sky
+   * after any look, as a final grade. Accepts a hex string / number (sRGB,
+   * converted to linear), a `Color`, a `Vector3`, or `[r, g, b]` (linear).
+   * Cube + PMREM re-bake only; haze inherits it through the same uniform.
+   */
+  setSkyLuminanceFactor(factor: string | number | Color | Vector3 | number[]) {
+    let v: Vector3
+    if (factor instanceof Vector3) {
+      v = factor
+    } else if (Array.isArray(factor)) {
+      v = new Vector3().fromArray(factor)
+    } else {
+      const c = factor instanceof Color ? factor : new Color(factor)
+      v = new Vector3(c.r, c.g, c.b)
+    }
+    this.baker.setSkyLuminanceFactor(v)
+    return this
+  }
+
+  /**
+   * Unreal's `AerialPerspectiveViewDistanceScale` — stretches the optical path
+   * used for haze. 2 = twice the haze per metre. A sample-time scale on the AP
+   * lookup: no LUT rebuild, no re-bake, nothing dirty. Works before or after
+   * `applyHaze`.
+   */
+  setAerialPerspectiveDistanceScale(value: number) {
+    if (!this._apDistanceScale) {
+      this._apDistanceScale = uniform(value)
+    } else {
+      this._apDistanceScale.value = value
+    }
     return this
   }
 

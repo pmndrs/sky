@@ -69,6 +69,13 @@ interface CreateHazeOutputNodeArgs {
   /** Y-up world-space up vector (`baker.sky.upVector`). Required with
    *  `lookUniforms`. */
   upVector?: any
+  /** Per-channel grade applied to AP inscatter after the look
+   *  (`baker.sky.skyLuminanceFactor`), so haze matches the graded sky. */
+  skyLuminanceFactor?: any
+  /** Unreal `AerialPerspectiveViewDistanceScale`: scales the distance fed
+   *  into the AP lookup. >1 = more haze per metre. Pure sample-time scale —
+   *  no LUT rebuild, no dirty flag. */
+  apDistanceScale?: any
   viewHeightKm?: any
   cameraPositionKm?: any
   transmittanceLUT?: any
@@ -186,6 +193,8 @@ export function createHazeOutputNode({
   sunDirection = null,
   lookUniforms = null,
   upVector = null,
+  skyLuminanceFactor = null,
+  apDistanceScale = null,
   viewHeightKm = null,
   cameraPositionKm = null,
   transmittanceLUT = null,
@@ -273,7 +282,10 @@ export function createHazeOutputNode({
     const rayDirView = viewFar.xyz.div(viewFar.w)
     const cosFromAxis = max(abs(rayDirView.normalize().z), float(1e-6))
     const distAlongRayM = abs(viewZ).div(cosFromAxis)
-    const distKm = distAlongRayM.mul(0.001)
+    // `apDistanceScale` (Unreal AerialPerspectiveViewDistanceScale) stretches
+    // the optical path at sample time. Applied here so slice lookup, coverage
+    // test and the raymarch fallback's tMax all see the same scaled distance.
+    const distKm = apDistanceScale ? distAlongRayM.mul(0.001).mul(apDistanceScale) : distAlongRayM.mul(0.001)
 
     // AP LUT W axis: w = sqrt(slice/resZ) where slice = distKm/kmPerSlice.
     const sliceN = distKm.div(float(kmPerSlice)).div(float(resZ))
@@ -491,6 +503,9 @@ export function createHazeOutputNode({
         }),
       )
     }
+
+    // Final per-channel grade, same uniform the sky mesh applies after its look.
+    if (skyLuminanceFactor) apRgbScaled.mulAssign(skyLuminanceFactor)
 
     // Raymarch debug modes — useful at altitude when isolating where
     // chunky/banded artefacts originate. `rm-rgb` shows raw inscatter

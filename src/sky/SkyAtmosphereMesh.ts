@@ -115,6 +115,7 @@ export class SkyAtmosphereMesh extends Mesh {
   viewHeight: any
   luminanceScale: any
   lookUniforms: ReturnType<typeof createLookUniforms>
+  skyLuminanceFactor: any
   _starsTexturePlaceholder: DataTexture
   starsTextureNode: any
   starsIntensity: any
@@ -342,6 +343,15 @@ export class SkyAtmosphereMesh extends Mesh {
     this.lookUniforms = createLookUniforms()
 
     /**
+     * Unreal's `SkyLuminanceFactor`: a per-channel multiplier applied to the
+     * sky colour *after* the look, as a final grade. Distinct from
+     * `luminanceScale`, which is the scalar ILLUMINANCE_IS_ONE normalisation —
+     * keep them separate or the units story gets muddled. Excludes the
+     * sun/moon/star discs, matching Unreal. Default white = no-op.
+     */
+    this.skyLuminanceFactor = uniform(new Vector3(1.0, 1.0, 1.0))
+
+    /**
      * Stars equirect HDR texture (HalfFloat, RGBA). Bound by
      * `SkyNight.enable({ source: 'hdri' | 'texture' })`; until then holds
      * a 1×1 black placeholder so the shader stays well-formed. Swapping
@@ -487,6 +497,7 @@ export class SkyAtmosphereMesh extends Mesh {
     const moonColorU = this.moonColor
     const mirrorBelowHorizonU = this.mirrorBelowHorizon
     const lookU = this.lookUniforms
+    const skyLuminanceFactorU = this.skyLuminanceFactor
 
     return Fn(() => {
       // View direction from the camera to this fragment's world position.
@@ -595,6 +606,9 @@ export class SkyAtmosphereMesh extends Mesh {
           look: lookU,
         }),
       )
+      // Final per-channel grade (Unreal SkyLuminanceFactor). After the look so
+      // a tint is not partially undone by the chroma remap.
+      skyColor.mulAssign(skyLuminanceFactorU)
 
       // Camera→space transmittance along this view ray. Shared by the stars
       // fade and the sun-disc tint below. Defaults to white (no attenuation)

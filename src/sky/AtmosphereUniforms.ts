@@ -41,6 +41,9 @@ export function createAtmosphereUniforms(params: AtmosphereParams) {
 
     // Ground
     groundAlbedo: uniform(params.groundAlbedo.clone()),
+
+    // Artistic (Unreal parity)
+    multiScatteringFactor: uniform(params.multiScatteringFactor ?? 1.0),
   }
 }
 
@@ -74,6 +77,7 @@ export function updateAtmosphereUniforms(uniforms: AtmosphereUniforms, params: A
   uniforms.absorptionDensity1LinearTerm.value = params.absorptionDensity1LinearTerm
 
   copyVec3(uniforms.groundAlbedo.value, params.groundAlbedo)
+  uniforms.multiScatteringFactor.value = params.multiScatteringFactor ?? 1.0
 }
 
 function copyVec3(dst: Vector3, src: Vector3 | number[] | { x?: number; y?: number; z?: number }): void {

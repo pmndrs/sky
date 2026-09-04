@@ -1,0 +1,157 @@
+---
+title: Stylized looks
+description: Push the physical sky toward an anime / Ghibli palette without losing sun response, IBL, or haze coherence.
+---
+
+A **look** is an artist-authored colour ramp laid over the physical sky. It
+is not a replacement sky: the Hillaire integrator still runs, and the look
+remaps what comes out of it. That is what keeps the result coherent — the
+cube background, the PMREM'd environment lighting, and the aerial-perspective
+haze on geometry all pick up the same look, because they all read the same
+remapped colour.
+
+```js
+import { Sky } from '@pmndrs/sky'
+
+const sky = new Sky(renderer, { preset: 'earth' })
+sky.setLook('ghibli-day') // a built-in look
+sky.setLookTrack('ghibli') // or a track that follows sun elevation
+sky.setLook(null) // back to physical
+```
+
+## The two blend axes
+
+Every look has two strengths, not one:
+
+- **`chroma`** swaps the physical _hue_ toward the ramp while keeping the
+  physical _brightness_. Sun-angle and altitude response survive, and because
+  the operation is scale-invariant the same remap applies cleanly to haze.
+  This is what you want almost all of the time.
+- **`value`** additionally pulls brightness toward the ramp's own. You need
+  this for things physics cannot give you — an artificial moonlit night, say,
+  where the physical sky is essentially black and no hue swap can rescue it.
+
+|                                  | `chroma` | `value` |
+| -------------------------------- | -------- | ------- |
+| physical (no look)               | 0        | 0       |
+| grade — default when unspecified | 1        | 0       |
+| `ghibli-*` built-ins             | 0.7      | 0.25    |
+| full gradient override           | 1        | 1       |
+
+The `value` axis compares an authored 0..1 ramp against scene luminance, so it
+needs **`intensity`** to put them in the same units: the scene brightness a
+ramp value of 1.0 should map to. Default 1 sits in the range of a daytime
+sky; night looks usually want it raised.
+
+## Authoring a look
+
+```js
+import { registerLook } from '@pmndrs/sky'
+
+registerLook('dusk-warm', {
+  stops: [
+    { at: -0.2, color: '#ff9d6c' }, // below horizon
+    { at: 0.0, color: '#f3c98f', ease: 'smooth' }, // horizon
+    { at: 0.35, color: '#6fa3d8', ease: 1.6 }, // numeric = pow curve
+    { at: 1.0, color: '#4f8fdb' }, // zenith
+  ],
+  chroma: 0.7,
+  value: 0.25,
+  sunTint: { color: '#ffd9a0', falloff: 0.3, strength: 0.6 },
+})
+
+sky.setLook('dusk-warm')
+sky.setLook({ preset: 'dusk-warm', chroma: 0.4 }) // inherit, override fields
+```
+
+**`at` is the sine of elevation**: `-1` nadir, `0` horizon, `1` zenith. That is
+the same scalar the sky shader already has, so there is no conversion, and
+sine's curvature spends more of the range near the horizon — where ramps want
+the resolution. Sampling outside the first/last stop clamps.
+
+**`ease`** applies to the segment _entering_ a stop: `'linear'`, `'smooth'`
+(smoothstep), or a number `n` for `pow(t, n)` — above 1 holds the earlier
+colour longer.
+
+**Colours** given as hex strings or numbers are sRGB and converted to linear.
+Arrays and `{ r, g, b }` objects are taken as already linear.
+
+**`sunTint`** is a warm lobe around the sun's azimuth, so a ramp is not
+sun-blind. `falloff` is the lobe's angular width (larger = broader).
+
+At most **8 stops**. That is a hard cap: a sky ramp wants three or four, and
+needing more usually means the ramp is doing work that belongs in the
+physical parameters instead.
+
+## Tracks: following the time of day
+
+A track is a list of keyframes, each a look, interpolated as the sun moves:
+
+```js
+import { registerLookTrack } from '@pmndrs/sky'
+
+registerLookTrack('my-day', [
+  { elevation: -18, look: 'ghibli-night' },
+  { elevation: -6, look: 'ghibli-dusk' }, // civil twilight
+  { elevation: 8, look: 'ghibli-dusk' }, // hold through low sun
+  { elevation: 15, look: 'ghibli-day' },
+])
+
+sky.setLookTrack('my-day')
+```
+
+Tracks key on **sun elevation in degrees**, not clock time. Elevation is what
+actually determines how a sky reads: `time: 6` is full night at latitude 65° in
+December and hours into daylight there in June, and this library exposes
+`setLatitude` / `setDayOfYear`, so clock-keyed palettes would fire at the wrong
+moment as soon as either changed. For fictional scenes where the sun position
+is arbitrary anyway, pass `{ by: 'time' }` to `createLookTrack` and key on
+hours.
+
+Keyframes may have different stop counts — the track resamples them onto a
+shared set of positions when it is created. Re-evaluation happens inside
+`setTimeOfDay` / `setLatitude` / `setDayOfYear`, costs a handful of
+multiplies, and only writes uniforms.
+
+## Cost
+
+Looks live entirely in shader uniforms. Changing one never rebuilds the
+transmittance / multi-scatter / sky-view LUT chain and never recompiles a
+shader; it re-bakes the cube and its PMREM, which is the same cost scrubbing
+the sun already pays. Dragging a look slider is as cheap as dragging the time
+of day.
+
+## Haze follows automatically
+
+If you use `applyHaze`, aerial-perspective inscatter is remapped through the
+same look, with `value` forced off — haze is a partial-path integral, far
+dimmer than the full sky, and only the scale-invariant chroma axis is safe to
+share. The upshot is that a stylized sky and the haze on distant geometry land
+on the same colour, with no fringe at silhouettes. There is nothing to wire.
+
+## Unreal-parity knobs
+
+Three of Unreal's SkyAtmosphere artistic controls, for people porting a look
+from there:
+
+```js
+sky.setMultiScatteringFactor(1.4) // gain on multiple scattering; rebakes LUTs
+sky.setSkyLuminanceFactor('#ffeedd') // per-channel grade after the look; cube re-bake only
+sky.setAerialPerspectiveDistanceScale(2) // haze per metre; sample-time only, nothing rebakes
+```
+
+`setMultiScatteringFactor` is the one that feeds the LUT bake — set it when
+you load a preset, not per frame. The other two are uniforms.
+
+Unreal's `TransmittanceMinLightElevationAngle` is deliberately **not** here:
+it clamps the sun _light's_ transmittance colour, and this library's
+`DirectionalLight` helper doesn't derive its colour from the atmosphere yet.
+
+## Built-ins
+
+`ghibli-night`, `ghibli-dusk`, `ghibli-day`, and the `ghibli` track — palette
+from the research memo: desaturated cerulean → periwinkle zeniths, warm
+never-fully-saturated horizon tints. `ghibli-day`'s near-white horizon reads
+quite flat from a low camera; if you want the blue to arrive sooner, register
+a variant with the horizon stop lowered (`at: -0.1`) or a more saturated
+horizon colour.

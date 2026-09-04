@@ -50,6 +50,7 @@ new Sky(renderer, options?)
 | `sky.mesh`                            | The baker's internal `SkyAtmosphereMesh` (lives in the baker's private scene, **not** your main scene — see note below). |
 | `sky.sunElevation` / `sky.sunAzimuth` | Current sun direction in degrees, as last set via `setTimeOfDay`/`setSunDirection`/etc.                                  |
 | `sky.stars`                           | The `SkyNight` instance if `enableStars()` was called, else `null`.                                                      |
+| `sky.state`                           | `'detached'`, `'attached'` or `'disposed'`. Accessing `sky.baker` after disposal throws.                                 |
 
 > **Note:**
 > `sky.mesh` is the mesh the baker renders into its private cube camera — it
@@ -62,19 +63,17 @@ new Sky(renderer, options?)
 
 ## Lifecycle
 
-| Method                      | Description                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------------- |
-| `attach(scene)`             | Sets `scene.environment` + `scene.background`. Returns `this`.                                     |
-| `detach()`                  | Clears them (only if they still point at this sky's textures). Returns `this`.                     |
-| `update(camera, opts?)`     | Per-frame entry point — see below.                                                                 |
-| `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                        |
-| `dispose()`                 | Detaches and disposes the baker (LUT render targets, PMREM generator, sky mesh geometry/material). |
+| Method                      | Description                                                                                               |
+| --------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `attach(scene)`             | Sets `scene.environment` + `scene.background`. Returns `this`.                                            |
+| `detach()`                  | Clears them (only if they still point at this sky's textures). Returns `this`.                            |
+| `update(camera, opts?)`     | Per-frame entry point — see below.                                                                        |
+| `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                               |
+| `dispose()`                 | Detaches, frees the stars HDR texture, and disposes the baker. Idempotent; baker-backed calls then throw. |
 
 > **Warning:**
-> `dispose()` does **not** dispose helper objects created via `createSun`, `createGround`, `createGroundedSkybox`,
-> `createMoon`, or `enableStars` — those own their own GPU resources (a `DirectionalLight`, geometry/material, or an
-> HDRI texture) and must be disposed separately by the caller. This is a known gap the docs are flagging for the library
-> maintainer; check the individual helper class for its own `dispose()` method.
+> `dispose()` does not dispose helpers created by `createSun`, `createGround`, `createGroundedSkybox`, or `createMoon`.
+> Call `dispose()` on sun, ground, and moon helpers. For a grounded skybox, dispose its `geometry` and `material`.
 
 ### `update(camera, opts?)`
 

@@ -59,6 +59,9 @@ const NORTH_AXES: Record<string, { vector: Vector3; offsetDeg: number }> = {
   '-Z': { vector: new Vector3(0, 0, -1), offsetDeg: 180 },
 }
 
+/** Lifecycle state. `detached` ⇄ `attached` while live; `disposed` is terminal. */
+export type SkyState = 'detached' | 'attached' | 'disposed'
+
 /**
  * High-level wrapper around `SkyAtmosphereBaker`. Targets the 90% case:
  * pick a preset, set time-of-day + latitude, attach to a scene, call
@@ -68,7 +71,8 @@ const NORTH_AXES: Record<string, { vector: Vector3; offsetDeg: number }> = {
  * custom post-process chains.
  */
 export class Sky {
-  baker: any
+  _baker: any
+  _disposed = false
   _renderer: any
   _scene: any
   _timeOfDay: number
@@ -123,7 +127,7 @@ export class Sky {
 
     const lutResolutions = QUALITY_PRESETS[quality] || QUALITY_PRESETS.medium
 
-    this.baker = new SkyAtmosphereBaker(renderer, {
+    this._baker = new SkyAtmosphereBaker(renderer, {
       cubeSize,
       atmosphere: merged,
       lutResolutions,
@@ -174,20 +178,38 @@ export class Sky {
     return this._azimuth
   }
 
+  get state(): SkyState {
+    if (this._disposed) return 'disposed'
+    return this._scene ? 'attached' : 'detached'
+  }
+
+  /** The underlying `SkyAtmosphereBaker`. Throws once the Sky is disposed. */
+  get baker() {
+    if (this._disposed) throw new Error('Sky: instance is disposed')
+    return this._baker
+  }
+
+  /** Clear `scene.environment` / `scene.background` if they still point at this sky. */
+  _releaseScene() {
+    const scene = this._scene
+    if (!scene) return
+    if (scene.environment === this._baker.environmentTexture) scene.environment = null
+    if (scene.background === this._baker.texture) scene.background = null
+    this._scene = null
+  }
+
   attach(scene: any) {
+    // Read through the guarded accessor before changing attachment state.
+    const baker = this.baker
+    if (this._scene !== scene) this._releaseScene()
     this._scene = scene
-    scene.environment = this.baker.environmentTexture
-    scene.background = this.baker.texture
+    scene.environment = baker.environmentTexture
+    scene.background = baker.texture
     return this
   }
 
   detach() {
-    if (this._scene) {
-      if (this._scene.environment === this.baker.environmentTexture) this._scene.environment = null
-      if (this._scene.background === this.baker.texture) this._scene.background = null
-      this._scene = null
-    }
-
+    this._releaseScene()
     return this
   }
 
@@ -434,8 +456,9 @@ export class Sky {
    */
   async enableStars(opts?: any) {
     if (!this._night) this._night = new SkyNight(this)
-    await this._night.enable(opts)
-    return this._night
+    const night = this._night
+    await night.enable(opts)
+    return night
   }
 
   /**
@@ -476,9 +499,27 @@ export class Sky {
     return this._night || null
   }
 
+  /**
+   * Detach, free the stars texture (if loaded), dispose the baker and drop the
+   * haze uniforms. Idempotent and terminal: afterwards access to `baker` and
+   * methods that rely on it throw, while the haze and star setters become
+   * no-ops. Helpers from `createSun` / `createGround` /
+   * `createGroundedSkybox` / `createMoon` are caller-owned and not disposed
+   * here.
+   */
   dispose() {
-    this.detach()
-    this.baker.dispose()
+    if (this._disposed) return
+    this._releaseScene()
+    // Mark the instance terminal before resource disposal can emit callbacks.
+    this._disposed = true
+    if (this._night) {
+      this._night.dispose()
+      this._night = undefined
+    }
+    this._baker.dispose()
+    this._hazeStrength = this._hazePolicy = this._hazeRaymarchOnly = undefined
+    this._hazeAltStart = this._hazeAltEnd = this._cameraFar = undefined
+    this._hazeApplied = false
   }
 
   _refreshSunFromTime() {

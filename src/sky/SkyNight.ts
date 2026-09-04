@@ -164,7 +164,13 @@ export class SkyNight {
       if (existingTexture) {
         this.texture = existingTexture
       } else if (url) {
-        this.texture = await _loadEquirectHDR(url)
+        const loaded = await _loadEquirectHDR(url)
+        // The owning Sky may have been disposed while the file loaded.
+        if (this.sky.state === 'disposed') {
+          loaded.dispose()
+          return this
+        }
+        this.texture = loaded
       } else {
         throw new Error(
           "SkyNight: source: 'hdri' requires { url } or { texture }. The bundled NightSkyHDRI is an example asset only — see examples/14-night-sky.html for usage.",
@@ -215,12 +221,14 @@ export class SkyNight {
    * shown again. Procedural mode is unaffected and remains available.
    */
   dispose() {
-    this.disable()
-    this.mesh.starsTextureNode.value = this.mesh._starsTexturePlaceholder
     if (this.texture) {
       this.texture.dispose()
       this.texture = null
     }
+    this._enabled = false
+    this.mesh.starsIntensity.value = 0.0
+    this.mesh.starsTextureNode.value = this.mesh._starsTexturePlaceholder
+    if (this.sky.state !== 'disposed') this.sky.baker.markCubeDirty()
   }
 }
 

@@ -9,6 +9,9 @@ import { SkySun } from './sky/SkySun'
 import { mergeAtmosphereParams } from './core/AtmosphereParams'
 import { LUT_RESOLUTIONS } from './core/resolutions'
 import { presets, resolvePreset } from './presets'
+import { resolveLook, resolveLookTrack, sampleLookTrack } from './looks'
+
+import type { Look, LookInput, LookKeyframe, LookTrack } from './looks'
 import { applyHaze, policyToHazeMode } from './applyHaze'
 import { solarPosition } from './solarPosition'
 
@@ -82,6 +85,7 @@ export class Sky {
   _northKey: string
   _elevation!: number
   _azimuth!: number
+  _lookTrack: LookTrack | null = null
   _cameraFar?: any
   _hazeStrength?: any
   _hazePolicy?: any
@@ -244,7 +248,45 @@ export class Sky {
     this._azimuth = azimuth
     const theta = raw ? azimuth : azimuth + (NORTH_AXES[this._northKey]?.offsetDeg ?? 0)
     this.baker.setSun({ elevation, azimuth: theta })
+    // Every sun path — setTimeOfDay, setLatitude, setDayOfYear, setNorth —
+    // funnels through here, so this is the one place a track needs to
+    // re-evaluate. Plain JS over a handful of keys; it only writes uniforms.
+    this._applyLookTrack()
     return this
+  }
+
+  /**
+   * Assign a stylized look — a registered name, or an inline definition which
+   * may name a `preset` to inherit from. Pass `null` to return to the purely
+   * physical sky.
+   *
+   * Costs a cube + PMREM re-bake, never a LUT rebuild, so this is cheap enough
+   * to drive from a slider. Assigning a look clears any active look track.
+   */
+  setLook(look: string | LookInput | Look | null) {
+    this._lookTrack = null
+    this.baker.setLook(look === null ? null : resolveLook(look))
+    return this
+  }
+
+  /**
+   * Drive the look from a keyframe track, re-evaluated whenever the sun moves.
+   *
+   * Tracks key on **sun elevation** by default rather than clock time, because
+   * elevation is what actually determines how the sky reads — `time: 6` is full
+   * night at latitude 65° in December and hours into daylight there in June.
+   * Pass `{ by: 'time' }` to `createLookTrack` for fictional scenes.
+   */
+  setLookTrack(track: string | LookKeyframe[] | LookTrack | null) {
+    this._lookTrack = track === null ? null : resolveLookTrack(track)
+    if (this._lookTrack === null) this.baker.setLook(null)
+    else this._applyLookTrack()
+    return this
+  }
+
+  _applyLookTrack() {
+    if (!this._lookTrack) return
+    this.baker.setLook(sampleLookTrack(this._lookTrack, { elevation: this._elevation, time: this._timeOfDay }))
   }
 
   setNorth(axis: string) {

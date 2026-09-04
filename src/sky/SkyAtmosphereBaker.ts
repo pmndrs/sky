@@ -22,6 +22,8 @@ import { MultiScatterLUT } from './luts/MultiScatterLUT'
 import { SkyViewLUT } from './luts/SkyViewLUT'
 import { AerialPerspectiveLUT } from './luts/AerialPerspectiveLUT'
 import { SkyAtmosphereMesh } from './SkyAtmosphereMesh'
+import type { Look } from '../looks'
+
 import type { AtmosphereParams } from '../core/AtmosphereParams'
 import type { LutResolutions } from '../core/resolutions'
 
@@ -424,6 +426,20 @@ export class SkyAtmosphereBaker {
    * Mark the cube bake as stale. Useful when something mutated sky uniforms
    * directly without going through setSun/setAtmosphereParams.
    */
+  /**
+   * Assign (or clear) the stylized look on the sky mesh.
+   *
+   * Marks only `cubeDirty` — the look lives entirely in uniforms on the sky
+   * mesh's colour node, so the Transmittance / MultiScatter / SkyView chain is
+   * untouched and only the cube + PMREM need re-baking. That is what keeps
+   * artist sliders live: scrubbing a look costs the same as scrubbing the sun,
+   * which already re-bakes cube + PMREM every frame.
+   */
+  setLook(look: Look | null): void {
+    this.sky.setLook(look)
+    this.cubeDirty = true
+  }
+
   markCubeDirty(): void {
     this.cubeDirty = true
   }

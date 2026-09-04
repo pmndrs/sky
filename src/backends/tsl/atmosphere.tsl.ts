@@ -32,6 +32,7 @@ import {
   length,
   normalize,
   cos,
+  cross,
   sin,
   acos,
   texture,
@@ -623,4 +624,27 @@ export function integrateScatteredLuminance({
   }
 
   return { L, multiScatAs1, transmittance: throughput, opticalDepth }
+}
+
+/**
+ * Sun azimuth relative to the view direction, as a cosine in [-1, 1].
+ *
+ * Builds a stable on-plane basis perpendicular to `upVec` and aligned with the
+ * view direction's horizontal component, then projects the sun onto it. 1 means
+ * looking toward the sun's azimuth, -1 directly away. Frame-invariant, so it
+ * feeds both the Sky-View LUT UV and the stylized look's sun tint.
+ *
+ * Unreal: RenderSkyRayMarching.hlsl:325-329.
+ */
+export function computeLightViewCosAngle(viewDir: any, upVec: any, sunDir: any): any {
+  const sideRaw = cross(upVec, viewDir)
+  const sideLen = max(length(sideRaw), float(1e-6))
+  const sideVector = sideRaw.div(sideLen)
+  const forwardVector = normalize(cross(sideVector, upVec))
+
+  const lightOnPlaneX = dot(sunDir, forwardVector)
+  const lightOnPlaneY = dot(sunDir, sideVector)
+  const lightOnPlaneLen = max(length(vec2(lightOnPlaneX, lightOnPlaneY)), float(1e-6))
+
+  return clamp(lightOnPlaneX.div(lightOnPlaneLen), float(-1.0), float(1.0))
 }

@@ -21,7 +21,12 @@ import {
   normalize as tslNormalize,
 } from 'three/tsl'
 
-import { integrateScatteredLuminance, moveToTopAtmosphere } from '../backends/tsl/atmosphere.tsl'
+import {
+  computeLightViewCosAngle,
+  integrateScatteredLuminance,
+  moveToTopAtmosphere,
+} from '../backends/tsl/atmosphere.tsl'
+import { applyLook } from '../backends/tsl/look.tsl'
 import { createHazeDepthNodes } from './hazeScenePassDepth'
 
 interface CreateHazeOutputNodeArgs {
@@ -58,6 +63,12 @@ interface CreateHazeOutputNodeArgs {
   raymarchSampleCount?: number
   atmosphereUniforms?: any
   sunDirection?: any
+  /** Stylized look uniforms (`baker.sky.lookUniforms`). Retints AP inscatter
+   *  so haze agrees with the styled sky instead of staying physical. */
+  lookUniforms?: any
+  /** Y-up world-space up vector (`baker.sky.upVector`). Required with
+   *  `lookUniforms`. */
+  upVector?: any
   viewHeightKm?: any
   cameraPositionKm?: any
   transmittanceLUT?: any
@@ -173,6 +184,8 @@ export function createHazeOutputNode({
   raymarchSampleCount = 64,
   atmosphereUniforms = null,
   sunDirection = null,
+  lookUniforms = null,
+  upVector = null,
   viewHeightKm = null,
   cameraPositionKm = null,
   transmittanceLUT = null,
@@ -189,6 +202,16 @@ export function createHazeOutputNode({
 }: CreateHazeOutputNodeArgs): any {
   if (skyCube && !cameraWorldUniform) {
     throw new Error('createHazeOutputNode: cameraWorldUniform is required when skyCube is provided.')
+  }
+
+  if (lookUniforms) {
+    const missing: string[] = []
+    if (!cameraWorldUniform) missing.push('cameraWorldUniform')
+    if (!sunDirection) missing.push('sunDirection')
+    if (!upVector) missing.push('upVector')
+    if (missing.length) {
+      throw new Error(`createHazeOutputNode: lookUniforms requires ${missing.join(', ')}.`)
+    }
   }
 
   if (enableRaymarchFallback) {
@@ -441,6 +464,32 @@ export function createHazeOutputNode({
         rmDebugRgb.assign(rmRgbScaled)
         rmDebugAlpha.assign(rmA)
       })
+    }
+
+    // Stylized look retint. Applied to AP inscatter after both the LUT and
+    // raymarch paths have merged, so haze agrees with the styled sky rather
+    // than staying physical — otherwise the two disagree at exactly the
+    // silhouette boundary this file already fights hardest to keep clean.
+    //
+    // `valueScale: 0` forces the look's value axis off here. Only the chroma
+    // axis is scale-invariant, and AP inscatter is a *partial-path* integral —
+    // far dimmer than the full sky integral the ramp's `intensity` is
+    // calibrated against. Pushing its luminance toward the ramp would blow out
+    // near geometry. Chroma replacement keeps the magnitude AP computed and
+    // swaps only the hue, which is what makes sky and haze land on the same
+    // colour without double-integrating anything.
+    if (lookUniforms) {
+      const lookWorldDir = tslNormalize(cameraWorldUniform.mul(vec4(rayDirView, float(0.0))).xyz)
+      const lookUp = tslNormalize(upVector)
+      apRgbScaled.assign(
+        applyLook({
+          color: apRgbScaled,
+          viewZenithCosAngle: clamp(dot(lookWorldDir, lookUp), float(-1.0), float(1.0)),
+          lightViewCosAngle: computeLightViewCosAngle(lookWorldDir, lookUp, tslNormalize(sunDirection)),
+          look: lookUniforms,
+          valueScale: float(0.0),
+        }),
+      )
     }
 
     // Raymarch debug modes — useful at altitude when isolating where

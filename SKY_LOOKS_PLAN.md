@@ -54,9 +54,13 @@ the mountains matches the sky with no visible silhouette fringe.
 
 ## 2. Commits
 
-- `5c4cbc7` — slices 1–4, labelled unverified at the time.
-- `3dea0c2` — verification script, `window.__sky` exposure in both demos.
-- (next) — slice 5: Unreal knobs, React props, looks guide, CLAUDE.md gotcha.
+- `ca76821` — slices 1–4, labelled unverified at the time.
+- `3f4678b` — verification script, `window.__sky` exposure in both demos.
+- `fdf2310` — slice 5: Unreal knobs, React props, looks guide, CLAUDE.md gotcha.
+
+Rebased onto `origin/main` after PR #6 (`<Sky>` as an effect-owned resource +
+`SkyController`). One conflict, in `src/react/Sky.tsx`: the five new props were
+added to `SkyController`'s destructure; `Sky()` keeps upstream's `props` form.
 
 ## 3. Design decisions — settled, don't re-litigate
 

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 // The WebGPU entry, not the root one. This package is WebGPU-only, and R3F's
 // root entry is a separate ~670 KB bundle that imports three's WebGL build for
 // `WebGLRenderer` / `WebGLCubeRenderTarget`. Importing it here dragged the whole
@@ -81,6 +81,7 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  * `<Sky>` — resource boundary around one vanilla `Sky` instance. A single
  * effect constructs, attaches and disposes it; `children` render only once
  * it exists, so `useSky()` is never `null` inside the boundary.
+ * Suspended children show a null fallback while their assets load.
  *
  * Construction-time options (rebuild the instance and remount `children`):
  *   `preset`, `quality`, `cubeSize`, `enableAerialPerspective`, `apKmPerSlice`
@@ -165,8 +166,11 @@ export function Sky(props: SkyProps) {
 
   return (
     <SkyContext.Provider value={resource.sky}>
-      <SkyController sky={resource.sky} {...props} />
-      {children}
+      {/* Keep asset loading from suspending and replaying the resource owner. */}
+      <Suspense fallback={null}>
+        <SkyController sky={resource.sky} {...props} />
+        {children}
+      </Suspense>
     </SkyContext.Provider>
   )
 }

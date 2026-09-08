@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Activity, StrictMode, act, useEffect } from 'react'
+import { Activity, StrictMode, Suspense, act, useEffect, useLayoutEffect } from 'react'
 import type { Root } from 'react-dom/client'
 import { createRoot } from 'react-dom/client'
 
@@ -96,6 +96,46 @@ const live = () => instances.filter((s) => !s.disposed)
 const render = (ui: React.ReactNode) => act(() => root.render(ui))
 
 describe('<Sky>', () => {
+  it('keeps resources live when suspended children reveal in StrictMode', async () => {
+    let ready = false
+    let resolve!: () => void
+    const loaded = new Promise<void>((done) => {
+      resolve = done
+    })
+    const observed: boolean[] = []
+    function Consumer() {
+      const sky = useSky() as unknown as FakeSky
+      useLayoutEffect(() => {
+        observed.push(sky.disposed)
+      }, [sky])
+      useEffect(() => {
+        observed.push(sky.disposed)
+      }, [sky])
+      if (!ready) throw loaded
+      observed.push(sky.disposed)
+      return null
+    }
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <Suspense fallback={null}>
+            <Sky>
+              <Consumer />
+            </Sky>
+          </Suspense>
+        </StrictMode>,
+      )
+    })
+    await act(async () => {
+      ready = true
+      resolve()
+      await loaded
+    })
+    expect(observed.length).toBeGreaterThan(0)
+    expect(observed).not.toContain(true)
+    expect(live()).toHaveLength(1)
+  })
+
   it('mounts one sky attached to the scene and gives children a live instance (StrictMode)', () => {
     render(
       <StrictMode>

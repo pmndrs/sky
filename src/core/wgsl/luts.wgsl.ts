@@ -143,7 +143,8 @@ fn skyViewLutPixel(
   rayleighScattering: vec3<f32>,
   absorptionExtinction: vec3<f32>,
   miePhaseG: f32,
-  groundAlbedo: vec3<f32>
+  groundAlbedo: vec3<f32>,
+  multiScatteringFactor: f32
 ) -> vec3<f32> {
   let PI = 3.1415926535897932;
   let OFFSET = 0.01;
@@ -267,7 +268,9 @@ fn skyViewLutPixel(
     let msUvY = (altitude01 + 0.5 / msRes) * (msRes / (msRes + 1.0));
     let multiScatteredLuminance = bilinearSample2D(multiScatterLut, vec2<f32>(msUvX, msUvY));
 
-    let S = directInScatter + multiScatteredLuminance * scattering;
+    // multiScatteringFactor: Unreal's artistic gain on the MS term, 1 = physical.
+    // Mirrors the TSL twin in backends/tsl/atmosphere.tsl.ts.
+    let S = directInScatter + multiScatteredLuminance * scattering * multiScatteringFactor;
     let Sint = (S - S * sampleTransmittance) / extSafe;
     L = L + throughput * Sint;
 

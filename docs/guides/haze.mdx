@@ -224,3 +224,15 @@ default linear-depth threshold. It defaults to `true` automatically when
 range) compress all real geometry into a thin sliver of `[0, 1]` linear
 depth, so the default test becomes unreliable; the `viewZ` test stays
 correct at any scale. See the [Planet-scale guide](../guides/planet-scale).
+
+## Stylized looks and haze
+
+If a [look](./looks) is assigned, AP inscatter is remapped through the same
+look uniforms the sky mesh uses, chroma axis only, so haze and sky agree at
+silhouettes. `setSkyLuminanceFactor` is applied to haze the same way. Nothing
+to configure — `applyHaze` wires both automatically.
+
+`setAerialPerspectiveDistanceScale(n)` (Unreal's
+`AerialPerspectiveViewDistanceScale`) stretches the optical path fed into the
+AP lookup: `2` is twice the haze per metre. It is a sample-time scale, so it
+costs no LUT rebuild and sets no dirty flag.

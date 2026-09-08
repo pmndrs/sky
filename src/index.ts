@@ -10,6 +10,32 @@ export { GroundedSkybox } from './sky/GroundedSkybox'
 export { SkyNight } from './sky/SkyNight'
 export { applyHaze } from './applyHaze'
 export { presets, resolvePreset } from './presets'
+export {
+  looks,
+  lookTracks,
+  registerLook,
+  registerLookTrack,
+  resolveLook,
+  resolveLookTrack,
+  sampleLook,
+  sampleLookTrack,
+  createLookTrack,
+  lerpLooks,
+  packLook,
+  applyEase,
+  MAX_LOOK_STOPS,
+} from './looks'
+export type {
+  Look,
+  LookInput,
+  LookStop,
+  LookEase,
+  LookSunTint,
+  LookKeyframe,
+  LookTrack,
+  PackedLook,
+  ColorInput,
+} from './looks'
 export { solarPosition } from './solarPosition'
 export { EARTH, mergeAtmosphereParams } from './core/AtmosphereParams'
 

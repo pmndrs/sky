@@ -38,7 +38,7 @@
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky, presets } from '@pmndrs/sky'
+      import { Sky, presets, looks } from '@pmndrs/sky'
 
       const renderer = new THREE.WebGPURenderer({ antialias: true })
       renderer.setPixelRatio(window.devicePixelRatio)
@@ -109,6 +109,26 @@
         turbidity: 1.0,
         groundAlbedo: 0.3,
         toneExposure: renderer.toneMappingExposure,
+        // Stylized look (ROADMAP 4.4). 'physical' = no look assigned;
+        // 'ghibli (track)' follows sun elevation through the built-in track.
+        look: 'physical',
+        chroma: 0.7,
+        value: 0.25,
+        intensity: 1.0,
+      }
+
+      // Re-apply the selected look with the live chroma/value/intensity
+      // overrides. All three are uniforms, so this costs a cube + PMREM
+      // re-bake and never touches the LUT chain.
+      const applySelectedLook = () => {
+        if (state.look === 'physical') return sky.setLook(null)
+        if (state.look === 'ghibli (track)') return sky.setLookTrack('ghibli')
+        return sky.setLook({
+          preset: state.look,
+          chroma: state.chroma,
+          value: state.value,
+          intensity: state.intensity,
+        })
       }
       const gui = renderer.inspector.createParameters('Sky')
       gui.add(state, 'preset', Object.keys(presets)).onChange((v) => sky.setPreset(v))
@@ -124,11 +144,23 @@
         renderer.toneMappingExposure = v
       })
 
+      const lookGui = renderer.inspector.createParameters('Look')
+      lookGui.add(state, 'look', ['physical', 'ghibli (track)', ...Object.keys(looks)]).onChange(applySelectedLook)
+      // chroma swaps hue but keeps physical luminance (and is what haze can
+      // share); value additionally overrides luminance, scaled by intensity.
+      lookGui.add(state, 'chroma', 0, 1, 0.01).onChange(applySelectedLook)
+      lookGui.add(state, 'value', 0, 1, 0.01).onChange(applySelectedLook)
+      lookGui.add(state, 'intensity', 0, 4, 0.01).onChange(applySelectedLook)
+
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight
         camera.updateProjectionMatrix()
         renderer.setSize(window.innerWidth, window.innerHeight)
       })
+
+      // Exposed for scripted verification / console poking (SKY_LOOKS_PLAN.md §1).
+      window.__sky = sky
+      window.__renderer = renderer
 
       renderer.setAnimationLoop(() => {
         sky.update(camera)

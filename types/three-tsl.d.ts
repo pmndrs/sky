@@ -36,6 +36,7 @@ export const int: any
 export const ivec3: any
 export const length: any
 export const logarithmicDepthToViewZ: any
+export const luminance: any
 export const max: any
 export const min: any
 export const mix: any
@@ -60,6 +61,7 @@ export const textureStore: any
 export const time: any
 export const uint: any
 export const uniform: any
+export const uniformArray: any
 export const uv: any
 export const varyingProperty: any
 export const vec2: any

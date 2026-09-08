@@ -243,6 +243,26 @@ SebH's reference handles this the same way (`RenderSkyAtmosphereInternalCs`
 checks `WorldHeight < AtmosphereParams.TopRadius`); a smooth blend across
 a transition band is a polish task, not a correctness one.
 
+### Two shader backends — the LUTs are built by WGSL, not the TSL twin
+
+`src/backends/tsl/atmosphere.tsl.ts` and `src/core/wgsl/*.wgsl.ts` are hand-
+synced twins, but they do not run in the same places. **Transmittance,
+MultiScatter and SkyView LUTs are built by the WGSL path** (`backends/wgsl/
+luts.ts` → `core/wgsl/luts.wgsl.ts`). The TSL `integrateScatteredLuminance`
+runs only in the AP LUT and in the two raymarch fallbacks (sky mesh above
+`topRadius`, haze past AP coverage). So a parameter threaded into the TSL
+side alone compiles, typechecks, passes unit tests — and has **zero visible
+effect at ground level**, because nothing on screen reads it.
+
+This bit `multiScatteringFactor` (2026-09-04): added to the TSL integrator,
+verified "no change" in the browser, root cause was the missing WGSL half.
+WGSL params are **positional fn args**, so adding one means (a) the fn
+signature in `luts.wgsl.ts`, (b) the multiply site, (c) the named key in the
+`backends/wgsl/luts.ts` wrapper call. The headless verify script
+(`examples/vanilla/scripts/verify-looks.mjs`) is what caught it — a diff of
+~0.0003 where >0 was expected. For any new atmosphere param: edit both twins,
+then check `examples/vanilla/parity/` still agrees.
+
 ### Vite HMR + WebGPU shader edits
 
 Editing a TSL helper while a page is open often leaves the previous shader

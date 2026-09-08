@@ -18,13 +18,10 @@ import {
   cos,
   sin,
   float,
-  vec2,
   vec3,
   vec4,
   dot,
   normalize,
-  cross,
-  length,
   max,
   clamp,
   mix,
@@ -41,10 +38,15 @@ import {
   integrateScatteredLuminance,
   moveToTopAtmosphere,
   raySphereIntersectNearest,
+  computeLightViewCosAngle,
   skyViewLutParamsToUv,
   transmittanceLutParamsToUv,
 } from '../backends/tsl/atmosphere.tsl'
 import { proceduralStars } from './shaders/proceduralStars.tsl'
+import { applyLook } from '../backends/tsl/look.tsl'
+import { clearLookUniforms, createLookUniforms, updateLookUniforms } from './LookUniforms'
+
+import type { Look } from '../looks'
 
 interface SkyAtmosphereMeshOptions {
   atmosphereUniforms?: any
@@ -112,6 +114,8 @@ export class SkyAtmosphereMesh extends Mesh {
   moonColor: any
   viewHeight: any
   luminanceScale: any
+  lookUniforms: ReturnType<typeof createLookUniforms>
+  skyLuminanceFactor: any
   _starsTexturePlaceholder: DataTexture
   starsTextureNode: any
   starsIntensity: any
@@ -331,6 +335,23 @@ export class SkyAtmosphereMesh extends Mesh {
     this.luminanceScale = uniform(40.0)
 
     /**
+     * Stylized look uniforms. Created in the identity state (chroma 0,
+     * value 0), so a mesh with no look assigned renders exactly as before.
+     * Populated by `setLook`; every field is a uniform, so look changes
+     * never rebuild the LUT chain or recompile the node graph.
+     */
+    this.lookUniforms = createLookUniforms()
+
+    /**
+     * Unreal's `SkyLuminanceFactor`: a per-channel multiplier applied to the
+     * sky colour *after* the look, as a final grade. Distinct from
+     * `luminanceScale`, which is the scalar ILLUMINANCE_IS_ONE normalisation —
+     * keep them separate or the units story gets muddled. Excludes the
+     * sun/moon/star discs, matching Unreal. Default white = no-op.
+     */
+    this.skyLuminanceFactor = uniform(new Vector3(1.0, 1.0, 1.0))
+
+    /**
      * Stars equirect HDR texture (HalfFloat, RGBA). Bound by
      * `SkyNight.enable({ source: 'hdri' | 'texture' })`; until then holds
      * a 1×1 black placeholder so the shader stays well-formed. Swapping
@@ -438,6 +459,17 @@ export class SkyAtmosphereMesh extends Mesh {
     return this
   }
 
+  /**
+   * Assign (or clear) the stylized look. Pure uniform writes — no material
+   * rebuild, no LUT invalidation. Callers that bake to a cube must still mark
+   * the cube dirty; `SkyAtmosphereBaker.setLook` does that.
+   */
+  setLook(look: Look | null): this {
+    if (look) updateLookUniforms(this.lookUniforms, look)
+    else clearLookUniforms(this.lookUniforms)
+    return this
+  }
+
   _buildColorNode(): any {
     const params = this.atmosphereUniforms
     const skyViewTex = this.skyViewLUT.texture
@@ -464,6 +496,8 @@ export class SkyAtmosphereMesh extends Mesh {
     const moonDiscCosU = this.moonDiscCos
     const moonColorU = this.moonColor
     const mirrorBelowHorizonU = this.mirrorBelowHorizon
+    const lookU = this.lookUniforms
+    const skyLuminanceFactorU = this.skyLuminanceFactor
 
     return Fn(() => {
       // View direction from the camera to this fragment's world position.
@@ -492,18 +526,9 @@ export class SkyAtmosphereMesh extends Mesh {
       // View-zenith cosine.
       const viewZenithCosAngle = clamp(dot(viewDir, upVec), float(-1.0), float(1.0))
 
-      // Light-view cosine, per Unreal RenderSkyRayMarching.hlsl:325-329.
-      // Build a stable on-plane basis perpendicular to up, aligned with the
-      // view direction's horizontal component, then project the sun onto it.
-      const sideRaw = cross(upVec, viewDir)
-      const sideLen = max(length(sideRaw), float(1e-6))
-      const sideVector = sideRaw.div(sideLen)
-      const forwardVector = normalize(cross(sideVector, upVec))
-
-      const lightOnPlaneX = dot(sunDir, forwardVector)
-      const lightOnPlaneY = dot(sunDir, sideVector)
-      const lightOnPlaneLen = max(length(vec2(lightOnPlaneX, lightOnPlaneY)), float(1e-6))
-      const lightViewCosAngle = clamp(lightOnPlaneX.div(lightOnPlaneLen), float(-1.0), float(1.0))
+      // Sun azimuth relative to the view direction. Shared with the haze
+      // pass so the look's sun tint lands identically on sky and on haze.
+      const lightViewCosAngle = computeLightViewCosAngle(viewDir, upVec, sunDir)
 
       // Ground intersection test (planet at origin, camera along local up).
       const earthO = vec3(0.0, 0.0, 0.0)
@@ -567,6 +592,23 @@ export class SkyAtmosphereMesh extends Mesh {
         const lutUv = skyViewLutParamsToUv(params, intersectsGround, viewZenithCosAngle, lightViewCosAngle, viewHeight)
         skyColor.assign(texture(skyViewTex, lutUv).rgb.mul(luminanceScaleU))
       }
+
+      // Stylized look remap. Applied here — after the LUT/raymarch branches
+      // have merged, and before stars/sun/moon are added — so it covers both
+      // sky paths and excludes the discs by construction. Identity while no
+      // look is assigned. The cube camera renders this same mesh, so the cube
+      // background and its PMREM'd IBL inherit the look for free.
+      skyColor.assign(
+        applyLook({
+          color: skyColor,
+          viewZenithCosAngle,
+          lightViewCosAngle,
+          look: lookU,
+        }),
+      )
+      // Final per-channel grade (Unreal SkyLuminanceFactor). After the look so
+      // a tint is not partially undone by the chroma remap.
+      skyColor.mulAssign(skyLuminanceFactorU)
 
       // Camera→space transmittance along this view ray. Shared by the stars
       // fade and the sun-disc tint below. Defaults to white (no attenuation)

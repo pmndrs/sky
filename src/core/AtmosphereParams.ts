@@ -36,6 +36,13 @@ export interface AtmosphereParams {
   // Ground albedo used by multi-scattering LUT
   groundAlbedo: Vector3
 
+  /**
+   * Unreal's `MultiScatteringFactor`: a gain on the multiple-scattering term
+   * at every sample site. 1 is physical. Openly non-physical above that —
+   * artists crank it for lusher, hazier skies. Feeds the LUT bake.
+   */
+  multiScatteringFactor: number
+
   // Sun
   sunAngularRadius: number
   sunIlluminance: Vector3
@@ -94,6 +101,7 @@ export const EARTH: AtmosphereParams = {
 
   // Ground albedo used by multi-scattering LUT
   groundAlbedo: new Vector3(0.3, 0.3, 0.3),
+  multiScatteringFactor: 1.0,
 
   // Sun
   sunAngularRadius: 0.004675, // radians (~0.268 deg)

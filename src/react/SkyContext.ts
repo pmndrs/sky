@@ -24,6 +24,11 @@ export interface SkyContextValue {
   setHazeStrength(hazeStrength: number): void
   setHazePolicy(hazePolicy: any): void
   setHazeAltitudeBlend(hazeAltitudeBlend: any): void
+  setLook(look: any): void
+  setLookTrack(track: any): void
+  setSkyLuminanceFactor(factor: any): void
+  setAerialPerspectiveDistanceScale(value: number): void
+  setMultiScatteringFactor(value: number): void
   applyHaze(sceneTexture: any, options?: any): any
   [key: string]: any
 }

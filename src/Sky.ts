@@ -1,4 +1,5 @@
-import { Vector3 } from 'three/webgpu'
+import { Color, Vector3 } from 'three/webgpu'
+import { uniform } from 'three/tsl'
 
 import { SkyAtmosphereBaker } from './sky/SkyAtmosphereBaker'
 import { GroundedSkybox } from './sky/GroundedSkybox'
@@ -9,6 +10,9 @@ import { SkySun } from './sky/SkySun'
 import { mergeAtmosphereParams } from './core/AtmosphereParams'
 import { LUT_RESOLUTIONS } from './core/resolutions'
 import { presets, resolvePreset } from './presets'
+import { resolveLook, resolveLookTrack, sampleLookTrack } from './looks'
+
+import type { Look, LookInput, LookKeyframe, LookTrack } from './looks'
 import { applyHaze, policyToHazeMode } from './applyHaze'
 import { solarPosition } from './solarPosition'
 
@@ -82,6 +86,8 @@ export class Sky {
   _northKey: string
   _elevation!: number
   _azimuth!: number
+  _lookTrack: LookTrack | null = null
+  _apDistanceScale: any = null
   _cameraFar?: any
   _hazeStrength?: any
   _hazePolicy?: any
@@ -244,7 +250,45 @@ export class Sky {
     this._azimuth = azimuth
     const theta = raw ? azimuth : azimuth + (NORTH_AXES[this._northKey]?.offsetDeg ?? 0)
     this.baker.setSun({ elevation, azimuth: theta })
+    // Every sun path — setTimeOfDay, setLatitude, setDayOfYear, setNorth —
+    // funnels through here, so this is the one place a track needs to
+    // re-evaluate. Plain JS over a handful of keys; it only writes uniforms.
+    this._applyLookTrack()
     return this
+  }
+
+  /**
+   * Assign a stylized look — a registered name, or an inline definition which
+   * may name a `preset` to inherit from. Pass `null` to return to the purely
+   * physical sky.
+   *
+   * Costs a cube + PMREM re-bake, never a LUT rebuild, so this is cheap enough
+   * to drive from a slider. Assigning a look clears any active look track.
+   */
+  setLook(look: string | LookInput | Look | null) {
+    this._lookTrack = null
+    this.baker.setLook(look === null ? null : resolveLook(look))
+    return this
+  }
+
+  /**
+   * Drive the look from a keyframe track, re-evaluated whenever the sun moves.
+   *
+   * Tracks key on **sun elevation** by default rather than clock time, because
+   * elevation is what actually determines how the sky reads — `time: 6` is full
+   * night at latitude 65° in December and hours into daylight there in June.
+   * Pass `{ by: 'time' }` to `createLookTrack` for fictional scenes.
+   */
+  setLookTrack(track: string | LookKeyframe[] | LookTrack | null) {
+    this._lookTrack = track === null ? null : resolveLookTrack(track)
+    if (this._lookTrack === null) this.baker.setLook(null)
+    else this._applyLookTrack()
+    return this
+  }
+
+  _applyLookTrack() {
+    if (!this._lookTrack) return
+    this.baker.setLook(sampleLookTrack(this._lookTrack, { elevation: this._elevation, time: this._timeOfDay }))
   }
 
   setNorth(axis: string) {
@@ -318,6 +362,52 @@ export class Sky {
 
   setAtmosphere(partial: any) {
     this.baker.setAtmosphereParams(partial)
+    return this
+  }
+
+  /**
+   * Unreal's `MultiScatteringFactor` — a gain on the multiple-scattering term.
+   * 1 is physical; above that is an openly non-physical "lusher, hazier" knob.
+   * Feeds the LUT bake (atmosphere-dirty), so set it at preset-load time
+   * rather than scrubbing it per frame.
+   */
+  setMultiScatteringFactor(value: number) {
+    this.baker.setAtmosphereParams({ multiScatteringFactor: value })
+    return this
+  }
+
+  /**
+   * Unreal's `SkyLuminanceFactor` — a per-channel tint applied to the sky
+   * after any look, as a final grade. Accepts a hex string / number (sRGB,
+   * converted to linear), a `Color`, a `Vector3`, or `[r, g, b]` (linear).
+   * Cube + PMREM re-bake only; haze inherits it through the same uniform.
+   */
+  setSkyLuminanceFactor(factor: string | number | Color | Vector3 | number[]) {
+    let v: Vector3
+    if (factor instanceof Vector3) {
+      v = factor
+    } else if (Array.isArray(factor)) {
+      v = new Vector3().fromArray(factor)
+    } else {
+      const c = factor instanceof Color ? factor : new Color(factor)
+      v = new Vector3(c.r, c.g, c.b)
+    }
+    this.baker.setSkyLuminanceFactor(v)
+    return this
+  }
+
+  /**
+   * Unreal's `AerialPerspectiveViewDistanceScale` — stretches the optical path
+   * used for haze. 2 = twice the haze per metre. A sample-time scale on the AP
+   * lookup: no LUT rebuild, no re-bake, nothing dirty. Works before or after
+   * `applyHaze`.
+   */
+  setAerialPerspectiveDistanceScale(value: number) {
+    if (!this._apDistanceScale) {
+      this._apDistanceScale = uniform(value)
+    } else {
+      this._apDistanceScale.value = value
+    }
     return this
   }
 

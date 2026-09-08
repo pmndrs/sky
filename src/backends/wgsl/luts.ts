@@ -11,7 +11,7 @@
  * arg names so the call sites stay readable.
  */
 
-import { wgslFn, texture } from 'three/tsl'
+import { float, texture, wgslFn } from 'three/tsl'
 
 import {
   RAY_SPHERE,
@@ -115,6 +115,8 @@ export function skyViewLutColorNode(
     absorptionExtinction: params.absorptionExtinction,
     miePhaseG: params.miePhaseG,
     groundAlbedo: params.groundAlbedo,
+    // Bundles that predate the field (older parity pages) fall back to physical.
+    multiScatteringFactor: params.multiScatteringFactor ?? float(1.0),
   })
 }
 

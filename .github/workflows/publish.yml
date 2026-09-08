@@ -21,6 +21,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual run from any ref: exercises install/build/test and the
+  # already-published guard without publishing (the guard skips it).
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -35,7 +38,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # npm@11 (Trusted Publishing needs >= 11.5.1) supports Node 20/22;
+          # npm@latest (12.x) needs Node >= 22.22, which is why the 0.2.0 tag
+          # run failed on Node 20. Pin both.
+          node-version: 22
           registry-url: 'https://registry.npmjs.org'
           cache: pnpm
 
@@ -43,6 +49,7 @@ jobs:
 
       # Sanity check: the version on the tag matches package.json.
       - name: Verify tag matches package.json version
+        if: github.ref_type == 'tag'
         run: |
           PKG_VERSION="v$(node -p "require('./package.json').version")"
           if [ "${GITHUB_REF_NAME}" != "${PKG_VERSION}" ]; then
@@ -69,7 +76,7 @@ jobs:
 
       # Trusted Publishing (OIDC) needs npm 11.5.1+.
       - if: steps.check.outputs.exists != 'true'
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - if: steps.check.outputs.exists != 'true'
         run: npm publish --provenance --access public

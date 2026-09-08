@@ -1,6 +1,6 @@
 {
   "name": "@pmndrs/sky",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Production-quality Hillaire atmospheric sky for Three.js / TSL on the WebGPU renderer. Drop-in vanilla and React (R3F) entries.",
   "keywords": [
     "three",

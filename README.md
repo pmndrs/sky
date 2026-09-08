@@ -206,6 +206,9 @@ current status and open work.
 
 ## Changelog
 
+- **0.3.0**
+  - **Fix React Suspense disposal.** Keep the `<Sky>` resource owner mounted while children load assets, preventing `Sky: instance is disposed` errors when StrictMode replays effects. Suspended children now render a null fallback inside `<Sky>`.
+  - Add a regression test covering suspended child rendering, layout effects, and passive effects in StrictMode.
 - **0.2.0** — first npm release.
   - **Stylized looks.** An artist-control layer over the physical sky: a colour ramp over view elevation plus a sun-relative tint, blended on two axes — `chroma` (swap hue, keep physical luminance) and `value` (override luminance too, for artificial moonlight). `sky.setLook('ghibli-day')`, `sky.setLookTrack('ghibli')` (follows sun elevation), `registerLook(...)`. Built-in `ghibli-night/dusk/day`. Background, PMREM IBL and aerial-perspective haze all inherit the look. See `docs/guides/looks.mdx`.
   - **Unreal-parity knobs.** `setMultiScatteringFactor(n)` (feeds the LUT bake), `setSkyLuminanceFactor(color)` and `setAerialPerspectiveDistanceScale(n)` (uniforms, no rebake).

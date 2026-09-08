@@ -206,6 +206,13 @@ current status and open work.
 
 ## Changelog
 
+- **0.2.0** — first npm release.
+  - **Stylized looks.** An artist-control layer over the physical sky: a colour ramp over view elevation plus a sun-relative tint, blended on two axes — `chroma` (swap hue, keep physical luminance) and `value` (override luminance too, for artificial moonlight). `sky.setLook('ghibli-day')`, `sky.setLookTrack('ghibli')` (follows sun elevation), `registerLook(...)`. Built-in `ghibli-night/dusk/day`. Background, PMREM IBL and aerial-perspective haze all inherit the look. See `docs/guides/looks.mdx`.
+  - **Unreal-parity knobs.** `setMultiScatteringFactor(n)` (feeds the LUT bake), `setSkyLuminanceFactor(color)` and `setAerialPerspectiveDistanceScale(n)` (uniforms, no rebake).
+  - **React:** `look`, `lookTrack`, `skyLuminanceFactor`, `apDistanceScale`, `multiScatteringFactor` props on `<Sky>`. `<Sky>` is now an effect-owned resource with an explicit disposal contract (StrictMode-safe).
+  - **React bindings require `@react-three/fiber >= 10.0.0-alpha.4`** — earlier 10.x canaries import a WebGL-only class from `three/webgpu` and fail to load.
+  - Headless-WebGPU verification script for the looks layer: `examples/vanilla/scripts/verify-looks.mjs`.
+  - Known: the built-in Ghibli palette is a first pass and will be re-tuned.
 - **0.1.4**
   - **New `GroundedSkybox`.** Ground-projected skybox mesh that reprojects the cube's lower hemisphere onto a flat disc at world `y=0`. Optional `reflective` mode for wet-pavement / mirror-floor looks. Use `sky.createGroundedSkybox({ height, radius, reflective })`. See `examples/vanilla/15-grounded-skybox.html` for dial-in.
   - **New `mirrorBelowHorizon`** constructor option + `sky.setMirrorBelowHorizon(flag)` runtime setter. When enabled, the cube bake fills the lower hemisphere with a clean Y-mirror of the sky instead of the LUT's lit-ground-albedo content. Pair with reflective-floor scenes so PBR IBL doesn't pick up a coloured ground tint from below.

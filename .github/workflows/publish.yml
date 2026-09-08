@@ -55,7 +55,21 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
-      # Trusted Publishing (OIDC) needs npm 11.5.1+.
-      - run: npm install -g npm@latest
+      # Idempotent: a tag pushed for a version that was already published
+      # (e.g. 0.2.0, published manually) must not fail the run.
+      - name: Skip if this version is already on the registry
+        id: check
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "@pmndrs/sky@${VERSION}" version >/dev/null 2>&1; then
+            echo "already published: @pmndrs/sky@${VERSION}"; echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - run: npm publish --provenance --access public
+      # Trusted Publishing (OIDC) needs npm 11.5.1+.
+      - if: steps.check.outputs.exists != 'true'
+        run: npm install -g npm@latest
+
+      - if: steps.check.outputs.exists != 'true'
+        run: npm publish --provenance --access public

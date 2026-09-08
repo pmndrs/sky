@@ -5,7 +5,8 @@ LUTs" rows. Research: [`research/stylized-ghibli-sky.md`](research/stylized-ghib
 
 **State:** all five slices done and **verified on a real WebGPU adapter**
 (headless Chromium, Metal). `pnpm run ci` green. Branch `feat/sky-looks` off
-`main`. Ready for review / PR.
+`main`. **Merged as PR #8; released in `@pmndrs/sky@0.2.0` (2026-09-08).**
+Ghibli palette flagged by the maintainer as a first pass to re-tune.
 
 ---
 

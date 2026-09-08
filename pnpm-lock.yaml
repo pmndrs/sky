@@ -12,8 +12,8 @@ importers:
         specifier: ^9.39.2
         version: 9.39.4
       '@react-three/fiber':
-        specifier: ^10.0.0-alpha.2
-        version: 10.0.0-canary.dbbe704(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.185.1)
+        specifier: 10.0.0-alpha.4
+        version: 10.0.0-alpha.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.185.1)
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.0
@@ -87,8 +87,8 @@ importers:
         specifier: workspace:*
         version: link:../..
       '@react-three/fiber':
-        specifier: ^10.0.0-alpha.2
-        version: 10.0.0-canary.dbbe704(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.185.1)
+        specifier: 10.0.0-alpha.4
+        version: 10.0.0-alpha.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.185.1)
       react:
         specifier: ^19.2.6
         version: 19.2.7
@@ -706,12 +706,23 @@ packages:
     resolution: {integrity: sha512-SEeaJLb3qBNF/OaXnaR1NmmBbFYk1zC0ZH/52fATcRPLFg/p791YrcyFFy44Bo9sLaGuSuLp5Q6axbb/O+v/RA==}
     engines: {node: ^14.18.0 || >=16.0.0}
 
-  '@react-three/fiber@10.0.0-canary.dbbe704':
-    resolution: {integrity: sha512-D5ChHNZDUV+NTg5w1+7DiFllqtvo53DD2TdUvEUQxdsr65Wa56j3AKVZgslDu2W5QpXNMHXDV/wGc/FDcikMvg==}
+  '@pmndrs/scheduler@0.2.0':
+    resolution: {integrity: sha512-Lv+4ZQjxw2BMcPDWHgcP2tULiEKZL+x5+mFW2YXWZUrDhT4h5PKpRv/U5ApweL+R319sdY63C688zd4QVamHvA==}
+    peerDependencies:
+      react: '>=18'
+      react-dom: '>=18'
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
+
+  '@react-three/fiber@10.0.0-alpha.4':
+    resolution: {integrity: sha512-r24sltRu+b7T5b9gyd+Z/dAv9zId0j4sBRjOg4mPvsvRPxfPM2KArOxq2peLqf51U2HFAl1zboB2FcLYwR0v/g==}
     peerDependencies:
       react: '>=19.0 <19.3'
       react-dom: '>=19.0 <19.3'
-      three: '>=0.181.2'
+      three: '>=0.185.0'
     peerDependenciesMeta:
       react-dom:
         optional: true
@@ -3601,10 +3612,16 @@ snapshots:
 
   '@pkgr/core@0.3.6': {}
 
-  '@react-three/fiber@10.0.0-canary.dbbe704(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.185.1)':
+  '@pmndrs/scheduler@0.2.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    optionalDependencies:
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+
+  '@react-three/fiber@10.0.0-alpha.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.185.1)':
     dependencies:
       '@babel/runtime': 7.29.7
       '@monogrid/gainmap-js': 3.4.0(three@0.185.1)
+      '@pmndrs/scheduler': 0.2.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       dequal: 2.0.3
       its-fine: 2.0.0(@types/react@19.2.17)(react@19.2.7)
       react: 19.2.7

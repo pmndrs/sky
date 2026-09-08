@@ -6,22 +6,25 @@ Minimal react-three-fiber + WebGPU demo of `<Sky>` from `@pmndrs/sky/react`.
 pnpm --filter @pmndrs/sky-example-react dev
 ```
 
-## Status: needs browser verification ⚠️
+## Status: builds and renders on r3f 10.0.0-alpha.4 ✅
 
-This app is written against the documented `<Sky>` API and the r3f v10 WebGPU
-`gl` factory, but it is **not yet runtime-verified**, for two reasons:
+Verified 2026-09-08 (headless Chromium, WebGPU/Metal): `vite build` succeeds,
+the page renders the sky with an IBL-lit sphere, console clean apart from one
+r3f deprecation warning (below).
 
-1. **`vite build` (rollup) currently fails** on an upstream mismatch: the
-   installed `@react-three/fiber@10.0.0-canary` imports `WebGLCubeRenderTarget`
-   from bare `three`, which resolves to the WebGPU build (`three/webgpu`) that
-   does not export it. This is an r3f-v10-canary ↔ three-WebGPU interop issue,
-   not a `@pmndrs/sky` bug. `vite dev` (esbuild) may still serve the app since
-   it does not enforce named-export checks the way the production build does.
+History: r3f 10.x canaries before alpha.4 imported `WebGLCubeRenderTarget` from
+`three/webgpu`, which does not export it, so `vite build` failed and
+`@pmndrs/sky/react` could not load. alpha.4 imports `CubeRenderTarget` instead.
+**`@pmndrs/sky/react` therefore requires `@react-three/fiber >= 10.0.0-alpha.4`.**
 
-2. **`<AutoHaze>` is intentionally omitted** — `useRenderPipeline` is not
-   present in every r3f canary build.
+Open items:
 
-To finish: pin/upgrade to an r3f v10 build whose WebGPU renderer path is stable,
-confirm the `gl` factory boots `WebGPURenderer`, then re-enable the production
-build. The vanilla examples (`examples/vanilla`) exercise the same underlying
-`Sky` engine and are fully working today.
+1. This example imports `Canvas` from the default `@react-three/fiber` entry,
+   which alpha.4 logs as deprecated in favour of `@react-three/fiber/webgpu`
+   (the entry `<Sky>` itself uses). A first attempt at switching the example's
+   `Canvas` to `/webgpu` rendered black in a headless run and was not pursued —
+   alpha.4's WebGPU `Canvas` treats a function-valued `gl` prop differently
+   (see `isRenderer` / `is.fun(glConfig)` in its `dist/webgpu/index.mjs`).
+   Needs a small investigation; the current code works.
+2. `<AutoHaze>` is omitted to keep this minimal. `useRenderPipeline` is present
+   in alpha.4, so it can be added — see the haze guide.

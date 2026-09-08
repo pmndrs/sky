@@ -119,12 +119,12 @@ Model tiers chosen for token economy: **[H]** Haiku (mechanical), **[S]** Sonnet
 
 ### Track 0 — Ship (this week, mostly human actions)
 
-| #   | Task                                                                                               | Who                   |
-| --- | -------------------------------------------------------------------------------------------------- | --------------------- |
-| 0.1 | Create `pmndrs/sky` repo, add remote, push branch, open PR                                         | Dennis + main session |
-| 0.2 | Register npm trusted publisher (`@pmndrs/sky` ← `pmndrs/sky` / `publish.yml`)                      | Dennis (npmjs)        |
-| 0.3 | Browser smoke test all vanilla demos (chrome-devtools, screenshots)                                | main session          |
-| 0.4 | Bump r3f in `examples/react` when the alpha with the `CubeRenderTarget` fix ships; flip its README | [H]                   |
+| #   | Task                                                                                                                                                 | Who                   |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| 0.1 | Create `pmndrs/sky` repo, add remote, push branch, open PR                                                                                           | Dennis + main session |
+| 0.2 | Register npm trusted publisher (`@pmndrs/sky` ← `pmndrs/sky` / `publish.yml`)                                                                        | Dennis (npmjs)        |
+| 0.3 | Browser smoke test all vanilla demos (chrome-devtools, screenshots)                                                                                  | main session          |
+| 0.4 | **DONE 2026-09-08** — r3f bumped to `10.0.0-alpha.4` (root devDep + `examples/react`); `vite build` passes, example renders headless; README flipped | [H] → main session    |
 
 ### Track 1 — Sky correctness (P0, before demo/feature work amplifies it)
 

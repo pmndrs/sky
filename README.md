@@ -27,7 +27,8 @@ pnpm add @pmndrs/sky
 ```
 
 Peer-deps: `three` (≥0.185), and optionally `react` + `@react-three/fiber`
-(≥10.0.0-alpha) if you use the React bindings. Requires the WebGPU
+(≥10.0.0-alpha.4 — earlier 10.x canaries import a WebGL-only class from
+`three/webgpu` and fail to load) if you use the React bindings. Requires the WebGPU
 renderer — see [Installation](https://sky.docs.pmnd.rs/getting-started/installation)
 for details.
 

@@ -24,6 +24,7 @@ export {
   packLook,
   applyEase,
   MAX_LOOK_STOPS,
+  LOOK_UNIT_LUMINANCE,
 } from './looks'
 export type {
   Look,

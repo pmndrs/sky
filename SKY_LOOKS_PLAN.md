@@ -193,10 +193,35 @@ TSL-only and had zero visible effect (diff 0.0003). The LUTs are built by the
 WGSL backend; the TSL twin only runs in the raymarch fallbacks. Now recorded
 as a CLAUDE.md gotcha. Both twins carry the multiply.
 
-## 7. Next
+## 7. Follow-up (2026-09-24) — intensity units, palette, workbench
 
-- Open a PR from `feat/sky-looks`.
-- Art-direction pass on `ghibli-day`'s near-white horizon (see §1 caveats).
-- Sun-tint lobe: confirm visually from a sun-facing camera.
+Measured the physical sky in scene units from the new workbench (headless
+WebGPU, `NoToneMapping`, `exposure: 40`): noon zenith L ≈ 10.5, horizon ≈ 19;
+sun at +3°: 2.3 → 14; civil twilight −3°: 0.2 → 0.6. A ramp at `intensity: 1`
+mapped 1.0 → L = 1, so the `value` axis was ~12× too dark by default and the
+physical / ramp balance moved whenever `exposure` changed. **Fix:** the shader
+now scales the ramp by `intensity × luminanceScale × LOOK_UNIT_LUMINANCE`
+(0.3, the measured zenith response per unit scale), so `intensity: 1` means
+"as bright as the daytime sky" at any exposure. `ghibli-night` with
+`value: 0.5` now reads as a moonlit navy gradient instead of near-black.
+
+Palette: `ghibli-day` gained a horizon band (`0.08` smooth → `0.35`) so the
+cerulean arrives by ~20° instead of the near-white horizon owning the lower
+half of the sky — the §1 caveat. `ghibli-dusk` got the same treatment
+(`-0.05 / 0.12 / 0.45 / 1`). The palette-pinning tests became property tests
+(stop cap, horizon band present, track resampling preserves each source
+look at the union positions).
+
+New: `examples/vanilla/component-05-looks.html` (ramp workbench, exposes
+`window.__sky/__camera/__controls/__state/__looks`) and
+`scripts/verify-looks-ramp.mjs`, which reads the centre pixel column of a
+full-override render and checks it against `sampleLook` per row — worst
+channel error 1/255 across a linear 3-stop and a smooth/pow 4-stop ramp, i.e.
+the ramp walk, uniform-array padding and easing all match the JS reference.
+
+Still open:
+
+- Sun-tint lobe: confirm visually from a sun-facing camera (the workbench's
+  `faceSun` button exists for this).
 - Optional: extend `verify-looks.mjs` to the planet-scale demo so the
   above-`topRadius` raymarch branch is exercised with a look assigned.

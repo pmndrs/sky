@@ -14,6 +14,7 @@ import { useFrame, useThree } from '@react-three/fiber/webgpu'
 
 import { Sky as VanillaSky } from '../Sky'
 import { SkyContext } from './SkyContext'
+import { useStableValue } from './useStableValue'
 
 export interface SkyProps {
   preset?: string
@@ -185,19 +186,34 @@ function SkyController({
   timeOfDay,
   latitude,
   dayOfYear,
-  sunDirection,
+  sunDirection: sunDirectionProp,
   turbidity,
-  groundAlbedo,
-  atmosphere,
+  groundAlbedo: groundAlbedoProp,
+  atmosphere: atmosphereProp,
   hazeStrength,
   hazePolicy,
-  hazeAltitudeBlend,
-  look,
-  lookTrack,
-  skyLuminanceFactor,
+  hazeAltitudeBlend: hazeAltitudeBlendProp,
+  look: lookProp,
+  lookTrack: lookTrackProp,
+  skyLuminanceFactor: skyLuminanceFactorProp,
   apDistanceScale,
   multiScatteringFactor,
 }: SkyProps & { sky: VanillaSky }) {
+  // Object-valued props keyed by structural equality, not reference — an
+  // inline `atmosphere={{...}}` / `sunDirection={{...}}` re-created every
+  // parent render must not re-run the effect below (each re-run calls a
+  // baker setter that marks LUT stages dirty; see issue #12). The baker
+  // itself also early-outs on an unchanged value (belt & suspenders for
+  // vanilla callers that set per frame), but stabilizing here avoids the
+  // setter call — and its dirty-flag bookkeeping — entirely.
+  const sunDirection = useStableValue(sunDirectionProp)
+  const groundAlbedo = useStableValue(groundAlbedoProp)
+  const atmosphere = useStableValue(atmosphereProp)
+  const look = useStableValue(lookProp)
+  const lookTrack = useStableValue(lookTrackProp)
+  const skyLuminanceFactor = useStableValue(skyLuminanceFactorProp)
+  const hazeAltitudeBlend = useStableValue(hazeAltitudeBlendProp)
+
   useEffect(() => {
     if (typeof timeOfDay === 'number') sky.setTimeOfDay(timeOfDay)
   }, [sky, timeOfDay])

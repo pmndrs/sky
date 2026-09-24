@@ -107,6 +107,8 @@ export class SkyAtmosphereBaker {
   /** Scratch vectors so the per-frame `setCamera` path allocates nothing. */
   _scratchVec: Vector3
   _skyViewSunVec: Vector3
+  _lastSunElevation: number
+  _lastSunAzimuth: number
 
   constructor(
     renderer: any,
@@ -255,6 +257,13 @@ export class SkyAtmosphereBaker {
     this._lastCubeHeightKm = NaN
     this._scratchVec = new Vector3()
     this._skyViewSunVec = new Vector3()
+
+    // Last (elevation, azimuth) applied via setSun(), for the structural
+    // early-out below. NaN guarantees the first call always applies (NaN
+    // never === NaN), matching the NaN-sentinel pattern used above for the
+    // SkyView bake-state comparisons.
+    this._lastSunElevation = NaN
+    this._lastSunAzimuth = NaN
   }
 
   get texture(): Texture {
@@ -396,6 +405,22 @@ export class SkyAtmosphereBaker {
    * `lightViewCosAngle`.
    */
   setSun({ elevation, azimuth }: { elevation: number; azimuth: number }): void {
+    // Structural early-out: an object-valued `sunDirection` prop re-created
+    // every render (React) — or any caller re-applying the same value every
+    // frame — would otherwise re-mark sunDirty/cubeDirty and force a
+    // SkyView + cube + PMREM re-bake for no actual change. `_lastSun*`
+    // starts at NaN so the first call always applies. Listeners are
+    // intentionally skipped on this path — nothing they'd observe changed.
+    //
+    // This does NOT starve `setCamera()`'s per-frame frame-drift resync:
+    // `setCamera()` recomputes `_skyViewSunZenith` itself via
+    // `_syncSkyViewSunFrame()` on every call (reading `_sunVec` /
+    // `_cameraUp` directly), independent of whether `setSun()` ran this
+    // frame — see that method's dirtying logic below.
+    if (elevation === this._lastSunElevation && azimuth === this._lastSunAzimuth) return
+    this._lastSunElevation = elevation
+    this._lastSunAzimuth = azimuth
+
     const phi = MathUtils.degToRad(90 - elevation)
     const theta = MathUtils.degToRad(azimuth)
 
@@ -441,7 +466,31 @@ export class SkyAtmosphereBaker {
 
   setAtmosphereParams(partial: any): void {
     const prevSunAngularRadius = this.atmosphereParams.sunAngularRadius
-    this.atmosphereParams = mergeAtmosphereParams(this.atmosphereParams, partial)
+    const next = mergeAtmosphereParams(this.atmosphereParams, partial)
+
+    // Structural early-out: an object-valued `atmosphere` prop re-created
+    // every render (React) would otherwise re-mark atmosDirty every time,
+    // forcing a full Transmittance + MultiScatter + SkyView + cube + PMREM
+    // rebake for no actual change. Compare only the keys the caller
+    // provided against the *current* merged params — numbers by `===`,
+    // Vector3 by `.equals()` (a fresh clone from `mergeAtmosphereParams`
+    // never `===` the old instance even when the values match). An empty
+    // `partial` compares as unchanged (vacuously — no keys differ).
+    if (partial) {
+      let changed = false
+      for (const key of Object.keys(partial)) {
+        const cur = (this.atmosphereParams as unknown as Record<string, unknown>)[key]
+        const nxt = (next as unknown as Record<string, unknown>)[key]
+        const differs = cur instanceof Vector3 ? !(nxt instanceof Vector3 && cur.equals(nxt)) : cur !== nxt
+        if (differs) {
+          changed = true
+          break
+        }
+      }
+      if (!changed) return
+    }
+
+    this.atmosphereParams = next
     updateAtmosphereUniforms(this.atmosphereUniforms, this.atmosphereParams)
 
     // Propagate sunAngularRadius to the disc only when it actually changes.

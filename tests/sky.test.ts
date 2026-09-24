@@ -158,4 +158,19 @@ describe('Sky', () => {
 
     sky.dispose()
   })
+
+  it('setPreset keeps a caller-configured sun disc and rim softness', () => {
+    const sky = new Sky(mockRenderer())
+    sky.setSunDisc({ angularDiameter: 0.02, edgeSoftness: 0.4 })
+    const cosOuter = sky.baker.sky.sunDiscCos.value
+    const cosInner = sky.baker.sky.sunDiscCosInner.value
+    // The preset carries the unchanged default radius; it must not reset the disc.
+    sky.setPreset('earth')
+    expect(sky.baker.sky.sunDiscCos.value).toBe(cosOuter)
+    expect(sky.baker.sky.sunDiscCosInner.value).toBe(cosInner)
+    // A radius-only change keeps the configured softness.
+    sky.baker.setAtmosphereParams({ sunAngularRadius: 0.01 })
+    expect(sky.baker.sky.sunDiscCosInner.value).toBeCloseTo(Math.cos(0.01 * 0.6), 12)
+    sky.dispose()
+  })
 })

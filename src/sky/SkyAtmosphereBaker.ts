@@ -440,13 +440,16 @@ export class SkyAtmosphereBaker {
   }
 
   setAtmosphereParams(partial: any): void {
+    const prevSunAngularRadius = this.atmosphereParams.sunAngularRadius
     this.atmosphereParams = mergeAtmosphereParams(this.atmosphereParams, partial)
     updateAtmosphereUniforms(this.atmosphereUniforms, this.atmosphereParams)
 
-    // If sunAngularRadius is provided, propagate it to the sky mesh and mark cube for rebake.
-    if (partial && typeof partial.sunAngularRadius === 'number') {
+    // Propagate sunAngularRadius to the disc only when it actually changes.
+    // `Sky.setPreset` passes a full param set that always carries the Earth
+    // default, and re-applying it would clobber a disc size the caller set
+    // through `Sky.setSunDisc({ angularDiameter })`.
+    if (partial && typeof partial.sunAngularRadius === 'number' && partial.sunAngularRadius !== prevSunAngularRadius) {
       this.sky.setSunAngularRadius(partial.sunAngularRadius)
-      this.cubeDirty = true
     }
 
     this.atmosDirty = true

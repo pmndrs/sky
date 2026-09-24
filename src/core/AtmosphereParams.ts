@@ -29,8 +29,23 @@ export interface AtmosphereParams {
   absorptionDensity1LinearTerm: number
 
   // Back-compat aliases
+  /**
+   * Accepted for forward compatibility but not yet read by any shader.
+   * The LUT pipeline uses `absorptionExtinction` instead.
+   * @deprecated
+   */
   ozoneAbsorption: Vector3
+  /**
+   * Accepted for forward compatibility but not yet read by any shader.
+   * The LUT pipeline uses `absorptionDensity0LayerWidth` instead.
+   * @deprecated
+   */
   ozoneLayerCenterAltitude: number
+  /**
+   * Accepted for forward compatibility but not yet read by any shader.
+   * The LUT pipeline uses the Bruneton tent function (absorption density fields) instead.
+   * @deprecated
+   */
   ozoneLayerHalfWidth: number
 
   // Ground albedo used by multi-scattering LUT
@@ -45,6 +60,11 @@ export interface AtmosphereParams {
 
   // Sun
   sunAngularRadius: number
+  /**
+   * Accepted for forward compatibility but not yet read by any shader.
+   * See issue #4 for tracking uniform sun illuminance support.
+   * @deprecated
+   */
   sunIlluminance: Vector3
 }
 

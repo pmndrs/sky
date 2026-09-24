@@ -117,6 +117,8 @@ fn rayleighPhase(cosTheta: f32) -> f32 {
 /**
  * Cornette-Shanks Mie phase. Note the `-cosTheta` in the denominator — part of
  * Hillaire's original formulation, intentional (RenderSkyCommon.hlsl).
+ *
+ * Currently unused; the integrator uses hgPhase instead.
  */
 export const MIE_PHASE_CS = /* wgsl */ `
 fn miePhaseCS(cosTheta: f32, g: f32) -> f32 {

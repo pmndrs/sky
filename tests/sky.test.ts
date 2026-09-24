@@ -146,4 +146,16 @@ describe('Sky', () => {
     expect([v.x, v.y, v.z]).toEqual([0.2, 0.4, 0.6])
     sky.dispose()
   })
+
+  it('setAtmosphereParams updates sunAngularRadius on the sky mesh', () => {
+    const sky = new Sky(mockRenderer())
+    const testRadius = 0.01
+    const expectedCos = Math.cos(testRadius)
+
+    sky.baker.setAtmosphereParams({ sunAngularRadius: testRadius })
+
+    expect(sky.baker.sky.sunDiscCos.value).toBeCloseTo(expectedCos, 5)
+
+    sky.dispose()
+  })
 })

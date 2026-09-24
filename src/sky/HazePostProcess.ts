@@ -280,6 +280,13 @@ export function createHazeOutputNode({
     const clipFar = vec4(ndc2.x, ndc2.y, float(1.0), float(1.0))
     const viewFar = invProjUniform.mul(clipFar)
     const rayDirView = viewFar.xyz.div(viewFar.w)
+    // World-space ray direction, reconstructed once and shared by the raymarch
+    // fallback, the look retint and the sky-cube shim (TSL does not CSE
+    // distinct node instances). w = 0 so the camera translation is ignored.
+    // Every consumer requires `cameraWorldUniform`, checked above.
+    const worldRayDir = cameraWorldUniform
+      ? tslNormalize(cameraWorldUniform.mul(vec4(rayDirView, float(0.0))).xyz).toVar()
+      : null
     const cosFromAxis = max(abs(rayDirView.normalize().z), float(1e-6))
     const distAlongRayM = abs(viewZ).div(cosFromAxis)
     // `apDistanceScale` (Unreal AerialPerspectiveViewDistanceScale) stretches
@@ -407,8 +414,7 @@ export function createHazeOutputNode({
       // Y-up world == atmosphere frame (planet centre at origin, +Y up),
       // so we can use it directly as the integrator's `worldDir`.
       If(useRaymarch, () => {
-        const worldDirRaw = cameraWorldUniform.mul(vec4(rayDirView, float(0.0))).xyz
-        const worldDir = tslNormalize(worldDirRaw).toVar()
+        const worldDir = worldRayDir
 
         // Camera position in atmosphere frame: planet centre at origin,
         // camera straight up by viewHeight. Horizontal world position
@@ -491,7 +497,7 @@ export function createHazeOutputNode({
     // swaps only the hue, which is what makes sky and haze land on the same
     // colour without double-integrating anything.
     if (lookUniforms) {
-      const lookWorldDir = tslNormalize(cameraWorldUniform.mul(vec4(rayDirView, float(0.0))).xyz)
+      const lookWorldDir = worldRayDir
       const lookUp = tslNormalize(upVector)
       apRgbScaled.assign(
         applyLook({
@@ -529,11 +535,7 @@ export function createHazeOutputNode({
     // transmittance-driven blend, applied a second time against the
     // "sky behind the surface" instead of the surface's own colour.
     if (skyCube) {
-      // Transform view-space ray direction → world-space ray direction.
-      // Use a vec4 with w=0 so translation is ignored (it's a direction).
-      const worldDirRaw = cameraWorldUniform.mul(vec4(rayDirView, float(0.0))).xyz
-      const worldDir = tslNormalize(worldDirRaw)
-      const skyAtDir = cubeTexture(skyCube, worldDir).rgb
+      const skyAtDir = cubeTexture(skyCube, worldRayDir).rgb
       composited = mix(composited, skyAtDir, apA)
     }
 

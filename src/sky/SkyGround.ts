@@ -168,6 +168,8 @@ export class SkyGround {
   dispose() {
     this.detach()
     this.geometry.dispose()
+    // The reflector node owns a render target; three's ReflectorNode.dispose() frees it.
+    if (this.reflector && typeof this.reflector.dispose === 'function') this.reflector.dispose()
     if (this.material && this.material.dispose) this.material.dispose()
   }
 

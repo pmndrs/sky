@@ -196,7 +196,9 @@ export class AerialPerspectiveLUT {
    */
   setCamera(camera: any, { planetCenter = null }: SetCameraOptions = {}) {
     camera.updateMatrixWorld()
-    camera.updateProjectionMatrix()
+    // Read `projectionMatrixInverse` as the caller maintains it. Calling
+    // `updateProjectionMatrix()` here recomputed it every frame and, worse,
+    // overwrote any custom projection (TAA jitter, off-axis, XR).
 
     const bottomR = this.atmosphereUniforms.bottomRadius.value // km
     if (planetCenter) {

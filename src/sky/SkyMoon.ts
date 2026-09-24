@@ -364,8 +364,12 @@ export class SkyMoon {
       const g = ((color >> 8) & 0xff) / 255
       const b = (color & 0xff) / 255
       this._mesh.moonColor.value.set(r, g, b)
+    } else if ((color as Color).isColor) {
+      // `Vector3.copy` reads x/y/z; a Color carries r/g/b and would copy NaN.
+      const c = color as Color
+      this._mesh.moonColor.value.set(c.r, c.g, c.b)
     } else {
-      this._mesh.moonColor.value.copy(color)
+      this._mesh.moonColor.value.copy(color as Vector3)
     }
 
     return this

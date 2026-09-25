@@ -16,7 +16,7 @@
 
 import { Fn, float, max, mix, pow, saturate, smoothstep, vec3, luminance, Loop } from 'three/tsl'
 
-import { MAX_LOOK_STOPS, RAMP_SPAN_EPSILON } from '../../looks'
+import { LOOK_UNIT_LUMINANCE, MAX_LOOK_STOPS, RAMP_SPAN_EPSILON } from '../../looks'
 
 import type { LookUniforms } from '../../sky/LookUniforms'
 
@@ -37,6 +37,13 @@ export interface ApplyLookOptions {
    * it at 1.
    */
   valueScale?: any
+  /**
+   * The sky's `luminanceScale` (exposure) uniform. The ramp is scaled by
+   * `intensity × luminanceScale × LOOK_UNIT_LUMINANCE` so the value axis keeps
+   * the same physical / ramp balance at any exposure. Defaults to 1 for callers
+   * whose `color` is not post-exposure (or that pass `valueScale = 0`).
+   */
+  luminanceScale?: any
 }
 
 /**
@@ -92,6 +99,7 @@ export function applyLook({
   lightViewCosAngle,
   look,
   valueScale = float(1.0),
+  luminanceScale = float(1.0),
 }: ApplyLookOptions): any {
   const ramp = evaluateLookRamp(viewZenithCosAngle, look.positions, look.colors, look.eases).toVar()
 
@@ -103,8 +111,9 @@ export function applyLook({
   )
   ramp.assign(mix(ramp, look.sunTintColor, sunWeight))
 
-  // Into scene luminance units. Only the value axis is sensitive to this.
-  const rampScene = ramp.mul(look.intensity)
+  // Into scene luminance units: ramp 1.0 at intensity 1 == a clear daytime
+  // sky at the current exposure. Only the value axis is sensitive to this.
+  const rampScene = ramp.mul(look.intensity).mul(luminanceScale).mul(float(LOOK_UNIT_LUMINANCE))
 
   const physicalL = luminance(color)
   const rampL = luminance(rampScene)

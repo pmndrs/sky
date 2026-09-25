@@ -39,9 +39,17 @@ Every look has two strengths, not one:
 | full gradient override           | 1        | 1       |
 
 The `value` axis compares an authored 0..1 ramp against scene luminance, so it
-needs **`intensity`** to put them in the same units: the scene brightness a
-ramp value of 1.0 should map to. Default 1 sits in the range of a daytime
-sky; night looks usually want it raised.
+needs **`intensity`** to put them in the same units. `intensity` is relative
+to a clear daytime sky: at `intensity: 1` a ramp value of 1.0 is as bright as
+the physical zenith at the sky's current `exposure`, and the ramp scales with
+the exposure so the physical / ramp balance never depends on it (the shader
+multiplies by `intensity × luminanceScale × LOOK_UNIT_LUMINANCE`). Night looks
+are authored with dark colours rather than a low intensity, so a moonlit ramp
+at the default intensity already sits where a dim sky should.
+
+> Changed in 0.2.1: before, `intensity` was an absolute post-exposure
+> luminance, which at the default `exposure: 40` made a `value` blend roughly
+> twelve times too dark and made looks drift whenever the exposure changed.
 
 ## Authoring a look
 
@@ -151,7 +159,19 @@ it clamps the sun _light's_ transmittance colour, and this library's
 
 `ghibli-night`, `ghibli-dusk`, `ghibli-day`, and the `ghibli` track — palette
 from the research memo: desaturated cerulean → periwinkle zeniths, warm
-never-fully-saturated horizon tints. `ghibli-day`'s near-white horizon reads
-quite flat from a low camera; if you want the blue to arrive sooner, register
-a variant with the horizon stop lowered (`at: -0.1`) or a more saturated
-horizon colour.
+never-fully-saturated horizon tints. Day and dusk carry a narrow horizon band
+(a stop at `at: 0.08` / `0.12`) so the pale horizon colour hands off to the
+blue by ~20° elevation instead of owning the whole lower sky.
+
+## Trying it
+
+The `component-05-looks` example is a ramp workbench: a wide first-person view
+that spans horizon to zenith, every built-in look and track, sliders for the
+two axes and the sun tint, a four-stop custom ramp with colour pickers, and a
+strip in the corner that draws the authored ramp with the same `sampleLook`
+math the shader mirrors, so you can compare authored against rendered.
+
+`examples/vanilla/scripts/verify-looks-ramp.mjs` does that comparison
+numerically in headless WebGPU: it reads the centre pixel column of a
+full-override render and checks it against `sampleLook` at each row's
+elevation to within a couple of 8-bit steps.

@@ -263,6 +263,19 @@ signature in `luts.wgsl.ts`, (b) the multiply site, (c) the named key in the
 ~0.0003 where >0 was expected. For any new atmosphere param: edit both twins,
 then check `examples/vanilla/parity/` still agrees.
 
+### Look `intensity` is in `luminanceScale` units — measure, don't assume
+
+The physical sky after `luminanceScale` (default 40) sits at L ≈ 10–19 by day
+(measured 2026-09-24 with `NoToneMapping`; see SKY_LOOKS_PLAN.md §7). A look
+ramp is authored 0..1, so the shader scales it by `intensity × luminanceScale
+× LOOK_UNIT_LUMINANCE` (0.3). The first version multiplied by `intensity`
+alone: everything compiled, every diff-based check passed ("value moves the
+luminance" — it did, downward by 12×), and the night look was near-black.
+For any new knob that mixes an authored quantity with the physical sky,
+measure the physical range first (`scripts/verify-looks-ramp.mjs` shows the
+`NoToneMapping` + low `toneMappingExposure` readback trick) and put both in
+the same units.
+
 ### Vite HMR + WebGPU shader edits
 
 Editing a TSL helper while a page is open often leaves the previous shader

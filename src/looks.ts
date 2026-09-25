@@ -81,10 +81,14 @@ export interface LookInput {
   chroma?: number
   value?: number
   /**
-   * Scene luminance corresponding to a ramp value of 1.0, in the same units as
-   * the sky mesh's colour after `luminanceScale`. Only the `value` axis reads
-   * it. Default 1, which puts a full-range ramp in the ballpark of a physical
-   * daytime sky; night looks generally want it raised.
+   * Brightness of the ramp on the `value` axis, relative to a clear daytime
+   * sky: a ramp value of 1.0 at `intensity: 1` lands on the luminance the
+   * physical zenith reaches at the sky's current `exposure` / `luminanceScale`.
+   * The shader scales the ramp by `intensity × luminanceScale ×
+   * {@link LOOK_UNIT_LUMINANCE}`, so a look keeps the same physical / ramp
+   * balance when the exposure changes. Night looks are usually authored with
+   * dark colours rather than a low intensity, so the same ramp reads right
+   * under any exposure.
    */
   intensity?: number
   sunTint?: LookSunTint | null
@@ -133,6 +137,16 @@ const POSITION_EPSILON = 1e-6
  * see {@link evaluatePackedRamp}. The TSL node uses the same value.
  */
 export const RAMP_SPAN_EPSILON = 1e-6
+
+/**
+ * Sky-view luminance of a clear daytime sky per unit `luminanceScale` — the
+ * measured zenith response of the LUT chain (`ILLUMINANCE_IS_ONE`, see
+ * CLAUDE.md) at the default Earth preset, ~0.26 at the zenith rising to ~0.47
+ * at the horizon. The shader multiplies an authored ramp by
+ * `intensity × luminanceScale × LOOK_UNIT_LUMINANCE`, which is what makes
+ * `intensity: 1` mean "as bright as the daytime sky" regardless of exposure.
+ */
+export const LOOK_UNIT_LUMINANCE = 0.3
 
 const DEFAULT_CHROMA = 1
 const DEFAULT_VALUE = 0
@@ -586,19 +600,26 @@ registerLook('ghibli-night', {
 
 registerLook('ghibli-dusk', {
   stops: [
-    { at: 0.0, color: '#ff9d6c' },
-    { at: 0.35, color: '#f3c98f', ease: 'smooth' },
-    { at: 1.0, color: '#6fa3d8' },
+    { at: -0.05, color: '#ff9d6c' },
+    { at: 0.12, color: '#f3c98f', ease: 'smooth' },
+    { at: 0.45, color: '#8fb4e0', ease: 'smooth' },
+    { at: 1.0, color: '#5b8fd0' },
   ],
   chroma: 0.7,
   value: 0.25,
   sunTint: { color: '#ffd9a0', falloff: 0.3, strength: 0.6 },
 })
 
+// Day keeps the memo's two anchors but adds a narrow horizon band: with only
+// {0, 1} stops the near-white horizon colour owned the whole lower half of the
+// sky, and from a ground camera the look read as flat grey. The cerulean now
+// arrives by ~20° elevation (sin ≈ 0.35), which is where Ghibli skies carry it.
 registerLook('ghibli-day', {
   stops: [
-    { at: 0.0, color: '#e8f3f7' },
-    { at: 1.0, color: '#4f8fdb' },
+    { at: 0.0, color: '#e4f0f6' },
+    { at: 0.08, color: '#a7cff0', ease: 'smooth' },
+    { at: 0.35, color: '#5b9be2' },
+    { at: 1.0, color: '#3d7ccf' },
   ],
   chroma: 0.7,
   value: 0.25,

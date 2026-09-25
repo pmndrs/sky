@@ -386,27 +386,33 @@ describe('built-in ghibli looks', () => {
     expect(lookTracks.ghibli.keys.map((k) => k.at)).toEqual([-18, -6, 8, 15])
   })
 
-  it('keeps the memo palette verbatim — 2-stop night/day, 3-stop dusk', () => {
-    expect(looks['ghibli-night'].stops).toHaveLength(2)
-    expect(looks['ghibli-day'].stops).toHaveLength(2)
-    expect(looks['ghibli-dusk'].stops).toHaveLength(3)
+  it('keeps every built-in inside the stop cap, with a horizon band on day and dusk', () => {
+    for (const name of ['ghibli-night', 'ghibli-dusk', 'ghibli-day']) {
+      expect(looks[name].stops.length).toBeLessThanOrEqual(MAX_LOOK_STOPS)
+    }
+    // Day and dusk carry a stop just above the horizon so the horizon tint
+    // does not own the whole lower sky (the flat-grey day-look regression).
+    for (const name of ['ghibli-dusk', 'ghibli-day']) {
+      const band = looks[name].stops.find((s) => s.at > 0 && s.at < 0.2)
+      expect(band).toBeDefined()
+    }
 
     // The track composes them anyway, and blends across the dawn band.
     expect(() => sampleLookTrack(lookTracks.ghibli, { elevation: -12 })).not.toThrow()
   })
 
-  it("derives day's mid stop from its own ramp rather than inventing a colour", () => {
-    const dayInTrack = lookTracks.ghibli.keys[lookTracks.ghibli.keys.length - 1].look
-    const expected = sampleLook(looks['ghibli-day'], 0.35)
-
-    expect(dayInTrack.stops.map((s) => s.at)).toEqual([0, 0.35, 1])
-    expect(dayInTrack.stops[1].color.getHexString()).toBe(expected.getHexString())
-    expect(dayInTrack.stops[1].color.getHexString()).toBe('c4d7ee')
-  })
-
-  it('leaves dusk untouched, since it already defines the union positions', () => {
-    const duskInTrack = lookTracks.ghibli.keys[1].look
-    expect(duskInTrack).toBe(looks['ghibli-dusk'])
+  it('resamples each keyframe onto the union without changing what it samples to', () => {
+    const track = lookTracks.ghibli
+    const positions = track.keys[0].look.stops.map((s) => s.at)
+    // Every key shares one position set …
+    for (const key of track.keys) expect(key.look.stops.map((s) => s.at)).toEqual(positions)
+    // … and at those positions each resampled look equals its source look.
+    const sources = ['ghibli-night', 'ghibli-dusk', 'ghibli-dusk', 'ghibli-day']
+    track.keys.forEach((key, i) => {
+      for (const at of positions) {
+        expect(sampleLook(key.look, at).getHexString()).toBe(sampleLook(looks[sources[i]], at).getHexString())
+      }
+    })
   })
 
   it('gives night value authority, since physical night luminance is ~0', () => {

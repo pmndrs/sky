@@ -139,7 +139,8 @@
           { at: 1.0, color: '#2f7bd4' },
         ],
         chroma: 0.88,
-        value: 0.32,
+        value: 0.7,
+        intensity: 0.5,
         sunTint: { color: '#fff0c0', falloff: 0.3, strength: 0.45 },
       })
 
@@ -151,8 +152,9 @@
           { at: 1.0, color: '#2f7bd4' },
         ],
         chroma: 0.88,
-        value: 0.32,
-        sunTint: { color: '#fff3c4', falloff: 0.35, strength: 0.5 },
+        value: 0.7,
+        intensity: 0.45,
+        sunTint: { color: '#fff3c4', falloff: 0.35, strength: 0.12 },
       })
 
       registerLookTrack('ghibli-summer', [
@@ -458,7 +460,7 @@
         c.width = 4
         c.height = 1
         const ctx = c.getContext('2d')
-        const shades = ['#233318', '#4c6a30', '#82ab4c', '#c3dc82']
+        const shades = ['#6e6e6e', '#9a9a9a', '#cdcdcd', '#ffffff']
         shades.forEach((s, i) => {
           ctx.fillStyle = s
           ctx.fillRect(i, 0, 1, 1)
@@ -553,12 +555,12 @@
         lumps: 8,
         detail: 2,
         hero: true,
-        canopyColor: 0x6fa050,
+        canopyColor: 0x6cb04a,
       })
       scene.add(heroTree)
 
       // A scattering of smaller trees across the visible foreground/midground.
-      const CANOPY_COLORS = [0x8fbf5a, 0x76a34a, 0x9dc766]
+      const CANOPY_COLORS = [0x7cc052, 0x62a844, 0x94cc5e]
       for (let i = 0; i < 30; i++) {
         const x = -520 + rand() * 780
         const z = -1050 + rand() * 1250
@@ -900,8 +902,8 @@
       // colours multiplied together desaturate toward grey/brown — that's
       // what a first attempt at this did to the clouds' shadow bands).
       const SUN_COLOR_KEYS = [
-        { elev: -2, color: '#ff7a42' },
-        { elev: 4, color: '#ff9c56' },
+        { elev: -2, color: '#ff9c7a' },
+        { elev: 4, color: '#ffb48e' },
         { elev: 12, color: '#ffd9a0' },
         { elev: 25, color: '#fff6e8' },
         { elev: 45, color: '#ffffff' },
@@ -914,9 +916,10 @@
       // can warm the lit crests at golden hour without muddying the
       // (separately, robustly baked-cool) shadow underside.
       const CLOUD_EMISSIVE_KEYS = [
-        { elev: -25, color: '#141b34', ei: 0.03 },
-        { elev: -6, color: '#2c3054', ei: 0.03 },
-        { elev: 2, color: '#ffab6a', ei: 0.22 },
+        { elev: -25, color: '#3b4c80', ei: 0.35 },
+        { elev: -8, color: '#6a6598', ei: 0.4 },
+        { elev: -2, color: '#e9a3b8', ei: 0.5 },
+        { elev: 2, color: '#ffb3a6', ei: 0.25 },
         { elev: 10, color: '#ffd9a0', ei: 0.09 },
         { elev: 26, color: '#f0e6cc', ei: 0.012 },
       ]

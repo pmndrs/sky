@@ -103,6 +103,10 @@ export class SkyAtmosphereBaker {
   _lastSkyViewHeightKm: number
   _lastSkyViewZenith: number
   _lastCubeZenith: number
+  _lastCubeHeightKm: number
+  /** Scratch vectors so the per-frame `setCamera` path allocates nothing. */
+  _scratchVec: Vector3
+  _skyViewSunVec: Vector3
 
   constructor(
     renderer: any,
@@ -244,6 +248,9 @@ export class SkyAtmosphereBaker {
     this._lastSkyViewHeightKm = NaN
     this._lastSkyViewZenith = NaN
     this._lastCubeZenith = NaN
+    this._lastCubeHeightKm = NaN
+    this._scratchVec = new Vector3()
+    this._skyViewSunVec = new Vector3()
   }
 
   get texture(): Texture {
@@ -290,7 +297,7 @@ export class SkyAtmosphereBaker {
     let viewHeightKm: number
 
     if (planetCenter) {
-      const cameraFromCenterM = camera.position.clone().sub(planetCenter)
+      const cameraFromCenterM = this._scratchVec.copy(camera.position).sub(planetCenter)
       const cameraRadiusM = cameraFromCenterM.length()
       viewHeightKm = cameraRadiusM * 0.001
       this._cameraAltitudeM = cameraRadiusM - bottomRadiusM
@@ -324,6 +331,15 @@ export class SkyAtmosphereBaker {
       this.cubeDirty = true
     }
 
+    // Altitude also changes what the cube holds (the SkyView LUT is baked at
+    // one viewHeight). Re-bake once the camera has moved far enough for the
+    // sky to visibly differ: 100 m, or 2% of altitude once that is larger,
+    // so a walking camera never re-bakes and a climbing one does so in steps.
+    const cubeHeightTolKm = Math.max(0.1, 0.02 * Math.abs(this._cameraAltitudeM) * 0.001)
+    if (!(Math.abs(viewHeightKm - this._lastCubeHeightKm) <= cubeHeightTolKm)) {
+      this.cubeDirty = true
+    }
+
     if (this.aerialPerspectiveLUT) {
       this.aerialPerspectiveLUT.setCamera(camera, { planetCenter })
     }
@@ -332,7 +348,11 @@ export class SkyAtmosphereBaker {
     // changed. `Sky.update(camera)` calls setCamera unconditionally every
     // frame; before this guard that re-rendered the SkyView LUT per frame
     // even with a fully static camera and sun.
-    const heightChanged = !(Math.abs(viewHeightKm - this._lastSkyViewHeightKm) <= 1e-6)
+    // 1 m absolute, or 0.5% of altitude once that is larger — the old 1 mm
+    // threshold re-rendered the LUT every frame for any camera with vertical
+    // jitter, and nothing on screen changes over a metre.
+    const heightTolKm = Math.max(1e-3, 0.005 * Math.abs(this._cameraAltitudeM) * 0.001)
+    const heightChanged = !(Math.abs(viewHeightKm - this._lastSkyViewHeightKm) <= heightTolKm)
     const zenithChanged = !(Math.abs(this._skyViewSunZenith - this._lastSkyViewZenith) <= 1e-6)
     if (heightChanged || zenithChanged) {
       this.cameraDirty = true
@@ -354,7 +374,8 @@ export class SkyAtmosphereBaker {
     const sinEff = MathUtils.clamp(this._sunVec.dot(this._cameraUp), -1.0, 1.0)
     const cosEff = Math.sqrt(Math.max(0.0, 1.0 - sinEff * sinEff))
     this._skyViewSunZenith = sinEff
-    this.skyViewLUT.sunDirection = new Vector3(cosEff, 0.0, sinEff)
+    // The setter copies into the uniform, so a reused scratch vector is safe.
+    this.skyViewLUT.sunDirection = this._skyViewSunVec.set(cosEff, 0.0, sinEff)
   }
 
   /**
@@ -563,8 +584,9 @@ export class SkyAtmosphereBaker {
         this.pmremGenerator.fromCubemap(this.cubeRenderTarget.texture, this._pmremTarget)
       }
 
-      // The cube now holds this sun frame; drift is measured from here.
+      // The cube now holds this sun frame + altitude; drift is measured from here.
       this._lastCubeZenith = this._skyViewSunZenith
+      this._lastCubeHeightKm = this.sky.viewHeight.value
     }
 
     this.sunDirty = false
@@ -597,8 +619,14 @@ export class SkyAtmosphereBaker {
 
     if (this.sky.material) (this.sky.material as Material).dispose()
     if (this.sky.geometry) this.sky.geometry.dispose()
+    // The stars placeholder is a GPU-uploaded DataTexture owned by the mesh.
+    if (this.sky._starsTexturePlaceholder) this.sky._starsTexturePlaceholder.dispose()
 
     this.skyScene.remove(this.sky)
     this.skyScene.remove(this.cubeCamera)
+
+    // Drop SkySun / SkyMoon / SkyHelper closures so a disposed baker does not
+    // keep them (and whatever they capture) alive.
+    this._sunListeners.clear()
   }
 }

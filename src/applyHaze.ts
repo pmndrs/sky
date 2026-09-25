@@ -78,8 +78,8 @@ export function applyHaze(
   {
     sky,
     scenePass,
-    policy = 'auto',
-    strength = 1.0,
+    policy,
+    strength,
     altitudeBlend,
     logarithmicDepthBuffer = false,
     useCameraFar,
@@ -99,6 +99,19 @@ export function applyHaze(
     throw new Error('applyHaze: Sky was constructed with `enableAerialPerspective: false`.')
   }
 
+  // A setter on `Sky` may already have created these uniforms (setHazeStrength
+  // etc. work before applyHaze). Only an option the caller actually passed
+  // overrides them; otherwise the setter's value is adopted, and the defaults
+  // below apply only when nothing was set either way.
+  const hasStrength = strength !== undefined
+  const hasPolicy = policy !== undefined
+  const effectivePolicy: string = hasPolicy
+    ? (policy as string)
+    : sky._hazePolicy
+      ? hazeModeToPolicy(sky._hazePolicy.value)
+      : 'auto'
+  policy = effectivePolicy
+
   if (!raymarchFallback && policy === 'raymarch') {
     console.warn("applyHaze: policy 'raymarch' has no effect with raymarchFallback: false.")
   }
@@ -108,14 +121,14 @@ export function applyHaze(
   sky._hazeApplied = true
 
   // --- Sky-owned uniforms (lazy + reseed on every applyHaze() call) ---
-  if (!sky._hazeStrength) sky._hazeStrength = uniform(strength)
-  else sky._hazeStrength.value = strength
+  if (!sky._hazeStrength) sky._hazeStrength = uniform(hasStrength ? strength : 1.0)
+  else if (hasStrength) sky._hazeStrength.value = strength
 
   if (!sky._hazePolicy) sky._hazePolicy = uniform(policyToHazeMode(policy))
-  else sky._hazePolicy.value = policyToHazeMode(policy)
+  else if (hasPolicy) sky._hazePolicy.value = policyToHazeMode(policy)
 
   if (!sky._hazeRaymarchOnly) sky._hazeRaymarchOnly = uniform(policy === 'raymarch' ? 1.0 : 0.0)
-  else sky._hazeRaymarchOnly.value = policy === 'raymarch' ? 1.0 : 0.0
+  else if (hasPolicy) sky._hazeRaymarchOnly.value = policy === 'raymarch' ? 1.0 : 0.0
 
   const seedStartKm = altitudeBlend?.startKm ?? 50.0
   const seedEndKm = altitudeBlend?.endKm ?? 100.0
@@ -176,6 +189,12 @@ export function applyHaze(
     skyCube: includeSkyCubeBlend ? baker.texture : null,
     debugMode,
   })
+}
+
+/** Inverse of `policyToHazeMode`, for adopting a policy a `Sky` setter stored before `applyHaze` ran. */
+function hazeModeToPolicy(mode: number): string {
+  for (const p of ['auto', 'ap', 'raymarch']) if (policyToHazeMode(p) === mode) return p
+  return 'auto'
 }
 
 function policyToHazeMode(policy: string): number {

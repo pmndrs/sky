@@ -86,6 +86,10 @@ export class Sky {
   _northKey: string
   _elevation!: number
   _azimuth!: number
+  /** Whether the last `setSunDirection` bypassed the north rotation. */
+  _sunRaw = false
+  /** Mie coefficients at turbidity 1, so `setTurbidity` is absolute. */
+  _baseMie!: { scattering: Vector3; extinction: Vector3; absorption: Vector3 }
   _lookTrack: LookTrack | null = null
   _apDistanceScale: any = null
   _cameraFar?: any
@@ -129,6 +133,7 @@ export class Sky {
   ) {
     const baseAtmosphere = resolvePreset(preset)
     let merged = atmosphere ? mergeAtmosphereParams(baseAtmosphere, atmosphere) : baseAtmosphere
+    this._captureBaseMie(merged)
     merged = applyShortcutScalars(merged, { turbidity, groundAlbedo })
 
     const lutResolutions = QUALITY_PRESETS[quality] || QUALITY_PRESETS.medium
@@ -248,6 +253,7 @@ export class Sky {
   setSunDirection({ elevation, azimuth, raw = false }: { elevation: number; azimuth: number; raw?: boolean }) {
     this._elevation = elevation
     this._azimuth = azimuth
+    this._sunRaw = raw
     const theta = raw ? azimuth : azimuth + (NORTH_AXES[this._northKey]?.offsetDeg ?? 0)
     this.baker.setSun({ elevation, azimuth: theta })
     // Every sun path — setTimeOfDay, setLatitude, setDayOfYear, setNorth —
@@ -294,8 +300,9 @@ export class Sky {
   setNorth(axis: string) {
     if (NORTH_AXES[axis]) {
       this._northKey = axis
-      // Re-emit the current azimuth through the new offset.
-      this.setSunDirection({ elevation: this._elevation, azimuth: this._azimuth })
+      // Re-emit the current azimuth through the new offset — unless the last
+      // sun was set `raw`, in which case there is no offset to apply.
+      this.setSunDirection({ elevation: this._elevation, azimuth: this._azimuth, raw: this._sunRaw })
     }
 
     return this
@@ -338,15 +345,27 @@ export class Sky {
    * Earth-default; >1 makes the air look hazier; 0 turns Mie off entirely.
    */
   setTurbidity(value: number) {
-    const factor = value / Math.max(this._turbidity, 1e-6)
+    // Absolute, against the Mie triple captured at turbidity 1. The previous
+    // relative form (`value / lastTurbidity`) could never recover from 0,
+    // drifted under slider scrubbing, and silently rescaled whatever preset
+    // had been loaded since.
     this._turbidity = value
-    const params = this.baker.atmosphereParams
+    const b = this._baseMie
     this.baker.setAtmosphereParams({
-      mieScattering: params.mieScattering.clone().multiplyScalar(factor),
-      mieExtinction: params.mieExtinction.clone().multiplyScalar(factor),
-      mieAbsorption: params.mieAbsorption.clone().multiplyScalar(factor),
+      mieScattering: b.scattering.clone().multiplyScalar(value),
+      mieExtinction: b.extinction.clone().multiplyScalar(value),
+      mieAbsorption: b.absorption.clone().multiplyScalar(value),
     })
     return this
+  }
+
+  /** Record the turbidity-1 Mie coefficients that `setTurbidity` scales. */
+  _captureBaseMie(params: { mieScattering: Vector3; mieExtinction: Vector3; mieAbsorption: Vector3 }) {
+    this._baseMie = {
+      scattering: params.mieScattering.clone(),
+      extinction: params.mieExtinction.clone(),
+      absorption: params.mieAbsorption.clone(),
+    }
   }
 
   setGroundAlbedo(value: any) {
@@ -362,6 +381,11 @@ export class Sky {
 
   setAtmosphere(partial: any) {
     this.baker.setAtmosphereParams(partial)
+    // Explicit Mie values define a new turbidity-1 baseline.
+    if (partial && (partial.mieScattering || partial.mieExtinction || partial.mieAbsorption)) {
+      this._captureBaseMie(this.baker.atmosphereParams)
+      this._turbidity = 1.0
+    }
     return this
   }
 
@@ -422,7 +446,10 @@ export class Sky {
   }
 
   setPreset(name: string) {
-    this.baker.setAtmosphereParams(resolvePreset(name))
+    const params = resolvePreset(name)
+    this.baker.setAtmosphereParams(params)
+    this._captureBaseMie(params)
+    this._turbidity = 1.0
     return this
   }
 
@@ -460,13 +487,14 @@ export class Sky {
   }
 
   /**
-   * Update haze strength after `applyHaze` has been wired. Multiplies
-   * inscatter colour and AP alpha. 0 = no haze; 1 = physical default.
-   * No-op if haze hasn't been applied yet (we'd just be priming a uniform
-   * that the next applyHaze would re-seed anyway).
+   * Haze strength. Multiplies inscatter colour and AP alpha. 0 = no haze;
+   * 1 = physical default. Works before or after `applyHaze`: the uniform is
+   * created here if needed and `applyHaze` adopts it (only an explicit
+   * `strength` option overrides a value set this way).
    */
   setHazeStrength(value: number) {
-    if (this._hazeStrength) this._hazeStrength.value = value
+    if (!this._hazeStrength) this._hazeStrength = uniform(value)
+    else this._hazeStrength.value = value
     return this
   }
 
@@ -476,8 +504,12 @@ export class Sky {
    * the raymarch fallback for every geometry pixel.
    */
   setHazePolicy(policy: string) {
-    if (this._hazePolicy) this._hazePolicy.value = policyToHazeMode(policy)
-    if (this._hazeRaymarchOnly) this._hazeRaymarchOnly.value = policy === 'raymarch' ? 1.0 : 0.0
+    const mode = policyToHazeMode(policy)
+    const raymarchOnly = policy === 'raymarch' ? 1.0 : 0.0
+    if (!this._hazePolicy) this._hazePolicy = uniform(mode)
+    else this._hazePolicy.value = mode
+    if (!this._hazeRaymarchOnly) this._hazeRaymarchOnly = uniform(raymarchOnly)
+    else this._hazeRaymarchOnly.value = raymarchOnly
     return this
   }
 
@@ -486,8 +518,14 @@ export class Sky {
    * raymarch path is fully active; below `startKm` the AP LUT is used.
    */
   setHazeAltitudeBlend({ startKm, endKm }: { startKm?: number; endKm?: number } = {}) {
-    if (typeof startKm === 'number' && this._hazeAltStart) this._hazeAltStart.value = startKm
-    if (typeof endKm === 'number' && this._hazeAltEnd) this._hazeAltEnd.value = endKm
+    if (typeof startKm === 'number') {
+      if (!this._hazeAltStart) this._hazeAltStart = uniform(startKm)
+      else this._hazeAltStart.value = startKm
+    }
+    if (typeof endKm === 'number') {
+      if (!this._hazeAltEnd) this._hazeAltEnd = uniform(endKm)
+      else this._hazeAltEnd.value = endKm
+    }
     return this
   }
 
@@ -609,6 +647,7 @@ export class Sky {
     this._baker.dispose()
     this._hazeStrength = this._hazePolicy = this._hazeRaymarchOnly = undefined
     this._hazeAltStart = this._hazeAltEnd = this._cameraFar = undefined
+    this._apDistanceScale = null
     this._hazeApplied = false
   }
 

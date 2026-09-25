@@ -8,7 +8,15 @@ import {
   MeshBasicMaterial,
   Vector3,
   Color,
+  Float32BufferAttribute,
 } from 'three/webgpu'
+
+const ARC_SEGMENTS = 24
+const _yAxis = new Vector3(0, 1, 0)
+const _sunNormalized = new Vector3()
+const _horizonPoint = new Vector3()
+const _sunPoint = new Vector3()
+const _arcPoint = new Vector3()
 
 /**
  * Visual debug helper that displays the sun frame at a point in world space.
@@ -55,6 +63,7 @@ export class SkyHelper extends Object3D {
 
     // Build elevation arc (will be updated on sun changes)
     this.elevationGeometry = new BufferGeometry()
+    this.elevationGeometry.setAttribute('position', new Float32BufferAttribute(3 * (ARC_SEGMENTS + 1), 3))
     this.elevationArc = new Line(
       this.elevationGeometry,
       new LineBasicMaterial({
@@ -140,32 +149,26 @@ export class SkyHelper extends Object3D {
   private updateFromSun(sunVec: Vector3): void {
     // Orient the arrow group to point toward the sun
     // The arrow is built pointing +Y; rotate it to point along sunVec
-    const normalized = sunVec.clone().normalize()
-    this.arrowGroup.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), normalized)
+    const normalized = _sunNormalized.copy(sunVec).normalize()
+    this.arrowGroup.quaternion.setFromUnitVectors(_yAxis, normalized)
 
-    // Rebuild elevation arc: from sun's horizon point to the sun direction
+    // Elevation arc: from sun's horizon point to the sun direction.
     // Horizon point = same azimuth as sun, but at elevation 0 (on the XZ plane ring)
     const sunAzimuth = Math.atan2(sunVec.x, sunVec.z)
-    const horizonPoint = new Vector3(Math.sin(sunAzimuth) * this.size, 0, Math.cos(sunAzimuth) * this.size)
+    _horizonPoint.set(Math.sin(sunAzimuth) * this.size, 0, Math.cos(sunAzimuth) * this.size)
+    _sunPoint.copy(normalized).multiplyScalar(this.size)
 
-    // Sun point: normalized sun direction scaled to size
-    const sunPoint = sunVec.clone().normalize().multiplyScalar(this.size)
-
-    // Generate arc by interpolating horizon → sun, then re-projecting to sphere
-    const arcPoints: Vector3[] = []
-    const arcSegments = 24
-
-    for (let i = 0; i <= arcSegments; i++) {
-      const t = i / arcSegments
-      const point = new Vector3().lerpVectors(horizonPoint, sunPoint, t).normalize().multiplyScalar(this.size)
-      arcPoints.push(point)
+    // Interpolate horizon → sun and re-project to the sphere, writing straight
+    // into the arc's position attribute. This fires on every sun change (per
+    // frame for an animated sun), so it allocates nothing and re-uploads one
+    // buffer instead of rebuilding the geometry.
+    const position = this.elevationGeometry.getAttribute('position')
+    for (let i = 0; i <= ARC_SEGMENTS; i++) {
+      const t = i / ARC_SEGMENTS
+      _arcPoint.lerpVectors(_horizonPoint, _sunPoint, t).normalize().multiplyScalar(this.size)
+      position.setXYZ(i, _arcPoint.x, _arcPoint.y, _arcPoint.z)
     }
-
-    // Replace geometry
-    this.elevationGeometry.dispose()
-    this.elevationGeometry = new BufferGeometry()
-    this.elevationGeometry.setFromPoints(arcPoints)
-    this.elevationArc.geometry = this.elevationGeometry
+    position.needsUpdate = true
   }
 
   dispose(): void {

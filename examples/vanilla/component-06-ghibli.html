@@ -33,8 +33,8 @@
   </head>
   <body>
     <div id="info">
-      @pmndrs/sky · <b>Ghibli countryside</b> — the <code>ghibli</code> look track over a procedural rolling-hills
-      scene. Drag to orbit; GUI has time-of-day, look, haze and camera controls.
+      @pmndrs/sky · <b>Ghibli countryside</b> — a low, sky-dominant view over grass, with the
+      <code>ghibli-summer</code> look track. Drag to orbit; GUI has time-of-day, look, haze and camera controls.
     </div>
     <script type="module">
       import * as THREE from 'three/webgpu'
@@ -42,7 +42,7 @@
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky, looks, lookTracks, registerLook, registerLookTrack, resolveLook } from '@pmndrs/sky'
+      import { Sky, looks, lookTracks, registerLook, registerLookTrack } from '@pmndrs/sky'
 
       // -----------------------------------------------------------------
       // Renderer + Sky
@@ -51,12 +51,10 @@
       const renderer = new THREE.WebGPURenderer({ antialias: true })
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
       renderer.setSize(window.innerWidth, window.innerHeight)
-      // ACES read the best of the three tried here — AgX's shoulder lifted
-      // the night look's dark navy stops into a washed cornflower blue (the
-      // "deep navy, sky still legible" ask wants the navy to actually read
-      // dark), and Neutral looked photographic rather than illustrated.
-      // ACES keeps the night moody while still giving golden hour a warm,
-      // un-crushed glow. Exposure matches the other component demos.
+      // ACES read the best of the three tried here — AgX's shoulder washed
+      // the night look's dark navy stops toward cornflower blue, and
+      // Neutral looked photographic rather than illustrated. ACES keeps
+      // night moody while still giving golden hour a warm, un-crushed glow.
       renderer.toneMapping = THREE.ACESFilmicToneMapping
       renderer.toneMappingExposure = 0.5
       renderer.inspector = new Inspector()
@@ -77,84 +75,9 @@
       sky.attach(scene)
 
       // -----------------------------------------------------------------
-      // A richer, more saturated companion to the built-in `ghibli` track —
-      // registered here (not in src/) per the brief. Reuses `ghibli-night`
-      // from the built-ins since a chroma-only night ramp has little to add.
+      // Utility math (used by the look-track colours below and by the
+      // terrain/prop builders further down).
       // -----------------------------------------------------------------
-
-      registerLook('ghibli-summer-day', {
-        stops: [
-          { at: 0.0, color: '#cfeaf5' },
-          { at: 0.1, color: '#8ed0ef', ease: 'smooth' },
-          { at: 0.45, color: '#3aa3e0' },
-          { at: 1.0, color: '#1c68c4' },
-        ],
-        chroma: 0.78,
-        value: 0.3,
-        sunTint: { color: '#fff3c4', falloff: 0.35, strength: 0.5 },
-      })
-
-      registerLook('ghibli-summer-dusk', {
-        stops: [
-          { at: -0.08, color: '#ff8a5c' },
-          { at: 0.1, color: '#ffcf8f', ease: 'smooth' },
-          { at: 0.4, color: '#a685c9', ease: 'smooth' },
-          { at: 1.0, color: '#3f52a8' },
-        ],
-        chroma: 0.78,
-        value: 0.3,
-        sunTint: { color: '#ffdca0', falloff: 0.3, strength: 0.65 },
-      })
-
-      registerLookTrack('ghibli-summer', [
-        { elevation: -18, look: 'ghibli-night' },
-        { elevation: -6, look: 'ghibli-summer-dusk' },
-        { elevation: 8, look: 'ghibli-summer-dusk' },
-        { elevation: 15, look: 'ghibli-summer-day' },
-      ])
-
-      // -----------------------------------------------------------------
-      // Deterministic PRNG — stable prop placement across reloads.
-      // -----------------------------------------------------------------
-
-      function mulberry32(seed) {
-        return function () {
-          seed |= 0
-          seed = (seed + 0x6d2b79f5) | 0
-          let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-          return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-        }
-      }
-      const rand = mulberry32(1337)
-
-      // -----------------------------------------------------------------
-      // Terrain — a single warped-grid plane. Vertex density is piecewise:
-      // dense within the ~2.4 km "hero" radius, sparse beyond, so a 48 km
-      // reach (far enough for the 40 km ridge) stays under ~50k verts.
-      // Height is layered sines (rolling hills) + two Gaussian bumps (the
-      // foreground hero hill) with a distance-based relief falloff so the
-      // far terrain settles toward flat before it fades into the haze.
-      // -----------------------------------------------------------------
-
-      const TERRAIN_HALF = 48000
-      const TERRAIN_SEG = 220
-      const INNER_FRAC = 0.05 // 5% of half = 2400 m gets the dense grid
-      const INNER_SEG_FRAC = 0.55 // 55% of segments cover that inner region
-
-      const HILL_A = { x: -20, z: 160 } // broad foreground rise
-      const HILL_B = { x: -110, z: 55 } // hero tree's crest
-      const HERO_TREE = { x: -112, z: 50 }
-      const COTTAGE = { x: 95, z: -150 }
-
-      function warpAxis(u) {
-        const a = Math.abs(u)
-        const d =
-          a <= INNER_SEG_FRAC
-            ? (a / INNER_SEG_FRAC) * INNER_FRAC
-            : INNER_FRAC + ((a - INNER_SEG_FRAC) / (1 - INNER_SEG_FRAC)) * (1 - INNER_FRAC)
-        return Math.sign(u) * d * TERRAIN_HALF
-      }
 
       function smoothstep(e0, e1, x) {
         const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)))
@@ -175,20 +98,124 @@
         return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
       }
 
+      // -----------------------------------------------------------------
+      // `ghibli-summer` — a richer, more saturated companion to the
+      // built-in `ghibli` track, registered here (not in src/) per the
+      // brief. Deeper cerulean zenith, a luminous pale horizon band, and
+      // higher chroma than the built-ins. Has its own morning keyframe
+      // (distinct from dusk) so a mid-morning sun sits solidly inside a
+      // vivid "day" palette instead of extrapolating a washed-out blend
+      // between dusk and day — elevation-keyed tracks can't distinguish
+      // rising vs. setting sun, so the fix is giving the ~6-14° band its
+      // own well-saturated stops rather than trying to detect AM/PM.
+      // -----------------------------------------------------------------
+
+      registerLook('ghibli-summer-night', {
+        stops: [
+          { at: 0.0, color: '#22335f' },
+          { at: 1.0, color: '#070c20' },
+        ],
+        chroma: 0.85,
+        value: 0.55,
+      })
+
+      registerLook('ghibli-summer-dusk', {
+        stops: [
+          { at: -0.08, color: '#ff8a5c' },
+          { at: 0.1, color: '#ffcf8f', ease: 'smooth' },
+          { at: 0.4, color: '#a685c9', ease: 'smooth' },
+          { at: 1.0, color: '#33448f' },
+        ],
+        chroma: 0.88,
+        value: 0.32,
+        sunTint: { color: '#ffdca0', falloff: 0.3, strength: 0.65 },
+      })
+
+      registerLook('ghibli-summer-morning', {
+        stops: [
+          { at: -0.02, color: '#ffe3b0' },
+          { at: 0.1, color: '#cdeaf7', ease: 'smooth' },
+          { at: 0.4, color: '#4f97dd' },
+          { at: 1.0, color: '#2f7bd4' },
+        ],
+        chroma: 0.88,
+        value: 0.32,
+        sunTint: { color: '#fff0c0', falloff: 0.3, strength: 0.45 },
+      })
+
+      registerLook('ghibli-summer-day', {
+        stops: [
+          { at: 0.0, color: '#eef8ff' },
+          { at: 0.08, color: '#bfe3f7', ease: 'smooth' },
+          { at: 0.35, color: '#3b86dc' },
+          { at: 1.0, color: '#2f7bd4' },
+        ],
+        chroma: 0.88,
+        value: 0.32,
+        sunTint: { color: '#fff3c4', falloff: 0.35, strength: 0.5 },
+      })
+
+      registerLookTrack('ghibli-summer', [
+        { elevation: -20, look: 'ghibli-summer-night' },
+        { elevation: -6, look: 'ghibli-summer-dusk' },
+        { elevation: -1, look: 'ghibli-summer-dusk' },
+        { elevation: 6, look: 'ghibli-summer-morning' },
+        { elevation: 14, look: 'ghibli-summer-day' },
+      ])
+
+      // -----------------------------------------------------------------
+      // Deterministic PRNG — stable prop placement across reloads.
+      // -----------------------------------------------------------------
+
+      function mulberry32(seed) {
+        return function () {
+          seed |= 0
+          seed = (seed + 0x6d2b79f5) | 0
+          let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+        }
+      }
+      const rand = mulberry32(1337)
+
+      // -----------------------------------------------------------------
+      // Terrain — a single warped-grid plane. Vertex density falls off
+      // smoothly with distance via a pure power-law remap (`WARP_POWER`)
+      // instead of the old piecewise dense/sparse split: the old version
+      // had a slope *discontinuity* at the density boundary, and
+      // short-wavelength terrain height sampled across that kink aliased
+      // into a visible ring at a fixed radius. A single continuous power
+      // function has no such kink, so there's no fixed-radius band —
+      // density (and therefore visible detail) just fades continuously
+      // with distance, the same way haze fades colour.
+      // -----------------------------------------------------------------
+
+      const TERRAIN_HALF = 48000
+      const TERRAIN_SEG = 220
+      const WARP_POWER = 1.55
+
+      const HILL_A = { x: -20, z: 160 } // broad foreground rise
+      const HILL_B = { x: -110, z: 55 } // hero tree's crest
+      const HERO_TREE = { x: -112, z: 50 }
+      const COTTAGE = { x: 95, z: -150 }
+      const CAM_POS = { x: -80, z: 170 }
+
+      function warpAxis(u) {
+        const a = Math.abs(u)
+        return Math.sign(u) * Math.pow(a, WARP_POWER) * TERRAIN_HALF
+      }
+
       function heightAt(x, z) {
         const dist = Math.hypot(x, z)
-        // The terrain's vertex density drops sharply past ~2.4 km (the
-        // dense/sparse warp boundary — see `warpAxis`). Short-wavelength
-        // terms sampled at that sparse spacing alias into a visible band
-        // right at the boundary radius, so the two fine terms (wavelength
-        // ≲1.3 km) are faded out well *before* the density drops, while the
-        // coarse rolling (wavelength several km, safe at sparse sampling)
-        // and the hero-hill bumps persist much further.
+        // Short-wavelength terms still fade out with distance (there's no
+        // point paying for detail nothing can resolve once the vertices
+        // are hundreds of metres apart), just continuously now rather than
+        // as a hard cutoff at the old density boundary.
         const coarse =
           Math.sin(x * 0.0009 + 1.3) * Math.cos(z * 0.0007 - 0.4) * 50 + Math.sin(x * 0.0021 - 0.7 + z * 0.0016) * 24
         const fine = Math.sin(x * 0.0047 - z * 0.0038 + 2.1) * 10 + Math.sin(x * 0.011 - z * 0.009 + 0.6) * 4
         const reliefCoarse = 1 - smoothstep(4000, 20000, dist) * 0.9
-        const reliefFine = 1 - smoothstep(700, 2100, dist)
+        const reliefFine = 1 - smoothstep(700, 2600, dist)
         let h = coarse * reliefCoarse + fine * reliefFine
         h += gauss(x, z, HILL_A.x, HILL_A.z, 520, 44)
         h += gauss(x, z, HILL_B.x, HILL_B.z, 220, 20)
@@ -197,21 +224,68 @@
 
       const GRASS_HOLLOW = [0.1, 0.27, 0.13]
       const GRASS_CREST = [0.66, 0.76, 0.32]
-      const FAR_TINT = [0.68, 0.76, 0.82]
+      const MEADOW_WARM = [0.64, 0.7, 0.26]
+      const MEADOW_COOL = [0.17, 0.35, 0.2]
+      const FAR_TINT = [0.7, 0.76, 0.76]
+      const PATH_COLOR = [0.75, 0.68, 0.48]
+
+      // A worn dirt path winding from near the hero tree/camera toward the
+      // cottage — large-scale ground variation beyond the height-driven
+      // hollow/crest gradient, per the "meadow patches, lighter paths" ask.
+      const PATH_POINTS = [
+        { x: -70, z: 130 },
+        { x: -30, z: 40 },
+        { x: 20, z: -50 },
+        { x: 70, z: -110 },
+        { x: COTTAGE.x, z: COTTAGE.z },
+      ]
+      function distToPath(x, z) {
+        let best = Infinity
+        for (let i = 0; i < PATH_POINTS.length - 1; i++) {
+          const a = PATH_POINTS[i]
+          const b = PATH_POINTS[i + 1]
+          const abx = b.x - a.x
+          const abz = b.z - a.z
+          const len2 = abx * abx + abz * abz || 1
+          let t = ((x - a.x) * abx + (z - a.z) * abz) / len2
+          t = Math.min(1, Math.max(0, t))
+          const px = a.x + abx * t
+          const pz = a.z + abz * t
+          const d = Math.hypot(x - px, z - pz)
+          if (d < best) best = d
+        }
+        return best
+      }
 
       function colorAt(x, z, h, dist) {
         const t = clamp01((h + 20) / 100)
         let r = lerp(GRASS_HOLLOW[0], GRASS_CREST[0], t)
         let g = lerp(GRASS_HOLLOW[1], GRASS_CREST[1], t)
         let b = lerp(GRASS_HOLLOW[2], GRASS_CREST[2], t)
+
+        // Broad (multi-hundred-metre) meadow patches, independent of local
+        // height, so the ground isn't one flat green even on a gentle slope.
+        const patch = Math.sin(x * 0.00055 + z * 0.00035 + 2.2) * Math.sin(x * 0.00023 - z * 0.00041 - 1.1) * 0.5 + 0.5
+        const patchStrength = 0.3
+        r = lerp(r, patch > 0.5 ? MEADOW_WARM[0] : MEADOW_COOL[0], Math.abs(patch - 0.5) * 2 * patchStrength)
+        g = lerp(g, patch > 0.5 ? MEADOW_WARM[1] : MEADOW_COOL[1], Math.abs(patch - 0.5) * 2 * patchStrength)
+        b = lerp(b, patch > 0.5 ? MEADOW_WARM[2] : MEADOW_COOL[2], Math.abs(patch - 0.5) * 2 * patchStrength)
+
         const n = (Math.sin(x * 0.13) * Math.cos(z * 0.17) + Math.sin(x * 0.041 + z * 0.037)) * 0.035
         r += n
         g += n * 0.6
         b += n * 0.3
+
+        // The worn path — soft-edged, only near the foreground/midground.
+        const pd = distToPath(x, z)
+        const pathT = (1 - smoothstep(2.5, 6.5, pd)) * (1 - smoothstep(600, 1400, dist))
+        r = lerp(r, PATH_COLOR[0], pathT)
+        g = lerp(g, PATH_COLOR[1], pathT)
+        b = lerp(b, PATH_COLOR[2], pathT)
+
         // Kept deliberately weak — `applyHaze` (real aerial-perspective
         // in-scatter/transmittance) does the actual atmospheric fade at
-        // these distances; a strong manual tint here fights it and shows
-        // up as a hard band right where the two overlap.
+        // these distances; a strong manual tint here fights it.
         const distT = clamp01((dist - 3000) / 20000)
         r = lerp(r, FAR_TINT[0], distT * 0.15)
         g = lerp(g, FAR_TINT[1], distT * 0.15)
@@ -268,8 +342,115 @@
       scene.add(terrain)
 
       // -----------------------------------------------------------------
-      // Trees — trunk + 2-4 lumpy icosahedron canopies, toon-shaded via a
-      // hand-rolled 4-step gradient map for a cel-shaded, painterly read.
+      // Foreground life — instanced grass tufts + flower dots around the
+      // hero hill, cheap (two draw calls total) but the camera now sits
+      // low and close to them, so they carry a lot of the foreground read.
+      // -----------------------------------------------------------------
+
+      function makeGrassBladeGeometry() {
+        // Two crossed, tapered planes — cheap classic "grass cross" impostor.
+        const positions = new Float32Array([
+          -0.16, 0, 0, 0.16, 0, 0, 0.04, 0.95, 0, -0.04, 0.95, 0, 0, 0, -0.16, 0, 0, 0.16, 0, 0.95, 0.04, 0, 0.95,
+          -0.04,
+        ])
+        const indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]
+        const geo = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+        geo.setIndex(indices)
+        geo.computeVertexNormals()
+        return geo
+      }
+
+      const GRASS_COUNT = 4200
+      const grassGeo = makeGrassBladeGeometry()
+      const grassMat = new THREE.MeshStandardMaterial({
+        vertexColors: false,
+        roughness: 1,
+        side: THREE.DoubleSide,
+      })
+      const grassMesh = new THREE.InstancedMesh(grassGeo, grassMat, GRASS_COUNT)
+      const grassTints = [
+        [0.14, 0.36, 0.15],
+        [0.16, 0.4, 0.16],
+        [0.24, 0.48, 0.19],
+        [0.32, 0.56, 0.22],
+        [0.46, 0.58, 0.24],
+      ]
+      {
+        const dummy = new THREE.Object3D()
+        const col = new THREE.Color()
+        for (let i = 0; i < GRASS_COUNT; i++) {
+          // Dense within ~150m of camera — individual blades aren't
+          // discernible further out anyway, so keep the instance budget
+          // where it's visible.
+          const r = Math.pow(rand(), 0.6) * 150
+          const ang = rand() * Math.PI * 2
+          const x = CAM_POS.x + Math.cos(ang) * r * 1.15
+          const z = CAM_POS.z + Math.sin(ang) * r
+          const y = heightAt(x, z)
+          dummy.position.set(x, y, z)
+          dummy.rotation.set(0, rand() * Math.PI * 2, 0)
+          // Real-world blade proportions: ~0.2-0.45m tall, a few cm wide.
+          // The geometry's unit height is 0.95 and half-width 0.16, so the
+          // scale below maps to those real ranges.
+          const widthS = 0.35 + rand() * 0.35
+          const heightS = 0.22 + rand() * 0.24
+          dummy.scale.set(widthS, heightS, widthS)
+          dummy.updateMatrix()
+          grassMesh.setMatrixAt(i, dummy.matrix)
+          const tint = grassTints[Math.floor(rand() * grassTints.length)]
+          const j = (rand() - 0.5) * 0.08
+          col.setRGB(
+            srgbToLinear(clamp01(tint[0] + j)),
+            srgbToLinear(clamp01(tint[1] + j)),
+            srgbToLinear(clamp01(tint[2] + j)),
+          )
+          grassMesh.setColorAt(i, col)
+        }
+      }
+      grassMesh.instanceMatrix.needsUpdate = true
+      if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true
+      scene.add(grassMesh)
+
+      const FLOWER_COUNT = 420
+      const flowerGeo = new THREE.IcosahedronGeometry(0.11, 0)
+      const flowerMat = new THREE.MeshStandardMaterial({ roughness: 0.8, emissive: 0x151008, emissiveIntensity: 0.3 })
+      const flowerMesh = new THREE.InstancedMesh(flowerGeo, flowerMat, FLOWER_COUNT)
+      const flowerTints = [
+        [1.0, 1.0, 0.96],
+        [1.0, 0.92, 0.35],
+        [1.0, 0.98, 0.8],
+      ]
+      {
+        const dummy = new THREE.Object3D()
+        const col = new THREE.Color()
+        for (let i = 0; i < FLOWER_COUNT; i++) {
+          const r = Math.pow(rand(), 0.6) * 150
+          const ang = rand() * Math.PI * 2
+          const x = CAM_POS.x + Math.cos(ang) * r * 1.15
+          const z = CAM_POS.z + Math.sin(ang) * r
+          const y = heightAt(x, z) + 0.18
+          dummy.position.set(x, y, z)
+          dummy.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI)
+          const s = 0.6 + rand() * 0.8
+          dummy.scale.setScalar(s)
+          dummy.updateMatrix()
+          flowerMesh.setMatrixAt(i, dummy.matrix)
+          const tint = flowerTints[Math.floor(rand() * flowerTints.length)]
+          col.setRGB(srgbToLinear(tint[0]), srgbToLinear(tint[1]), srgbToLinear(tint[2]))
+          flowerMesh.setColorAt(i, col)
+        }
+      }
+      flowerMesh.instanceMatrix.needsUpdate = true
+      if (flowerMesh.instanceColor) flowerMesh.instanceColor.needsUpdate = true
+      scene.add(flowerMesh)
+
+      // -----------------------------------------------------------------
+      // Trees — trunk + lumpy, vertex-noise-displaced icosahedron canopy
+      // lobes, toon-shaded via a hand-rolled 4-band gradient map. Baked
+      // vertex colour darkens each lobe's underside (local -Y), giving a
+      // permanent rounded shadow independent of the sun's direction — a
+      // pure directional-light toon shade alone goes flat/bright at night.
       // -----------------------------------------------------------------
 
       function makeToonGradient() {
@@ -277,7 +458,7 @@
         c.width = 4
         c.height = 1
         const ctx = c.getContext('2d')
-        const shades = ['#33421f', '#5a7a3a', '#8bb254', '#c9e08a']
+        const shades = ['#233318', '#4c6a30', '#82ab4c', '#c3dc82']
         shades.forEach((s, i) => {
           ctx.fillStyle = s
           ctx.fillRect(i, 0, 1, 1)
@@ -290,30 +471,72 @@
       }
 
       const toonGradient = makeToonGradient()
-      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c4128, roughness: 0.95 })
+      // A more desaturated brown than an obvious "wood" colour would pick —
+      // tracked down a bug where dusk-lit trunks rendered a lurid, near-
+      // pure red to ACES's characteristic "red push" (a well-known ACES
+      // trait: warm mid-brown tones under warm light get disproportionately
+      // pulled toward saturated red/orange). Pixel read-back with
+      // `NoToneMapping` showed the raw lit colour was a plausible warm
+      // terracotta (159,85,64) — not broken — so the fix is a less
+      // ACES-sensitive base colour rather than a lighting change; every
+      // other candidate (scene lights, `scene.environment`, haze strength,
+      // haze policy) was ruled out first by direct inspection/disabling.
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3e, roughness: 0.95, envMapIntensity: 0.35 })
 
-      function createTree({ x, z, scale = 1, canopyColor = 0x8fbf5a, lumps = 3 }) {
+      function makeLumpyCanopyGeometry(radius, detail, noiseAmp) {
+        const geo = new THREE.IcosahedronGeometry(radius, detail)
+        const pos = geo.attributes.position
+        const colors = new Float32Array(pos.count * 3)
+        const v = new THREE.Vector3()
+        const nrm = new THREE.Vector3()
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i)
+          nrm.copy(v).normalize()
+          const noise =
+            Math.sin(nrm.x * 5.1 + nrm.y * 3.7) * 0.5 +
+            Math.sin(nrm.y * 6.3 - nrm.z * 4.1 + 1.7) * 0.3 +
+            Math.sin(nrm.z * 4.7 + nrm.x * 5.9 - 0.6) * 0.2
+          v.multiplyScalar(1 + noise * noiseAmp)
+          pos.setXYZ(i, v.x, v.y, v.z)
+          const shade = THREE.MathUtils.clamp(0.6 + nrm.y * 0.42, 0.52, 1.0)
+          colors[i * 3 + 0] = shade
+          colors[i * 3 + 1] = shade
+          colors[i * 3 + 2] = shade
+        }
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+        pos.needsUpdate = true
+        geo.computeVertexNormals()
+        return geo
+      }
+
+      function createTree({ x, z, scale = 1, canopyColor = 0x8fbf5a, lumps = 3, detail = 1, hero = false }) {
         const g = new THREE.Group()
         const trunkH = 5.5 * scale
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * scale, 0.65 * scale, trunkH, 6), trunkMat)
+        const trunkTopR = Math.max(0.35 * scale, 1.1)
+        const trunkBotR = Math.max(0.65 * scale, 1.6)
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(trunkTopR, trunkBotR, trunkH, 6), trunkMat)
         trunk.position.y = trunkH / 2
         g.add(trunk)
-        const canopyMat = new THREE.MeshToonMaterial({ color: canopyColor, gradientMap: toonGradient })
+        const canopyMat = new THREE.MeshToonMaterial({
+          color: canopyColor,
+          gradientMap: toonGradient,
+          vertexColors: true,
+        })
         for (let i = 0; i < lumps; i++) {
           const r = (1.7 + rand() * 1.2) * scale
-          const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), canopyMat)
+          const m = new THREE.Mesh(makeLumpyCanopyGeometry(r, detail, hero ? 0.22 : 0.16), canopyMat)
           const ang = (i / lumps) * Math.PI * 2 + rand() * 0.8
-          const off = (1.6 + rand() * 0.6) * scale
+          const off = (1.5 + rand() * 0.7) * scale
           m.position.set(Math.cos(ang) * off, trunkH + r * 0.4 + rand() * r * 0.3, Math.sin(ang) * off)
           m.scale.set(0.85 + rand() * 0.4, 0.75 + rand() * 0.4, 0.85 + rand() * 0.4)
           m.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI)
           g.add(m)
         }
-        // One more lump centred and slightly higher to knit the ring of
-        // lobes into a single readable crown from a distance.
-        const rTop = 2.1 * scale
-        const top = new THREE.Mesh(new THREE.IcosahedronGeometry(rTop, 1), canopyMat)
-        top.position.set(0, trunkH + rTop * 0.9, 0)
+        // A centred, slightly higher lump knits the ring of lobes into one
+        // readable, lusher crown from a distance.
+        const rTop = (hero ? 2.3 : 2.1) * scale
+        const top = new THREE.Mesh(makeLumpyCanopyGeometry(rTop, detail, hero ? 0.22 : 0.16), canopyMat)
+        top.position.set(0, trunkH + rTop * 0.85, 0)
         top.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI)
         g.add(top)
         g.position.set(x, heightAt(x, z), z)
@@ -321,12 +544,20 @@
         return g
       }
 
-      // The big camphor-style hero tree, on the crest right by the camera.
-      const heroTree = createTree({ x: HERO_TREE.x, z: HERO_TREE.z, scale: 3.6, lumps: 5, canopyColor: 0x6fa050 })
+      // The big camphor-style hero tree, on the crest right by the camera:
+      // more, bigger, higher-detail lobes for a lusher, rounder canopy.
+      const heroTree = createTree({
+        x: HERO_TREE.x,
+        z: HERO_TREE.z,
+        scale: 3.4,
+        lumps: 8,
+        detail: 2,
+        hero: true,
+        canopyColor: 0x6fa050,
+      })
       scene.add(heroTree)
 
-      // A scattering of smaller trees across the visible foreground/midground
-      // (biased into the camera's forward sector, not scattered behind it).
+      // A scattering of smaller trees across the visible foreground/midground.
       const CANOPY_COLORS = [0x8fbf5a, 0x76a34a, 0x9dc766]
       for (let i = 0; i < 30; i++) {
         const x = -520 + rand() * 780
@@ -339,6 +570,7 @@
             z,
             scale: 0.55 + rand() * 0.85,
             lumps: 2 + Math.round(rand()),
+            detail: 1,
             canopyColor: CANOPY_COLORS[Math.floor(rand() * CANOPY_COLORS.length)],
           }),
         )
@@ -370,101 +602,394 @@
       scene.add(createCottage(COTTAGE.x, COTTAGE.z))
 
       // -----------------------------------------------------------------
-      // Distant ridges — clusters of flat-shaded cones at 9-40 km so
-      // aerial perspective has real distance to fade them through.
+      // Distant ridges — smooth, noise-displaced hill silhouettes (summed
+      // Gaussian peaks along a strip, smooth-shaded) at 9-40 km so aerial
+      // perspective has real distance to fade them through. Replaces the
+      // earlier angular flat-shaded cones, which read as toy pyramids.
       // -----------------------------------------------------------------
 
-      function createRidgeCluster(distanceZ, spread, color, heightScale) {
+      const RIDGE_LOW = [0.26, 0.4, 0.34]
+      const RIDGE_HIGH = [0.5, 0.64, 0.58]
+      const RIDGE_PALE = [0.72, 0.78, 0.85]
+
+      function buildRidgeGeometry(centerZ, spread, heightScale, seed, distFade) {
+        const rng = mulberry32(seed)
+        const lenSeg = 64
+        const depthSeg = 8
+        const halfLen = spread * 0.62
+        const depth = spread * 0.4
+        const peakCount = 5 + Math.round(rng() * 3)
+        const peaks = []
+        for (let i = 0; i < peakCount; i++) {
+          peaks.push({
+            x: (rng() * 2 - 1) * halfLen * 0.9,
+            h: (300 + rng() * 460) * heightScale,
+            r: 260 + rng() * 240,
+          })
+        }
+        const n = lenSeg + 1
+        const m = depthSeg + 1
+        const positions = new Float32Array(n * m * 3)
+        const colors = new Float32Array(n * m * 3)
+        for (let j = 0; j < m; j++) {
+          const zt = j / depthSeg
+          const cross = Math.sin(zt * Math.PI)
+          for (let i = 0; i < n; i++) {
+            const xt = i / lenSeg
+            const x = (xt * 2 - 1) * halfLen
+            let h = 0
+            for (const p of peaks) {
+              const d = x - p.x
+              h += p.h * Math.exp(-(d * d) / (2 * p.r * p.r))
+            }
+            h *= cross
+            const z = centerZ + (zt * 2 - 1) * depth * 0.5
+            const idx = j * n + i
+            positions[idx * 3 + 0] = x
+            positions[idx * 3 + 1] = h
+            positions[idx * 3 + 2] = z
+            const th = clamp01(h / 650)
+            let cr = lerp(RIDGE_LOW[0], RIDGE_HIGH[0], th)
+            let cg = lerp(RIDGE_LOW[1], RIDGE_HIGH[1], th)
+            let cb = lerp(RIDGE_LOW[2], RIDGE_HIGH[2], th)
+            cr = lerp(cr, RIDGE_PALE[0], distFade)
+            cg = lerp(cg, RIDGE_PALE[1], distFade)
+            cb = lerp(cb, RIDGE_PALE[2], distFade)
+            colors[idx * 3 + 0] = srgbToLinear(cr)
+            colors[idx * 3 + 1] = srgbToLinear(cg)
+            colors[idx * 3 + 2] = srgbToLinear(cb)
+          }
+        }
+        const indices = []
+        for (let j = 0; j < depthSeg; j++) {
+          for (let i = 0; i < lenSeg; i++) {
+            const a = j * n + i
+            const b = j * n + i + 1
+            const c = (j + 1) * n + i
+            const d = (j + 1) * n + i + 1
+            indices.push(a, c, b, b, c, d)
+          }
+        }
+        const geo = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+        geo.setIndex(indices)
+        geo.computeVertexNormals()
+        return geo
+      }
+
+      const ridgeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 })
+      const RIDGES = [
+        { z: -9000, spread: 6000, hs: 1.0, seed: 11, fade: 0.12 },
+        { z: -17000, spread: 9500, hs: 1.2, seed: 22, fade: 0.32 },
+        { z: -27000, spread: 13500, hs: 0.95, seed: 33, fade: 0.52 },
+        { z: -40000, spread: 18000, hs: 1.35, seed: 44, fade: 0.72 },
+      ]
+      for (const cfg of RIDGES) {
+        scene.add(new THREE.Mesh(buildRidgeGeometry(cfg.z, cfg.spread, cfg.hs, cfg.seed, cfg.fade), ridgeMat))
+      }
+
+      // -----------------------------------------------------------------
+      // Clouds — the hero of the sky. A couple of towering cumulus
+      // clusters (flat cauliflower base + several billowing tiers, built
+      // from dozens of spheres each) big enough to fill a good fraction of
+      // the sky, plus several smaller mid-size clusters for texture. All
+      // toon-shaded through a shared cool-shadow/warm-lit gradient map, so
+      // the actual sun/moon direction naturally lights one side warm white
+      // and leaves the other lavender-blue — no per-sphere colour split
+      // needed. The material's overall tint + emissive is then re-graded
+      // by `updateSkyPalette` below to track sun elevation (peach/pink at
+      // golden hour, dim blue-grey at night instead of a constant glow).
+      // -----------------------------------------------------------------
+
+      function makeCloudGradient() {
+        const c = document.createElement('canvas')
+        c.width = 4
+        c.height = 1
+        const ctx = c.getContext('2d')
+        // Deliberately grayscale — see the note above `CLOUD_LIT` below.
+        const shades = ['#3d3d3d', '#7a7a7a', '#d0d0d0', '#ffffff']
+        shades.forEach((s, i) => {
+          ctx.fillStyle = s
+          ctx.fillRect(i, 0, 1, 1)
+        })
+        const tex = new THREE.CanvasTexture(c)
+        tex.minFilter = THREE.NearestFilter
+        tex.magFilter = THREE.NearestFilter
+        tex.generateMipmaps = false
+        return tex
+      }
+      const cloudGradient = makeCloudGradient()
+      const cloudMat = new THREE.MeshToonMaterial({
+        color: 0xffffff,
+        gradientMap: cloudGradient,
+        emissive: 0x000000,
+        emissiveIntensity: 0,
+        vertexColors: true,
+      })
+
+      // Real-time toon shading alone reads muddy/flat here — each cluster is
+      // dozens of small overlapping spheres, and at cluster scale their
+      // individual smooth per-sphere gradients blur into a near-uniform
+      // tone regardless of sun angle. So each sphere ALSO gets a baked
+      // vertex-colour gradient (bright warm near its top, cool lavender-blue
+      // near its bottom) that reliably reads as "puffy, lit on top" the way
+      // real cumulus does, independent of the exact camera/sun angle. The
+      // toon material's actual lighting (elevation-tinted via `cloudMat`'s
+      // colour/emissive in `updateLighting`) still layers subtler real
+      // directionality and the day → golden → night regrade on top.
+      // Deliberately grayscale (equal R=G=B), not a blue/warm tint. Pixel
+      // read-back during tuning showed that multiplying *any* baked hue
+      // here against the sun's elevation-tinted colour desaturates into a
+      // muddy grey-brown — multiplying two independently-authored hues is
+      // exactly the classic "mud" mistake (complementary-ish colours
+      // multiplied together pull toward grey). The single robust fix was
+      // to let hue come from exactly *one* place — the actual light
+      // colours (`SUN_COLOR_KEYS`, the moon's fixed cool blue, and the
+      // hemisphere fill) — and keep every material's own response
+      // achromatic, form-only shading. Confirmed by A/B pixel read-back
+      // with `NoToneMapping`: this is not a tonemap artifact.
+      // The camera spends most of its time looking *up* at cloud
+      // undersides (see the ambient note below), so "shadow" is kept
+      // fairly bright (0.68, not a deep 0.3-0.4) rather than aiming for
+      // strong light/dark contrast — real cumulus scatter light
+      // internally and rarely look dark-shadowed from below in daylight;
+      // a big lit/shadow gap here just reads as permanently dim & muddy
+      // given how little of the geometry ever faces the sun directly.
+      const CLOUD_LIT = [0.97, 0.97, 0.97]
+      const CLOUD_SHADOW = [0.68, 0.68, 0.68]
+      function shadeCloudSphere(geo) {
+        const pos = geo.attributes.position
+        const colors = new Float32Array(pos.count * 3)
+        const v = new THREE.Vector3()
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i)
+          const ny = v.y / (v.length() || 1)
+          const t = clamp01(ny * 0.6 + 0.55)
+          colors[i * 3 + 0] = srgbToLinear(lerp(CLOUD_SHADOW[0], CLOUD_LIT[0], t))
+          colors[i * 3 + 1] = srgbToLinear(lerp(CLOUD_SHADOW[1], CLOUD_LIT[1], t))
+          colors[i * 3 + 2] = srgbToLinear(lerp(CLOUD_SHADOW[2], CLOUD_LIT[2], t))
+        }
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+        return geo
+      }
+
+      function createTowerCluster(scale) {
         const g = new THREE.Group()
-        const mat = new THREE.MeshStandardMaterial({ color, roughness: 1, flatShading: true })
-        const count = 5 + Math.round(rand() * 2)
-        for (let i = 0; i < count; i++) {
-          const t = (i / (count - 1)) * 2 - 1
-          const h = (280 + rand() * 420) * heightScale
-          const w = (700 + rand() * 550) * heightScale
-          const m = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 4, 1), mat)
-          m.scale.set(w, h, w * (0.7 + rand() * 0.3))
-          m.rotation.y = rand() * Math.PI
-          m.position.set(t * spread + (rand() - 0.5) * spread * 0.15, h / 2, distanceZ + (rand() - 0.5) * spread * 0.1)
+        const baseCount = 11 + Math.round(rand() * 5)
+        for (let i = 0; i < baseCount; i++) {
+          const ang = rand() * Math.PI * 2
+          const rad = rand() * 150 * scale
+          const r = (45 + rand() * 55) * scale
+          const m = new THREE.Mesh(shadeCloudSphere(new THREE.SphereGeometry(r, 10, 8)), cloudMat)
+          m.scale.y = 0.5 + rand() * 0.15
+          m.position.set(Math.cos(ang) * rad, rand() * 12 * scale, Math.sin(ang) * rad)
           g.add(m)
+        }
+        const tiers = 4
+        for (let t = 0; t < tiers; t++) {
+          const tierCount = 9 - t
+          const tierRadius = (120 - t * 26) * scale
+          const tierHeight = (30 + t * 70) * scale
+          for (let i = 0; i < tierCount; i++) {
+            const ang = rand() * Math.PI * 2
+            const rad = rand() * tierRadius
+            const r = Math.max(16, 44 + rand() * 42 - t * 5) * scale
+            const m = new THREE.Mesh(shadeCloudSphere(new THREE.SphereGeometry(r, 9, 7)), cloudMat)
+            m.position.set(Math.cos(ang) * rad, tierHeight + rand() * 24 * scale, Math.sin(ang) * rad)
+            g.add(m)
+          }
         }
         return g
       }
 
-      const RIDGES = [
-        { z: -9000, spread: 6000, color: 0x5d7a86, hs: 1.0 },
-        { z: -17000, spread: 9500, color: 0x6f8a96, hs: 1.2 },
-        { z: -27000, spread: 13500, color: 0x84a0aa, hs: 0.95 },
-        { z: -40000, spread: 18000, color: 0x9db3bc, hs: 1.35 },
-      ]
-      for (const cfg of RIDGES) scene.add(createRidgeCluster(cfg.z, cfg.spread, cfg.color, cfg.hs))
-
-      // -----------------------------------------------------------------
-      // Clouds — clusters of overlapping spheres, bright and soft, drifting.
-      // -----------------------------------------------------------------
-
-      const cloudMat = new THREE.MeshStandardMaterial({
-        color: 0xfffaf0,
-        roughness: 1,
-        metalness: 0,
-        emissive: 0x2a2620,
-        emissiveIntensity: 0.14,
-      })
-      function createCloudCluster(scale) {
+      function createMidCluster(scale) {
         const g = new THREE.Group()
-        const count = 6 + Math.round(rand() * 3)
+        const count = 7 + Math.round(rand() * 4)
         for (let i = 0; i < count; i++) {
-          const r = (30 + rand() * 55) * scale
-          const m = new THREE.Mesh(new THREE.SphereGeometry(r, 9, 7), cloudMat)
+          const r = (28 + rand() * 48) * scale
+          const m = new THREE.Mesh(shadeCloudSphere(new THREE.SphereGeometry(r, 8, 6)), cloudMat)
           m.position.set(
-            (rand() - 0.5) * 160 * scale,
-            rand() * 36 * scale * (i === 0 ? 0.25 : 1),
-            (rand() - 0.5) * 120 * scale,
+            (rand() - 0.5) * 170 * scale,
+            rand() * 34 * scale * (i === 0 ? 0.25 : 1),
+            (rand() - 0.5) * 130 * scale,
           )
           g.add(m)
         }
         return g
       }
+
       const clouds = []
-      for (let i = 0; i < 8; i++) {
-        const c = createCloudCluster(0.9 + rand() * 1.3)
-        c.position.set((rand() - 0.5) * 9000, 1300 + rand() * 1600, -1500 - rand() * 15000)
-        c.userData.speed = 30 + rand() * 45
+      const HERO_CLOUDS = [
+        { x: -3400, y: 1500, z: -4800, scale: 4.8, speed: 22 },
+        { x: 2900, y: 1850, z: -5900, scale: 5.6, speed: 18 },
+        { x: 300, y: 2700, z: -8400, scale: 3.6, speed: 26 },
+      ]
+      for (const cfg of HERO_CLOUDS) {
+        const c = createTowerCluster(cfg.scale)
+        c.position.set(cfg.x, cfg.y, cfg.z)
+        c.userData.speed = cfg.speed
+        scene.add(c)
+        clouds.push(c)
+      }
+      for (let i = 0; i < 6; i++) {
+        const c = createMidCluster(0.8 + rand() * 1.1)
+        c.position.set((rand() - 0.5) * 9000, 1200 + rand() * 1400, -1200 - rand() * 8000)
+        c.userData.speed = 35 + rand() * 45
         scene.add(c)
         clouds.push(c)
       }
 
       // -----------------------------------------------------------------
-      // Sun light — DirectionalLight tracking the sky's sun via SkySun.
-      // No shadows: default ortho frustum is far too small for a km-scale
-      // scene and the toon-leaning look doesn't need cast shadows to read.
+      // Lighting — sun DirectionalLight tracking the sky's sun via SkySun,
+      // *scaled to zero below the horizon* (SkySun itself only points the
+      // light along the sun ray; it doesn't fade intensity, so left alone
+      // it keeps "shining" up through the ground at night). A weak cool
+      // moonlight + a small hemisphere fill take over once the sun fades,
+      // so night reads as deep navy sky / silhouetted hills / dim blue
+      // foliage rather than a fully black scene or a still-lit hero tree.
       // -----------------------------------------------------------------
 
-      const sun = sky.createSun({ intensity: 4.2, distance: 60000, castShadow: false })
+      const SUN_BASE_INTENSITY = 3.4
+      const sun = sky.createSun({ intensity: SUN_BASE_INTENSITY, distance: 60000, castShadow: false })
       sun.attach(scene)
 
+      const moon = new THREE.DirectionalLight(0x8fa4d9, 0)
+      const moonTarget = new THREE.Object3D()
+      moon.target = moonTarget
+      scene.add(moon, moonTarget)
+
+      const ambientFill = new THREE.HemisphereLight(0x9fb8d8, 0x141a26, 0.05)
+      scene.add(ambientFill)
+
+      // A flat, normal-independent ambient — the camera spends most of its
+      // time looking *up* at cloud undersides, which get essentially zero
+      // direct sun (NdotL < 0) and, lit only by the weak hemisphere fill
+      // above, rendered as a near-black "muddy" smudge regardless of how
+      // the toon gradient/emissive were tuned. A real ambient term (rather
+      // than more emissive, which can't vary with the sun's colour) keeps
+      // shadow-facing surfaces legible — which also happens to match the
+      // flat, soft-shadowed painterly look the whole scene is going for.
+      const globalAmbient = new THREE.AmbientLight(0xffffff, 0.55)
+      scene.add(globalAmbient)
+
+      // Generic elevation-keyed colour/scalar sampler, shared by the sun
+      // tint and the cloud emissive glow below.
+      const _cA = new THREE.Color()
+      const _cB = new THREE.Color()
+      function sampleKeyed(keys, elev, colorField, scalarField, out) {
+        let i = 0
+        while (i < keys.length - 2 && elev > keys[i + 1].elev) i++
+        const a = keys[i]
+        const b = keys[i + 1]
+        const t = clamp01((elev - a.elev) / (b.elev - a.elev || 1))
+        _cA.set(a[colorField])
+        _cB.set(b[colorField])
+        out.copy(_cA).lerp(_cB, t)
+        return scalarField ? lerp(a[scalarField], b[scalarField], t) : t
+      }
+
+      // The sun *light*'s colour is what actually carries the golden-hour
+      // warmth onto lit surfaces (clouds, terrain, foliage) — tinting it
+      // here, rather than post-multiplying a flat tint onto each material,
+      // is what a real camera/renderer does, and it composes correctly:
+      // a warm light naturally warms whatever it's lighting while leaving
+      // ambient-lit shadow areas cooler, instead of the muddy desaturated
+      // result you get multiplying a warm tint straight onto a material
+      // that already has a baked cool-blue shadow colour (complementary
+      // colours multiplied together desaturate toward grey/brown — that's
+      // what a first attempt at this did to the clouds' shadow bands).
+      const SUN_COLOR_KEYS = [
+        { elev: -2, color: '#ff7a42' },
+        { elev: 4, color: '#ff9c56' },
+        { elev: 12, color: '#ffd9a0' },
+        { elev: 25, color: '#fff6e8' },
+        { elev: 45, color: '#ffffff' },
+      ]
+      const _sunColor = new THREE.Color()
+      const _moonAmbientColor = new THREE.Color(0x5a6fa0)
+      const _ambientDayColor = new THREE.Color()
+
+      // Cloud emissive-only glow: additive, so — unlike a colour tint — it
+      // can warm the lit crests at golden hour without muddying the
+      // (separately, robustly baked-cool) shadow underside.
+      const CLOUD_EMISSIVE_KEYS = [
+        { elev: -25, color: '#141b34', ei: 0.03 },
+        { elev: -6, color: '#2c3054', ei: 0.03 },
+        { elev: 2, color: '#ffab6a', ei: 0.22 },
+        { elev: 10, color: '#ffd9a0', ei: 0.09 },
+        { elev: 26, color: '#f0e6cc', ei: 0.012 },
+      ]
+      const _cloudEmis = new THREE.Color()
+
+      const sunWorldDir = () => sky.baker.sky.sunDirection.value
+
+      function updateLighting(elevDeg) {
+        const sunT = clamp01((elevDeg + 2) / 8)
+        sun.light.intensity = SUN_BASE_INTENSITY * sunT
+        sampleKeyed(SUN_COLOR_KEYS, elevDeg, 'color', null, _sunColor)
+        sun.light.color.copy(_sunColor)
+
+        const moonT = clamp01((-elevDeg - 4) / 16)
+        moon.intensity = 0.5 * moonT
+        const s = sunWorldDir()
+        moon.position.set(-s.x, Math.max(0.4, -s.y * 0.5 + 0.55), -s.z).multiplyScalar(50000)
+        moon.target.position.set(0, 0, 0)
+        moon.target.updateMatrixWorld()
+
+        ambientFill.intensity = lerp(0.05, 0.22, moonT)
+        // Ambient intensity dips right around sunrise/sunset (`sunT` mid
+        // range) so the sun's own warm colour actually reads instead of
+        // being diluted by a flat white fill — a full-strength neutral
+        // ambient at golden hour was exactly what desaturated the clouds
+        // into mud in testing (confirmed by pixel read-back). Colour-wise,
+        // the ambient bounces the sun's colour during the day (real
+        // golden-hour ambient light is warm too, not neutral) and turns
+        // cool blue once the moon takes over.
+        globalAmbient.intensity = lerp(0.42, 0.75, sunT) * (1 - moonT) + lerp(0.16, 0.32, moonT) * moonT
+        // Blend toward the sun's colour only in proportion to `sunT` — at
+        // dusk (sunT ≈ 0, moonT not yet risen either) `_sunColor` is still
+        // pinned at its last, fully-saturated keyframe, and using it at
+        // full strength turned every material a lurid red-orange with a
+        // near-black shadow side (caught visually: tree trunks went bright
+        // red at dusk). Scaling by sunT first fades the ambient back to
+        // neutral white through that gap, before the moon blend below
+        // takes it cool.
+        _ambientDayColor.set(0xffffff).lerp(_sunColor, 0.6 * sunT)
+        globalAmbient.color.copy(_ambientDayColor).lerp(_moonAmbientColor, moonT)
+
+        const ei = sampleKeyed(CLOUD_EMISSIVE_KEYS, elevDeg, 'color', 'ei', _cloudEmis)
+        cloudMat.emissive.copy(_cloudEmis)
+        cloudMat.emissiveIntensity = ei
+        // A very slight dimming at night keeps the clouds from reading as
+        // a still-lit white smudge against a dark sky (point 1's "dim
+        // blue-grey at night, not a constant glow") — the bulk of the
+        // day → night mood shift comes from the sun colour/intensity and
+        // the cool moon + ambient fill above, not from this.
+        cloudMat.color.setScalar(lerp(0.86, 1.0, sunT))
+      }
+      updateLighting(sky.sunElevation)
+
       // -----------------------------------------------------------------
-      // Camera
+      // Camera — low, near the grass, pitched *up* so the sky dominates
+      // the frame (the towering clouds are the point of the shot). The
+      // first pass used an elevated, downward-pitched "vista" camera,
+      // which read as a survey photo rather than a Ghibli establishing
+      // shot; sitting low in the meadow looking up through the hero tree
+      // at the sky is a much more characteristic framing.
       // -----------------------------------------------------------------
 
       const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 1, 90000)
-      // Positioned just past the hill crests (HILL_A/HILL_B centre around
-      // z=55-160) so the forward (-z) view looks *down* the far slope into
-      // the valley, instead of uphill into the bump — the first pass put
-      // the camera upslope of both bumps, so "forward" climbed the hill
-      // before it could see past it, filling the frame with rising ground.
-      const CAM_POS = { x: -80, z: 110 }
-      const camY = heightAt(CAM_POS.x, CAM_POS.z) + 30
+      const camY = heightAt(CAM_POS.x, CAM_POS.z) + 5.2
       camera.position.set(CAM_POS.x, camY, CAM_POS.z)
 
-      // Explicit pitch/yaw rather than an arbitrary target point.
-      const pitchDeg = 7
+      const pitchUpDeg = 9.5
       const yawDeg = 0
-      const pitch = THREE.MathUtils.degToRad(pitchDeg)
+      const pitch = THREE.MathUtils.degToRad(pitchUpDeg)
       const yaw = THREE.MathUtils.degToRad(yawDeg)
       const camForward = new THREE.Vector3(
         Math.sin(yaw) * Math.cos(pitch),
-        -Math.sin(pitch),
+        Math.sin(pitch),
         -Math.cos(yaw) * Math.cos(pitch),
       )
       const lookTarget = camera.position.clone().addScaledVector(camForward, 3000)
@@ -472,7 +997,7 @@
 
       const controls = new OrbitControls(camera, renderer.domElement)
       controls.target.copy(lookTarget)
-      controls.minDistance = 20
+      controls.minDistance = 5
       controls.maxDistance = 4000
       controls.autoRotateSpeed = 0.35
       controls.update()
@@ -494,8 +1019,8 @@
       // -----------------------------------------------------------------
 
       const TONE = {
-        AgX: THREE.AgXToneMapping,
         ACES: THREE.ACESFilmicToneMapping,
+        AgX: THREE.AgXToneMapping,
         Neutral: THREE.NeutralToneMapping,
         None: THREE.NoToneMapping,
       }
@@ -510,9 +1035,9 @@
         exposure: 40,
         toneMapping: 'ACES',
         toneExposure: renderer.toneMappingExposure,
-        look: 'track:ghibli',
-        chroma: 0.7,
-        value: 0.25,
+        look: 'track:ghibli-summer',
+        chroma: 0.88,
+        value: 0.32,
         intensity: 1.0,
         hazeStrength: 1.0,
         cloudDrift: true,
@@ -539,7 +1064,10 @@
       }
 
       const timeGui = renderer.inspector.createParameters('Time & Sun')
-      timeGui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => sky.setTimeOfDay(v))
+      timeGui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => {
+        sky.setTimeOfDay(v)
+        updateLighting(sky.sunElevation)
+      })
       timeGui.add(state, 'animateDay').onChange((v) => {
         if (!v) sky.setTimeOfDay(state.timeOfDay)
       })
@@ -583,6 +1111,10 @@
       window.__controls = controls
       window.__state = state
       window.__applyLook = applySelectedLook
+      window.__updateLighting = () => updateLighting(sky.sunElevation)
+      window.__cloudMat = cloudMat
+      window.__sunLight = sun.light
+      window.__moonLight = moon
 
       applySelectedLook()
 
@@ -599,6 +1131,7 @@
         if (state.animateDay) {
           state.timeOfDay = (state.timeOfDay + state.daySpeed * dt) % 24
           sky.setTimeOfDay(state.timeOfDay)
+          updateLighting(sky.sunElevation)
         }
 
         if (state.cloudDrift) {

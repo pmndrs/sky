@@ -231,6 +231,42 @@ describe('<Sky>', () => {
     }
   })
 
+  it('does not re-call the setter for an object prop that is structurally equal but a new reference (issue #12)', () => {
+    // Fresh object literals every render — as an inline
+    // `<Sky atmosphere={{...}} sunDirection={{...}} />` prop produces.
+    const atmosphere = () => ({ miePhaseG: 0.7 })
+    const sunDirection = () => ({ elevation: 20, azimuth: 90 })
+
+    render(
+      <StrictMode>
+        <Sky atmosphere={atmosphere()} sunDirection={sunDirection()} />
+      </StrictMode>,
+    )
+    const [sky] = live()
+    const callsAfterMount = sky.calls.filter((c) => c.startsWith('setAtmosphere:') || c.startsWith('setSunDirection:'))
+    expect(callsAfterMount.length).toBeGreaterThan(0)
+    const countAfterMount = sky.calls.length
+
+    // Re-render with new-but-equal objects — should not call either setter
+    // again, and should not touch any other setter either.
+    render(
+      <StrictMode>
+        <Sky atmosphere={atmosphere()} sunDirection={sunDirection()} />
+      </StrictMode>,
+    )
+    expect(live()).toEqual([sky])
+    expect(sky.calls).toHaveLength(countAfterMount)
+
+    // A structurally different object still goes through.
+    render(
+      <StrictMode>
+        <Sky atmosphere={{ miePhaseG: 0.9 }} sunDirection={sunDirection()} />
+      </StrictMode>,
+    )
+    expect(sky.calls.length).toBeGreaterThan(countAfterMount)
+    expect(sky.calls).toContain('setAtmosphere:[{"miePhaseG":0.9}]')
+  })
+
   it('disposes when hidden by <Activity> and comes back live when shown', () => {
     const ui = (mode: 'visible' | 'hidden') => (
       <StrictMode>

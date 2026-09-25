@@ -198,6 +198,10 @@ export class SkyAtmosphereBaker {
     this.sky.scale.setScalar(450000)
     this.skyScene.add(this.sky)
 
+    // Note: sunAngularRadius defaults to 0.004675 in both EARTH and SkyAtmosphereMesh,
+    // so no need to apply it from atmosphereParams during construction. Explicit calls
+    // to setAtmosphereParams will apply any changed value via setSunAngularRadius.
+
     // --- cube render target ---
     this.cubeRenderTarget = new CubeRenderTarget(cubeSize, {
       type: HalfFloatType,
@@ -436,8 +440,17 @@ export class SkyAtmosphereBaker {
   }
 
   setAtmosphereParams(partial: any): void {
+    const prevSunAngularRadius = this.atmosphereParams.sunAngularRadius
     this.atmosphereParams = mergeAtmosphereParams(this.atmosphereParams, partial)
     updateAtmosphereUniforms(this.atmosphereUniforms, this.atmosphereParams)
+
+    // Propagate sunAngularRadius to the disc only when it actually changes.
+    // `Sky.setPreset` passes a full param set that always carries the Earth
+    // default, and re-applying it would clobber a disc size the caller set
+    // through `Sky.setSunDisc({ angularDiameter })`.
+    if (partial && typeof partial.sunAngularRadius === 'number' && partial.sunAngularRadius !== prevSunAngularRadius) {
+      this.sky.setSunAngularRadius(partial.sunAngularRadius)
+    }
 
     this.atmosDirty = true
     this.cubeDirty = true

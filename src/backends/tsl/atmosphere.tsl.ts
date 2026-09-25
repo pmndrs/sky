@@ -68,11 +68,13 @@ export const rayleighPhase = /*@__PURE__*/ Fn(([cosTheta]: any) => {
 })
 
 /**
- * Cornette-Shanks Mie phase function — the phase function Hillaire actually uses.
+ * Cornette-Shanks Mie phase function.
  *
  * Unreal: `CornetteShanksMiePhaseFunction` in RenderSkyCommon.hlsl. Note the
  * `-cosTheta` in the denominator: that sign is part of the original formulation
  * and is intentional.
+ *
+ * Currently unused; the integrator uses hgPhase instead.
  */
 export const miePhaseCS = /*@__PURE__*/ Fn(([cosTheta, g]: any) => {
   const g2 = g.mul(g)
@@ -86,10 +88,9 @@ export const miePhaseCS = /*@__PURE__*/ Fn(([cosTheta, g]: any) => {
 })
 
 /**
- * Henyey-Greenstein phase function (reference, not Schlick approx).
+ * Henyey-Greenstein phase function (the branch the integrator actually uses for Mie).
  *
- * Unreal: the `#else` branch of `hgPhase` in RenderSkyCommon.hlsl. Exposed as an
- * alternative; not used in phase 1b (the sky uses Cornette-Shanks).
+ * Unreal: the `#else` branch of `hgPhase` in RenderSkyCommon.hlsl.
  */
 export const hgPhase = /*@__PURE__*/ Fn(([cosTheta, g]: any) => {
   const g2 = g.mul(g)

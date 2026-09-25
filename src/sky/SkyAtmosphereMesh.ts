@@ -116,6 +116,8 @@ export class SkyAtmosphereMesh extends Mesh {
   luminanceScale: any
   lookUniforms: ReturnType<typeof createLookUniforms>
   skyLuminanceFactor: any
+  /** Last rim softness passed to `setSunAngularRadius` (fraction of the radius). */
+  _sunEdgeSoftness = 0.1
   _starsTexturePlaceholder: DataTexture
   starsTextureNode: any
   starsIntensity: any
@@ -453,7 +455,9 @@ export class SkyAtmosphereMesh extends Mesh {
    * `sunDiscCosInner` (inner bound) are recomputed here in one JS-side call
    * so the shader never needs a per-pixel `acos`.
    */
-  setSunAngularRadius(halfAngleRad: number, edgeSoftness: number = 0.1): this {
+  setSunAngularRadius(halfAngleRad: number, edgeSoftness: number = this._sunEdgeSoftness): this {
+    // Remember the softness so a radius-only update keeps the caller's rim.
+    this._sunEdgeSoftness = edgeSoftness
     this.sunDiscCos.value = Math.cos(halfAngleRad)
     this.sunDiscCosInner.value = Math.cos(halfAngleRad * (1 - edgeSoftness))
     return this

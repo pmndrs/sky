@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>@pmndrs/sky — Ghibli countryside</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      @pmndrs/sky · <b>Ghibli countryside</b> — the <code>ghibli</code> look track over a procedural rolling-hills
+      scene. Drag to orbit; GUI has time-of-day, look, haze and camera controls.
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { pass } from 'three/tsl'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { Sky, looks, lookTracks, registerLook, registerLookTrack, resolveLook } from '@pmndrs/sky'
+
+      // -----------------------------------------------------------------
+      // Renderer + Sky
+      // -----------------------------------------------------------------
+
+      const renderer = new THREE.WebGPURenderer({ antialias: true })
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      // ACES read the best of the three tried here — AgX's shoulder lifted
+      // the night look's dark navy stops into a washed cornflower blue (the
+      // "deep navy, sky still legible" ask wants the navy to actually read
+      // dark), and Neutral looked photographic rather than illustrated.
+      // ACES keeps the night moody while still giving golden hour a warm,
+      // un-crushed glow. Exposure matches the other component demos.
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      renderer.toneMappingExposure = 0.5
+      renderer.inspector = new Inspector()
+      document.body.appendChild(renderer.domElement)
+
+      await renderer.init()
+
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        timeOfDay: 9.5,
+        latitude: 37.7,
+        exposure: 40,
+        sunDisc: true,
+        enableAerialPerspective: true,
+      })
+
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+
+      // -----------------------------------------------------------------
+      // A richer, more saturated companion to the built-in `ghibli` track —
+      // registered here (not in src/) per the brief. Reuses `ghibli-night`
+      // from the built-ins since a chroma-only night ramp has little to add.
+      // -----------------------------------------------------------------
+
+      registerLook('ghibli-summer-day', {
+        stops: [
+          { at: 0.0, color: '#cfeaf5' },
+          { at: 0.1, color: '#8ed0ef', ease: 'smooth' },
+          { at: 0.45, color: '#3aa3e0' },
+          { at: 1.0, color: '#1c68c4' },
+        ],
+        chroma: 0.78,
+        value: 0.3,
+        sunTint: { color: '#fff3c4', falloff: 0.35, strength: 0.5 },
+      })
+
+      registerLook('ghibli-summer-dusk', {
+        stops: [
+          { at: -0.08, color: '#ff8a5c' },
+          { at: 0.1, color: '#ffcf8f', ease: 'smooth' },
+          { at: 0.4, color: '#a685c9', ease: 'smooth' },
+          { at: 1.0, color: '#3f52a8' },
+        ],
+        chroma: 0.78,
+        value: 0.3,
+        sunTint: { color: '#ffdca0', falloff: 0.3, strength: 0.65 },
+      })
+
+      registerLookTrack('ghibli-summer', [
+        { elevation: -18, look: 'ghibli-night' },
+        { elevation: -6, look: 'ghibli-summer-dusk' },
+        { elevation: 8, look: 'ghibli-summer-dusk' },
+        { elevation: 15, look: 'ghibli-summer-day' },
+      ])
+
+      // -----------------------------------------------------------------
+      // Deterministic PRNG — stable prop placement across reloads.
+      // -----------------------------------------------------------------
+
+      function mulberry32(seed) {
+        return function () {
+          seed |= 0
+          seed = (seed + 0x6d2b79f5) | 0
+          let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+        }
+      }
+      const rand = mulberry32(1337)
+
+      // -----------------------------------------------------------------
+      // Terrain — a single warped-grid plane. Vertex density is piecewise:
+      // dense within the ~2.4 km "hero" radius, sparse beyond, so a 48 km
+      // reach (far enough for the 40 km ridge) stays under ~50k verts.
+      // Height is layered sines (rolling hills) + two Gaussian bumps (the
+      // foreground hero hill) with a distance-based relief falloff so the
+      // far terrain settles toward flat before it fades into the haze.
+      // -----------------------------------------------------------------
+
+      const TERRAIN_HALF = 48000
+      const TERRAIN_SEG = 220
+      const INNER_FRAC = 0.05 // 5% of half = 2400 m gets the dense grid
+      const INNER_SEG_FRAC = 0.55 // 55% of segments cover that inner region
+
+      const HILL_A = { x: -20, z: 160 } // broad foreground rise
+      const HILL_B = { x: -110, z: 55 } // hero tree's crest
+      const HERO_TREE = { x: -112, z: 50 }
+      const COTTAGE = { x: 95, z: -150 }
+
+      function warpAxis(u) {
+        const a = Math.abs(u)
+        const d =
+          a <= INNER_SEG_FRAC
+            ? (a / INNER_SEG_FRAC) * INNER_FRAC
+            : INNER_FRAC + ((a - INNER_SEG_FRAC) / (1 - INNER_SEG_FRAC)) * (1 - INNER_FRAC)
+        return Math.sign(u) * d * TERRAIN_HALF
+      }
+
+      function smoothstep(e0, e1, x) {
+        const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)))
+        return t * t * (3 - 2 * t)
+      }
+      function clamp01(x) {
+        return Math.min(1, Math.max(0, x))
+      }
+      function lerp(a, b, t) {
+        return a + (b - a) * t
+      }
+      function gauss(x, z, cx, cz, r, amp) {
+        const dx = x - cx
+        const dz = z - cz
+        return amp * Math.exp(-(dx * dx + dz * dz) / (2 * r * r))
+      }
+      function srgbToLinear(c) {
+        return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+      }
+
+      function heightAt(x, z) {
+        const dist = Math.hypot(x, z)
+        // The terrain's vertex density drops sharply past ~2.4 km (the
+        // dense/sparse warp boundary — see `warpAxis`). Short-wavelength
+        // terms sampled at that sparse spacing alias into a visible band
+        // right at the boundary radius, so the two fine terms (wavelength
+        // ≲1.3 km) are faded out well *before* the density drops, while the
+        // coarse rolling (wavelength several km, safe at sparse sampling)
+        // and the hero-hill bumps persist much further.
+        const coarse =
+          Math.sin(x * 0.0009 + 1.3) * Math.cos(z * 0.0007 - 0.4) * 50 + Math.sin(x * 0.0021 - 0.7 + z * 0.0016) * 24
+        const fine = Math.sin(x * 0.0047 - z * 0.0038 + 2.1) * 10 + Math.sin(x * 0.011 - z * 0.009 + 0.6) * 4
+        const reliefCoarse = 1 - smoothstep(4000, 20000, dist) * 0.9
+        const reliefFine = 1 - smoothstep(700, 2100, dist)
+        let h = coarse * reliefCoarse + fine * reliefFine
+        h += gauss(x, z, HILL_A.x, HILL_A.z, 520, 44)
+        h += gauss(x, z, HILL_B.x, HILL_B.z, 220, 20)
+        return h
+      }
+
+      const GRASS_HOLLOW = [0.1, 0.27, 0.13]
+      const GRASS_CREST = [0.66, 0.76, 0.32]
+      const FAR_TINT = [0.68, 0.76, 0.82]
+
+      function colorAt(x, z, h, dist) {
+        const t = clamp01((h + 20) / 100)
+        let r = lerp(GRASS_HOLLOW[0], GRASS_CREST[0], t)
+        let g = lerp(GRASS_HOLLOW[1], GRASS_CREST[1], t)
+        let b = lerp(GRASS_HOLLOW[2], GRASS_CREST[2], t)
+        const n = (Math.sin(x * 0.13) * Math.cos(z * 0.17) + Math.sin(x * 0.041 + z * 0.037)) * 0.035
+        r += n
+        g += n * 0.6
+        b += n * 0.3
+        // Kept deliberately weak — `applyHaze` (real aerial-perspective
+        // in-scatter/transmittance) does the actual atmospheric fade at
+        // these distances; a strong manual tint here fights it and shows
+        // up as a hard band right where the two overlap.
+        const distT = clamp01((dist - 3000) / 20000)
+        r = lerp(r, FAR_TINT[0], distT * 0.15)
+        g = lerp(g, FAR_TINT[1], distT * 0.15)
+        b = lerp(b, FAR_TINT[2], distT * 0.15)
+        return [srgbToLinear(clamp01(r)), srgbToLinear(clamp01(g)), srgbToLinear(clamp01(b))]
+      }
+
+      function buildTerrain() {
+        const n = TERRAIN_SEG + 1
+        const positions = new Float32Array(n * n * 3)
+        const colors = new Float32Array(n * n * 3)
+        const uvs = new Float32Array(n * n * 2)
+        for (let j = 0; j < n; j++) {
+          const v = (j / TERRAIN_SEG) * 2 - 1
+          const wz = warpAxis(v)
+          for (let i = 0; i < n; i++) {
+            const u = (i / TERRAIN_SEG) * 2 - 1
+            const wx = warpAxis(u)
+            const h = heightAt(wx, wz)
+            const idx = j * n + i
+            positions[idx * 3 + 0] = wx
+            positions[idx * 3 + 1] = h
+            positions[idx * 3 + 2] = wz
+            const dist = Math.hypot(wx, wz)
+            const c = colorAt(wx, wz, h, dist)
+            colors[idx * 3 + 0] = c[0]
+            colors[idx * 3 + 1] = c[1]
+            colors[idx * 3 + 2] = c[2]
+            uvs[idx * 2 + 0] = i / TERRAIN_SEG
+            uvs[idx * 2 + 1] = j / TERRAIN_SEG
+          }
+        }
+        const indices = []
+        for (let j = 0; j < TERRAIN_SEG; j++) {
+          for (let i = 0; i < TERRAIN_SEG; i++) {
+            const a = j * n + i
+            const b = j * n + i + 1
+            const c = (j + 1) * n + i
+            const d = (j + 1) * n + i + 1
+            indices.push(a, c, b, b, c, d)
+          }
+        }
+        const geo = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+        geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
+        geo.setIndex(indices)
+        geo.computeVertexNormals()
+        return geo
+      }
+
+      const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 })
+      const terrain = new THREE.Mesh(buildTerrain(), terrainMat)
+      scene.add(terrain)
+
+      // -----------------------------------------------------------------
+      // Trees — trunk + 2-4 lumpy icosahedron canopies, toon-shaded via a
+      // hand-rolled 4-step gradient map for a cel-shaded, painterly read.
+      // -----------------------------------------------------------------
+
+      function makeToonGradient() {
+        const c = document.createElement('canvas')
+        c.width = 4
+        c.height = 1
+        const ctx = c.getContext('2d')
+        const shades = ['#33421f', '#5a7a3a', '#8bb254', '#c9e08a']
+        shades.forEach((s, i) => {
+          ctx.fillStyle = s
+          ctx.fillRect(i, 0, 1, 1)
+        })
+        const tex = new THREE.CanvasTexture(c)
+        tex.minFilter = THREE.NearestFilter
+        tex.magFilter = THREE.NearestFilter
+        tex.generateMipmaps = false
+        return tex
+      }
+
+      const toonGradient = makeToonGradient()
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c4128, roughness: 0.95 })
+
+      function createTree({ x, z, scale = 1, canopyColor = 0x8fbf5a, lumps = 3 }) {
+        const g = new THREE.Group()
+        const trunkH = 5.5 * scale
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * scale, 0.65 * scale, trunkH, 6), trunkMat)
+        trunk.position.y = trunkH / 2
+        g.add(trunk)
+        const canopyMat = new THREE.MeshToonMaterial({ color: canopyColor, gradientMap: toonGradient })
+        for (let i = 0; i < lumps; i++) {
+          const r = (1.7 + rand() * 1.2) * scale
+          const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), canopyMat)
+          const ang = (i / lumps) * Math.PI * 2 + rand() * 0.8
+          const off = (1.6 + rand() * 0.6) * scale
+          m.position.set(Math.cos(ang) * off, trunkH + r * 0.4 + rand() * r * 0.3, Math.sin(ang) * off)
+          m.scale.set(0.85 + rand() * 0.4, 0.75 + rand() * 0.4, 0.85 + rand() * 0.4)
+          m.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI)
+          g.add(m)
+        }
+        // One more lump centred and slightly higher to knit the ring of
+        // lobes into a single readable crown from a distance.
+        const rTop = 2.1 * scale
+        const top = new THREE.Mesh(new THREE.IcosahedronGeometry(rTop, 1), canopyMat)
+        top.position.set(0, trunkH + rTop * 0.9, 0)
+        top.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI)
+        g.add(top)
+        g.position.set(x, heightAt(x, z), z)
+        g.rotation.y = rand() * Math.PI * 2
+        return g
+      }
+
+      // The big camphor-style hero tree, on the crest right by the camera.
+      const heroTree = createTree({ x: HERO_TREE.x, z: HERO_TREE.z, scale: 3.6, lumps: 5, canopyColor: 0x6fa050 })
+      scene.add(heroTree)
+
+      // A scattering of smaller trees across the visible foreground/midground
+      // (biased into the camera's forward sector, not scattered behind it).
+      const CANOPY_COLORS = [0x8fbf5a, 0x76a34a, 0x9dc766]
+      for (let i = 0; i < 30; i++) {
+        const x = -520 + rand() * 780
+        const z = -1050 + rand() * 1250
+        if (Math.hypot(x - HERO_TREE.x, z - HERO_TREE.z) < 45) continue
+        if (Math.hypot(x - COTTAGE.x, z - COTTAGE.z) < 65) continue
+        scene.add(
+          createTree({
+            x,
+            z,
+            scale: 0.55 + rand() * 0.85,
+            lumps: 2 + Math.round(rand()),
+            canopyColor: CANOPY_COLORS[Math.floor(rand() * CANOPY_COLORS.length)],
+          }),
+        )
+      }
+
+      // -----------------------------------------------------------------
+      // Cottage — box + pyramidal roof + chimney.
+      // -----------------------------------------------------------------
+
+      function createCottage(x, z) {
+        const g = new THREE.Group()
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xe6d8b8, roughness: 0.9 })
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0xb0402c, roughness: 0.75 })
+        const body = new THREE.Mesh(new THREE.BoxGeometry(11, 6.5, 9), bodyMat)
+        body.position.y = 3.25
+        g.add(body)
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(9.4, 5.5, 4), roofMat)
+        roof.rotation.y = Math.PI / 4
+        roof.scale.set(1, 1, 1.28)
+        roof.position.y = 6.5 + 2.75
+        g.add(roof)
+        const chimney = new THREE.Mesh(new THREE.BoxGeometry(1.2, 3, 1.2), bodyMat)
+        chimney.position.set(3, 8.5, -1)
+        g.add(chimney)
+        g.position.set(x, heightAt(x, z), z)
+        g.rotation.y = 0.3
+        return g
+      }
+      scene.add(createCottage(COTTAGE.x, COTTAGE.z))
+
+      // -----------------------------------------------------------------
+      // Distant ridges — clusters of flat-shaded cones at 9-40 km so
+      // aerial perspective has real distance to fade them through.
+      // -----------------------------------------------------------------
+
+      function createRidgeCluster(distanceZ, spread, color, heightScale) {
+        const g = new THREE.Group()
+        const mat = new THREE.MeshStandardMaterial({ color, roughness: 1, flatShading: true })
+        const count = 5 + Math.round(rand() * 2)
+        for (let i = 0; i < count; i++) {
+          const t = (i / (count - 1)) * 2 - 1
+          const h = (280 + rand() * 420) * heightScale
+          const w = (700 + rand() * 550) * heightScale
+          const m = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 4, 1), mat)
+          m.scale.set(w, h, w * (0.7 + rand() * 0.3))
+          m.rotation.y = rand() * Math.PI
+          m.position.set(t * spread + (rand() - 0.5) * spread * 0.15, h / 2, distanceZ + (rand() - 0.5) * spread * 0.1)
+          g.add(m)
+        }
+        return g
+      }
+
+      const RIDGES = [
+        { z: -9000, spread: 6000, color: 0x5d7a86, hs: 1.0 },
+        { z: -17000, spread: 9500, color: 0x6f8a96, hs: 1.2 },
+        { z: -27000, spread: 13500, color: 0x84a0aa, hs: 0.95 },
+        { z: -40000, spread: 18000, color: 0x9db3bc, hs: 1.35 },
+      ]
+      for (const cfg of RIDGES) scene.add(createRidgeCluster(cfg.z, cfg.spread, cfg.color, cfg.hs))
+
+      // -----------------------------------------------------------------
+      // Clouds — clusters of overlapping spheres, bright and soft, drifting.
+      // -----------------------------------------------------------------
+
+      const cloudMat = new THREE.MeshStandardMaterial({
+        color: 0xfffaf0,
+        roughness: 1,
+        metalness: 0,
+        emissive: 0x2a2620,
+        emissiveIntensity: 0.14,
+      })
+      function createCloudCluster(scale) {
+        const g = new THREE.Group()
+        const count = 6 + Math.round(rand() * 3)
+        for (let i = 0; i < count; i++) {
+          const r = (30 + rand() * 55) * scale
+          const m = new THREE.Mesh(new THREE.SphereGeometry(r, 9, 7), cloudMat)
+          m.position.set(
+            (rand() - 0.5) * 160 * scale,
+            rand() * 36 * scale * (i === 0 ? 0.25 : 1),
+            (rand() - 0.5) * 120 * scale,
+          )
+          g.add(m)
+        }
+        return g
+      }
+      const clouds = []
+      for (let i = 0; i < 8; i++) {
+        const c = createCloudCluster(0.9 + rand() * 1.3)
+        c.position.set((rand() - 0.5) * 9000, 1300 + rand() * 1600, -1500 - rand() * 15000)
+        c.userData.speed = 30 + rand() * 45
+        scene.add(c)
+        clouds.push(c)
+      }
+
+      // -----------------------------------------------------------------
+      // Sun light — DirectionalLight tracking the sky's sun via SkySun.
+      // No shadows: default ortho frustum is far too small for a km-scale
+      // scene and the toon-leaning look doesn't need cast shadows to read.
+      // -----------------------------------------------------------------
+
+      const sun = sky.createSun({ intensity: 4.2, distance: 60000, castShadow: false })
+      sun.attach(scene)
+
+      // -----------------------------------------------------------------
+      // Camera
+      // -----------------------------------------------------------------
+
+      const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 1, 90000)
+      // Positioned just past the hill crests (HILL_A/HILL_B centre around
+      // z=55-160) so the forward (-z) view looks *down* the far slope into
+      // the valley, instead of uphill into the bump — the first pass put
+      // the camera upslope of both bumps, so "forward" climbed the hill
+      // before it could see past it, filling the frame with rising ground.
+      const CAM_POS = { x: -80, z: 110 }
+      const camY = heightAt(CAM_POS.x, CAM_POS.z) + 30
+      camera.position.set(CAM_POS.x, camY, CAM_POS.z)
+
+      // Explicit pitch/yaw rather than an arbitrary target point.
+      const pitchDeg = 7
+      const yawDeg = 0
+      const pitch = THREE.MathUtils.degToRad(pitchDeg)
+      const yaw = THREE.MathUtils.degToRad(yawDeg)
+      const camForward = new THREE.Vector3(
+        Math.sin(yaw) * Math.cos(pitch),
+        -Math.sin(pitch),
+        -Math.cos(yaw) * Math.cos(pitch),
+      )
+      const lookTarget = camera.position.clone().addScaledVector(camForward, 3000)
+      camera.lookAt(lookTarget)
+
+      const controls = new OrbitControls(camera, renderer.domElement)
+      controls.target.copy(lookTarget)
+      controls.minDistance = 20
+      controls.maxDistance = 4000
+      controls.autoRotateSpeed = 0.35
+      controls.update()
+
+      // -----------------------------------------------------------------
+      // Post-process: haze over the scene pass.
+      // -----------------------------------------------------------------
+
+      const scenePass = pass(scene, camera)
+      const post = new THREE.RenderPipeline(renderer)
+      post.outputNode = sky.applyHaze(scenePass.getTextureNode(), {
+        scenePass,
+        policy: 'auto',
+        strength: 1.0,
+      })
+
+      // -----------------------------------------------------------------
+      // GUI
+      // -----------------------------------------------------------------
+
+      const TONE = {
+        AgX: THREE.AgXToneMapping,
+        ACES: THREE.ACESFilmicToneMapping,
+        Neutral: THREE.NeutralToneMapping,
+        None: THREE.NoToneMapping,
+      }
+
+      const trackNames = Object.keys(lookTracks)
+      const lookChoices = ['physical', ...trackNames.map((n) => `track:${n}`), ...Object.keys(looks)]
+
+      const state = {
+        timeOfDay: 9.5,
+        animateDay: false,
+        daySpeed: 0.5,
+        exposure: 40,
+        toneMapping: 'ACES',
+        toneExposure: renderer.toneMappingExposure,
+        look: 'track:ghibli',
+        chroma: 0.7,
+        value: 0.25,
+        intensity: 1.0,
+        hazeStrength: 1.0,
+        cloudDrift: true,
+        autoOrbit: false,
+      }
+
+      const applySelectedLook = () => {
+        if (state.look === 'physical') {
+          sky.setLook(null)
+        } else if (state.look.startsWith('track:')) {
+          sky.setLookTrack(state.look.slice('track:'.length))
+        } else {
+          sky.setLook({ preset: state.look, chroma: state.chroma, value: state.value, intensity: state.intensity })
+        }
+      }
+
+      const syncSlidersFromPreset = () => {
+        if (state.look === 'physical' || state.look.startsWith('track:')) return
+        const look = looks[state.look]
+        if (!look) return
+        state.chroma = look.chroma
+        state.value = look.value
+        state.intensity = look.intensity
+      }
+
+      const timeGui = renderer.inspector.createParameters('Time & Sun')
+      timeGui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => sky.setTimeOfDay(v))
+      timeGui.add(state, 'animateDay').onChange((v) => {
+        if (!v) sky.setTimeOfDay(state.timeOfDay)
+      })
+      timeGui.add(state, 'daySpeed', 0.05, 3, 0.01)
+      timeGui.add(state, 'exposure', 0, 200, 0.5).onChange((v) => sky.setExposure(v))
+      timeGui.add(state, 'toneMapping', Object.keys(TONE)).onChange((v) => {
+        renderer.toneMapping = TONE[v]
+      })
+      timeGui.add(state, 'toneExposure', 0, 2, 0.001).onChange((v) => {
+        renderer.toneMappingExposure = v
+      })
+
+      const lookGui = renderer.inspector.createParameters('Look')
+      lookGui.add(state, 'look', lookChoices).onChange(() => {
+        syncSlidersFromPreset()
+        applySelectedLook()
+      })
+      lookGui.add(state, 'chroma', 0, 1, 0.01).onChange(applySelectedLook)
+      lookGui.add(state, 'value', 0, 1, 0.01).onChange(applySelectedLook)
+      lookGui.add(state, 'intensity', 0, 4, 0.01).onChange(applySelectedLook)
+
+      const sceneGui = renderer.inspector.createParameters('Scene')
+      sceneGui.add(state, 'hazeStrength', 0, 2, 0.01).onChange((v) => sky.setHazeStrength(v))
+      sceneGui.add(state, 'cloudDrift')
+
+      const camGui = renderer.inspector.createParameters('Camera')
+      camGui.add(state, 'autoOrbit').onChange((v) => {
+        controls.autoRotate = v
+      })
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight
+        camera.updateProjectionMatrix()
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      })
+
+      // Exposed for scripted verification (Playwright) and console poking.
+      window.__sky = sky
+      window.__renderer = renderer
+      window.__camera = camera
+      window.__controls = controls
+      window.__state = state
+      window.__applyLook = applySelectedLook
+
+      applySelectedLook()
+
+      // -----------------------------------------------------------------
+      // Animation loop
+      // -----------------------------------------------------------------
+
+      let lastT = performance.now()
+      renderer.setAnimationLoop(() => {
+        const now = performance.now()
+        const dt = Math.min(0.05, (now - lastT) / 1000)
+        lastT = now
+
+        if (state.animateDay) {
+          state.timeOfDay = (state.timeOfDay + state.daySpeed * dt) % 24
+          sky.setTimeOfDay(state.timeOfDay)
+        }
+
+        if (state.cloudDrift) {
+          for (const c of clouds) {
+            c.position.x += c.userData.speed * dt
+            if (c.position.x > 9500) c.position.x -= 19000
+            else if (c.position.x < -9500) c.position.x += 19000
+          }
+        }
+
+        sky.update(camera)
+        sky.updateAerialPerspective()
+        controls.update()
+        post.render()
+      })
+    </script>
+  </body>
+</html>

@@ -4,3 +4,5 @@ node_modules/
 pnpm-lock.yaml
 resources/
 .claude/
+# Headless verify/bench output (gitignored in examples/vanilla).
+examples/vanilla/scripts/.verify-out/

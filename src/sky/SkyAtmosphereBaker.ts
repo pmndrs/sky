@@ -622,6 +622,9 @@ export class SkyAtmosphereBaker {
       const prevMirror = this.sky.mirrorBelowHorizon.value
       this.sky.showSunDisc.value = 0
       this.sky.showMoonDisc.value = 0
+      // Resolved stars are never part of this bake — at cube resolution they
+      // smear into multi-pixel blobs. `SkyStars` draws them as sprites in the
+      // main scene; only the low-frequency Milky Way glow is baked.
       // Opt-in: fold below-horizon view rays to above-horizon so the
       // cube's lower hemisphere bakes a clean Y-mirror of the sky
       // instead of the LUT's lit-ground-albedo colour.
@@ -681,8 +684,8 @@ export class SkyAtmosphereBaker {
 
     if (this.sky.material) (this.sky.material as Material).dispose()
     if (this.sky.geometry) this.sky.geometry.dispose()
-    // The stars placeholder is a GPU-uploaded DataTexture owned by the mesh.
-    if (this.sky._starsTexturePlaceholder) this.sky._starsTexturePlaceholder.dispose()
+    // The Milky Way placeholder is a GPU-uploaded DataTexture owned by the mesh.
+    this.sky._milkyWayPlaceholder.dispose()
 
     this.skyScene.remove(this.sky)
     this.skyScene.remove(this.cubeCamera)

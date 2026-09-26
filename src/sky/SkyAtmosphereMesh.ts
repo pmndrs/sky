@@ -8,6 +8,7 @@ import {
   RGBAFormat,
   RepeatWrapping,
   Vector3,
+  Matrix3,
   NodeMaterial,
 } from 'three/webgpu'
 
@@ -15,8 +16,6 @@ import {
   Fn,
   If,
   abs,
-  cos,
-  sin,
   float,
   vec3,
   vec4,
@@ -28,6 +27,8 @@ import {
   smoothstep,
   texture,
   equirectUV,
+  luminance,
+  log2,
   modelViewProjection,
   positionWorld,
   cameraPosition,
@@ -42,7 +43,6 @@ import {
   skyViewLutParamsToUv,
   transmittanceLutParamsToUv,
 } from '../backends/tsl/atmosphere.tsl'
-import { proceduralStars } from './shaders/proceduralStars.tsl'
 import { applyLook } from '../backends/tsl/look.tsl'
 import { clearLookUniforms, createLookUniforms, updateLookUniforms } from './LookUniforms'
 
@@ -57,10 +57,11 @@ interface SkyAtmosphereMeshOptions {
   upVector?: Vector3
 }
 
-// 1×1 black HalfFloat placeholder used when no star texture is wired. Sized to
-// match the EXR replacement format so swapping `texNode.value` later doesn't
-// trip a format-mismatch reupload.
-function _makeStarsPlaceholder(): DataTexture {
+// 1×1 black HalfFloat placeholder bound until a real texture is assigned.
+// Every swappable texture node MUST get its own instance: when two nodes in
+// one material share a placeholder, swapping one node's `.value` after the
+// material compiled is never picked up by the cube bake (three r185).
+function _makeBlackPlaceholder(name: string): DataTexture {
   // Half-float "0" is the bit pattern 0x0000.
   const data = new Uint16Array(4)
   const tex = new DataTexture(data, 1, 1, RGBAFormat, HalfFloatType)
@@ -69,7 +70,7 @@ function _makeStarsPlaceholder(): DataTexture {
   tex.wrapS = RepeatWrapping
   tex.wrapT = RepeatWrapping
   tex.needsUpdate = true
-  tex.name = 'SkyAtmosphereMesh.starsPlaceholder'
+  tex.name = name
   return tex
 }
 
@@ -118,13 +119,11 @@ export class SkyAtmosphereMesh extends Mesh {
   skyLuminanceFactor: any
   /** Last rim softness passed to `setSunAngularRadius` (fraction of the radius). */
   _sunEdgeSoftness = 0.1
-  _starsTexturePlaceholder: DataTexture
-  starsTextureNode: any
-  starsIntensity: any
-  starsMode: any
-  starsDensity: any
-  starsBrightnessScale: any
-  starsRotation: any
+  _milkyWayPlaceholder: DataTexture
+  milkyWayTextureNode: any
+  milkyWayIntensity: any
+  milkyWayMatrix: any
+  milkyWayContrast: any
   isSkyAtmosphereMesh: boolean
 
   /**
@@ -354,64 +353,41 @@ export class SkyAtmosphereMesh extends Mesh {
     this.skyLuminanceFactor = uniform(new Vector3(1.0, 1.0, 1.0))
 
     /**
-     * Stars equirect HDR texture (HalfFloat, RGBA). Bound by
-     * `SkyNight.enable({ source: 'hdri' | 'texture' })`; until then holds
-     * a 1×1 black placeholder so the shader stays well-formed. Swapping
-     * `node.value` later picks up the new texture without a material
-     * rebuild — keep the format (HalfFloat / RGBA) consistent.
+     * Milky Way / unresolved-star glow, driven by `SkyNight`. An equirect
+     * texture in GALACTIC coordinates (u = longitude with the galactic centre
+     * at 0.5, v = latitude), sampled through `milkyWayMatrix` (world →
+     * galactic rotation, so sidereal time is a uniform write).
+     *
+     * Low-frequency by nature, so unlike resolved stars (sprites in the main
+     * scene, see `SkyStars`) it IS baked into the cube — it survives the 256²
+     * resolution and adds its faint share to night IBL. Attenuated by
+     * transmittance-to-space and the planet mask. Intensity 0 (default) skips
+     * the branch entirely.
      *
      * @type {TextureNode}
      */
-    this._starsTexturePlaceholder = _makeStarsPlaceholder()
-    this.starsTextureNode = texture(this._starsTexturePlaceholder)
-
+    this._milkyWayPlaceholder = _makeBlackPlaceholder('SkyAtmosphereMesh.milkyWayPlaceholder')
+    this.milkyWayTextureNode = texture(this._milkyWayPlaceholder)
+    /** @type {UniformNode<float>} */
+    this.milkyWayIntensity = uniform(0.0)
+    /** World → galactic rotation. @type {UniformNode<mat3>} */
+    this.milkyWayMatrix = uniform(new Matrix3())
     /**
-     * Stars intensity multiplier (linear). Default 0 — keeps the stars
-     * code path silent until `SkyNight.enable()` raises it. ~1.0 is a
-     * good visual default for both procedural and HDR sources.
+     * Twilight fade. Fixed exposure has no eye adaptation, so the glow would
+     * show far too early against a twilight sky rendered too dark. Each
+     * pixel's glow is compared with the sky directly behind it and faded in
+     * over a ±3-stop ramp (log space): the band emerges where the sky is
+     * darkest first and fills in toward the twilight side. This is the glow :
+     * sky luminance ratio at the ramp midpoint — raise it to hold the Milky
+     * Way back until later in twilight.
+     *
+     * (A linear ramp here reads as a hard edge sweeping across the band, and
+     * a single global fade driven by the zenith reads as the whole band
+     * dimming at once — both were tried and rejected.)
      *
      * @type {UniformNode<float>}
      */
-    this.starsIntensity = uniform(0.0)
-
-    /**
-     * Stars source mode. 0 = procedural starfield (no asset cost,
-     * shader-generated), 1 = sample `starsTextureNode` (user-provided
-     * HDR, e.g. a Milky Way capture). Both paths run every frame; the
-     * mix is a single lerp on the cheap procedural and a near-free
-     * texture sample, so toggling at runtime has no recompile cost.
-     *
-     * @type {UniformNode<float>}
-     */
-    this.starsMode = uniform(0.0)
-
-    /**
-     * Procedural starfield density: fraction of the 400×200 cell grid
-     * that hosts a star. 0.3 ≈ 24k stars over the full sphere — looks
-     * like a clear-sky countryside. Lower for a sparse alien world,
-     * higher for sci-fi nebula skies.
-     *
-     * @type {UniformNode<float>}
-     */
-    this.starsDensity = uniform(0.3)
-
-    /**
-     * Procedural starfield brightness multiplier. Tuned so the brightest
-     * stars sit slightly above the dim sky scattering at night; raise for
-     * supernova-bright look, lower for subtle.
-     *
-     * @type {UniformNode<float>}
-     */
-    this.starsBrightnessScale = uniform(1.0)
-
-    /**
-     * Stars rotation around the up axis in radians. Applies to both
-     * procedural and HDR sources (so binding it to time-of-day rotates
-     * either layer consistently).
-     *
-     * @type {UniformNode<float>}
-     */
-    this.starsRotation = uniform(0.0)
+    this.milkyWayContrast = uniform(20.0)
 
     /**
      * Flag for type testing.
@@ -488,12 +464,10 @@ export class SkyAtmosphereMesh extends Mesh {
     const sunDiscCosInnerU = this.sunDiscCosInner
     const luminanceScaleU = this.luminanceScale
     const viewHeightU = this.viewHeight
-    const starsTexNode = this.starsTextureNode
-    const starsIntensityU = this.starsIntensity
-    const starsModeU = this.starsMode
-    const starsDensityU = this.starsDensity
-    const starsBrightnessU = this.starsBrightnessScale
-    const starsRotationU = this.starsRotation
+    const milkyWayTexNode = this.milkyWayTextureNode
+    const milkyWayIntensityU = this.milkyWayIntensity
+    const milkyWayMatrixU = this.milkyWayMatrix
+    const milkyWayContrastU = this.milkyWayContrast
     const moonDirU = this.moonDirection
     const showMoonDiscU = this.showMoonDisc
     const moonIntensityU = this.moonIntensity
@@ -539,7 +513,7 @@ export class SkyAtmosphereMesh extends Mesh {
       const ro = upVec.mul(viewHeight)
       const tPlanet = raySphereIntersectNearest(ro, viewDir, earthO, params.bottomRadius)
       const intersectsGround = tPlanet.greaterThanEqual(float(0.0))
-      // Shared by stars and the sun disc: both need "is this ray looking at
+      // Shared by the Milky Way and the sun disc: both need "is this ray looking at
       // open sky, not the planet" and both need camera→space transmittance.
       const skyMask = intersectsGround.select(float(0.0), float(1.0))
 
@@ -598,23 +572,29 @@ export class SkyAtmosphereMesh extends Mesh {
       }
 
       // Stylized look remap. Applied here — after the LUT/raymarch branches
-      // have merged, and before stars/sun/moon are added — so it covers both
+      // have merged, and before Milky Way/sun/moon are added — so it covers both
       // sky paths and excludes the discs by construction. Identity while no
       // look is assigned. The cube camera renders this same mesh, so the cube
       // background and its PMREM'd IBL inherit the look for free.
-      skyColor.assign(
-        applyLook({
-          color: skyColor,
-          viewZenithCosAngle,
-          lightViewCosAngle,
-          look: lookU,
-        }),
-      )
+      //
+      // Uniform branch: with no look assigned (chroma = value = 0) applyLook
+      // is an exact identity, but its 8-stop ramp walk still costs real ALU
+      // per pixel — noticeable once the mesh is drawn live at screen res.
+      If(lookU.chroma.greaterThan(0.0).or(lookU.value.greaterThan(0.0)), () => {
+        skyColor.assign(
+          applyLook({
+            color: skyColor,
+            viewZenithCosAngle,
+            lightViewCosAngle,
+            look: lookU,
+          }),
+        )
+      })
       // Final per-channel grade (Unreal SkyLuminanceFactor). After the look so
       // a tint is not partially undone by the chroma remap.
       skyColor.mulAssign(skyLuminanceFactorU)
 
-      // Camera→space transmittance along this view ray. Shared by the stars
+      // Camera→space transmittance along this view ray. Shared by the Milky Way
       // fade and the sun-disc tint below. Defaults to white (no attenuation)
       // when the transmittance LUT isn't wired (stand-alone Phase 1b mesh);
       // both consumers degrade gracefully to their pre-tint behaviour in
@@ -625,39 +605,26 @@ export class SkyAtmosphereMesh extends Mesh {
         tToSpace.assign(texture(transmittanceTex, tToSpaceUv).rgb)
       }
 
-      // Stars contribution. Two source paths run in parallel and are
-      // lerp-mixed by `starsMode` (0 = procedural shader-only, 1 = HDR
-      // texture sample). Both paths are cheap; the runtime mix lets
-      // callers swap source without a material rebuild.
-      //
-      // Whichever source produces the raw colour, we attenuate by
-      // camera→space transmittance (so stars fade through twilight
-      // without a manual fade curve) and zero out below-horizon rays.
+      // Milky Way glow (see `milkyWayTextureNode`). Resolved stars are NOT
+      // drawn here: at cube resolution they smear into multi-pixel blobs, so
+      // `SkyStars` draws them as sprites in the main scene instead.
       //
       // Skipped entirely if the transmittance LUT isn't wired (the
-      // stand-alone Phase 1b mesh case); without `tToSpace` stars look
-      // wrong at dawn/dusk.
-      const starsContribution = vec3(0.0, 0.0, 0.0).toVar()
+      // stand-alone Phase 1b mesh case).
+      const milkyWayContribution = vec3(0.0, 0.0, 0.0).toVar()
       if (transmittanceTex !== null) {
-        // Rotate viewDir around the world Y axis. We use world-Y rather
-        // than the `upVec` uniform because the stars ride the world
-        // celestial sphere, not the local-up frame (relevant for
-        // spherical-planet setups where local-up tilts as the camera
-        // orbits the planet).
-        const cosR = cos(starsRotationU)
-        const sinR = sin(starsRotationU)
-        const starsDir = vec3(
-          viewDir.x.mul(cosR).add(viewDir.z.mul(sinR)),
-          viewDir.y,
-          viewDir.x.mul(sinR).negate().add(viewDir.z.mul(cosR)),
-        )
+        If(milkyWayIntensityU.greaterThan(0.0), () => {
+          // Galactic-frame equirect: u = longitude (centre at 0.5), v = latitude.
+          const galUv = equirectUV(milkyWayMatrixU.mul(viewDir))
+          // level(0): the longitude seam makes implicit derivatives explode.
+          const glow = milkyWayTexNode.sample(galUv).level(0).rgb.mul(tToSpace).mul(milkyWayIntensityU)
 
-        const starsUv = equirectUV(starsDir)
-        const proceduralRaw = proceduralStars(starsUv, starsDensityU, starsBrightnessU)
-        const textureRaw = starsTexNode.sample(starsUv).rgb
-        const starsRaw = mix(proceduralRaw, textureRaw, starsModeU)
-
-        starsContribution.assign(starsRaw.mul(tToSpace).mul(starsIntensityU).mul(skyMask))
+          // Local contrast fade: stops of headroom over the sky behind this
+          // pixel, ramped over ±3 stops.
+          const ratio = luminance(glow).div(milkyWayContrastU.mul(luminance(skyColor)).add(float(1e-12)))
+          const visible = smoothstep(float(-3.0), float(3.0), log2(max(ratio, float(1e-12))))
+          milkyWayContribution.assign(glow.mul(visible).mul(skyMask))
+        })
       }
 
       // Sun disc, rendered in-shader (not a separate mesh) so it composites
@@ -697,7 +664,7 @@ export class SkyAtmosphereMesh extends Mesh {
 
       const moonContribution = moonColorU.mul(moonDiscMask).mul(moonIntensityU)
 
-      return vec4(skyColor.add(starsContribution).add(sunContribution).add(moonContribution), float(1.0))
+      return vec4(skyColor.add(milkyWayContribution).add(sunContribution).add(moonContribution), float(1.0))
     })()
   }
 }

@@ -21,6 +21,7 @@ export const abs: any
 export const acos: any
 export const add: any
 export const cameraPosition: any
+export const cameraProjectionMatrix: any
 export const clamp: any
 export const cos: any
 export const cross: any
@@ -32,15 +33,18 @@ export const float: any
 export const floor: any
 export const fract: any
 export const instanceIndex: any
+export const instancedBufferAttribute: any
 export const int: any
 export const ivec3: any
 export const length: any
+export const log2: any
 export const logarithmicDepthToViewZ: any
 export const luminance: any
 export const max: any
 export const min: any
 export const mix: any
 export const modelViewProjection: any
+export const modelWorldMatrix: any
 export const mul: any
 export const normalize: any
 export const positionLocal: any
@@ -49,6 +53,7 @@ export const pow: any
 export const reflect: any
 export const reflector: any
 export const saturate: any
+export const screenSize: any
 export const select: any
 export const sin: any
 export const smoothstep: any
@@ -63,6 +68,7 @@ export const uint: any
 export const uniform: any
 export const uniformArray: any
 export const uv: any
+export const varying: any
 export const varyingProperty: any
 export const vec2: any
 export const vec3: any

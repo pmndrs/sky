@@ -304,6 +304,43 @@ Same session also confirmed two React-bindings fixes that predate it
 import in src/react/Sky.tsx) — both were required for the `./react` entry to
 work at all in a consumer.
 
+### Night sky: stars are sprites, the Milky Way is baked (2026-09-26)
+
+Resolved stars must never go into the cube bake — at 256² a star is a
+blurry multi-pixel blob, and a bigger cube doesn't fix it (~2048/face to match
+screen density, ~200 MB). `SkyStars` draws them as energy-normalised PSF
+sprites in the main scene (all atmosphere terms per star in the vertex stage);
+only the low-frequency Milky Way glow is sampled by `SkyAtmosphereMesh` and
+baked. A live per-pixel sky background + procedural stars was measured and
+rejected: +1.4–1.7 ms at 4K vs ~0.05 ms for sprites.
+
+Twilight fade is **local** contrast (star/glow vs the sky behind it) ramped in
+log2 stops. A linear ramp "shutter-closes" across the Milky Way; a global
+zenith-driven fade was tried and rejected by the maintainer (whole band dims
+at once). Star orientation comes from `localSiderealTime`, derived from the
+same hour angle as `solarPosition` — `tests/stars.test.ts` asserts the sun's
+catalog position lands on the baker's sun (<0.5°); don't break that coupling.
+
+### Each swappable texture node needs its own placeholder texture
+
+Two `texture()` nodes in one material sharing the SAME placeholder texture
+object: swapping one node's `.value` after the material compiled is never
+picked up by the cube bake (the live mesh, compiled later, does see it;
+`material.needsUpdate` doesn't help). Cost a debugging detour as "the Milky
+Way is missing from the cube". Give every swappable node its own
+`_makeBlackPlaceholder()`. Related: resizing a texture via `image` +
+`needsUpdate` does NOT reallocate in r185 — it writes into the old-size GPU
+texture.
+
+### Measuring GPU cost: burst wall-clock, not timestamp totals
+
+WebGPU timestamp-query frame totals are unreliable on Apple GPUs for frames
+with many small passes — a PMREM re-bake frame reported ~85–140 ms while the
+page ran at 120 fps. Use the burst method in `examples/vanilla/16-stars-bench.html`
+(`__bench.burst()`: pause the loop, submit N frames, `onSubmittedWorkDone`,
+divide). And the number that matters for time-of-day animation: a sun-change
+re-bake is ~9 ms, ~95% of it PMREM — not the LUTs, not the cube faces.
+
 ### The benign `<!DOCTYPE` JSON parse error
 
 Every page logs `Uncaught (in promise) SyntaxError: Unexpected token '<'`

@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>14 — Night sky (procedural + HDR)</title>
+    <title>14 — Night sky</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       html,
@@ -28,6 +28,9 @@
         max-width: 480px;
         line-height: 1.45;
       }
+      #clock {
+        font-variant-numeric: tabular-nums;
+      }
       canvas {
         display: block;
       }
@@ -35,23 +38,18 @@
   </head>
   <body>
     <div id="info">
-      <b>14 — Night sky.</b> Procedural starfield by default (zero asset cost). Toggle "source: hdri" in the GUI to load
-      the demo Milky Way EXR (only bundled with examples — npm consumers must provide their own). Drag
-      <b>elevation</b> below 0 to see twilight / night transitions.
+      <b>14 — Night sky.</b> Stars are pixel-sharp sprites in the scene; the Milky Way is a glow map baked into the sky
+      cube. Both are placed from time, date and latitude, dim toward the horizon, and fade in through twilight against
+      the sky behind them. Scrub <b>timeOfDay</b> or tick <b>play</b> for a time-lapse from sunset.<br />
+      <span id="clock"></span>
     </div>
     <script type="module">
       import * as THREE from 'three/webgpu'
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky } from '@sky/Sky'
-      import { createDemoScene } from '@sky/demo/createDemoScene'
+      import { Sky } from '@pmndrs/sky'
       import { createStartGate, logStage } from '@sky/demo/startGate'
-
-      // Vite resolves this URL at request time; the EXR is fetched only when
-      // the user toggles HDR mode in the GUI. NPM consumers replace this
-      // with their own URL when calling `enableStars({ source: 'hdri', url })`.
-      const HDR_URL = new URL('./hdri/NightSkyHDRI001_1K_HDR.exr', import.meta.url).href
 
       const gate = createStartGate({
         label: 'Start night-sky demo',
@@ -59,8 +57,8 @@
           'create WebGPU renderer',
           'renderer.init()',
           'sky: LUTs + cube + PMREM (first bake)',
-          'enable procedural stars',
-          'build demo scene + ground + sun',
+          'enable stars + Milky Way',
+          'build landscape',
           'render loop',
         ],
       })
@@ -71,9 +69,7 @@
         renderer.setPixelRatio(window.devicePixelRatio)
         renderer.setSize(window.innerWidth, window.innerHeight)
         renderer.toneMapping = THREE.ACESFilmicToneMapping
-        renderer.toneMappingExposure = 0.5
-        renderer.shadowMap.enabled = true
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap
+        renderer.toneMappingExposure = 1.0
         renderer.inspector = new Inspector()
         document.body.appendChild(renderer.domElement)
         markStage(1, 'running')
@@ -81,11 +77,34 @@
         await logStage('renderer.init()', () => renderer.init())
         markStage(2, 'running')
 
+        // Mid-July, mid-northern latitude, late evening: the summer Milky Way
+        // core sits low in the south (camera looks south, north = +Z).
+        const state = {
+          timeOfDay: 21.25,
+          dayOfYear: 196,
+          latitude: 38,
+          play: false,
+          hoursPerSecond: 0.5,
+          exposure: 1.0,
+          stars: true,
+          intensity: 1,
+          size: 0.7,
+          twinkle: 0.25,
+          contrast: 40,
+          magnitudeContrast: 0.75,
+          count: 9000,
+          milkyWay: 0.25,
+          milkyWayContrast: 20,
+          moon: false,
+          moonIntensity: 0.15,
+          moonPhase: 0.5,
+        }
+
         const sky = await logStage('Sky construct + first update()', async () => {
           const s = new Sky(renderer, {
-            cubeSize: 256,
-            sunDirection: { elevation: -10, azimuth: 180 },
-            sunDisc: true,
+            timeOfDay: state.timeOfDay,
+            dayOfYear: state.dayOfYear,
+            latitude: state.latitude,
             enableAerialPerspective: false,
           })
           s.baker.update()
@@ -94,153 +113,127 @@
         })
         markStage(3, 'running')
 
-        // Procedural stars are the default — no asset, no load wait.
-        await sky.enableStars({ intensity: 1.0 })
+        const stars = await logStage('enableStars()', () => sky.enableStars())
         markStage(4, 'running')
 
-        const demo = createDemoScene(sky.baker)
-        const scene = demo.scene
-        const camera = demo.camera
-        scene.remove(demo.meshes.ground)
-        demo.meshes.ground.geometry.dispose()
-        demo.meshes.ground.material.dispose()
+        const scene = new THREE.Scene()
+        sky.attach(scene) // background + environment, and adds the star sprites
 
-        sky.attach(scene)
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 2_000_000)
+        camera.position.set(0, 1.7, 0)
 
-        const ground = sky
-          .createGround({
-            mode: 'plane',
-            size: 800,
-            color: 0x222222,
-            roughness: 0.4,
-            reflective: true,
-            blur: 2,
-          })
-          .attach(scene)
+        // Landscape: a large dark ground and a ring of distant ridgelines, so
+        // stars and the Milky Way set behind real silhouettes (depth-tested).
+        sky.createGround({ mode: 'plane', size: 60_000, color: 0x15130f, roughness: 0.95 }).attach(scene)
+        const ridgeMat = new THREE.MeshStandardMaterial({ color: 0x1d1a15, roughness: 1 })
+        const ridgeGeo = new THREE.ConeGeometry(1, 1, 7)
+        for (let i = 0; i < 40; i++) {
+          const a = (i / 40) * Math.PI * 2 + Math.sin(i * 12.9898) * 0.05
+          const dist = 5000 + ((i * 37) % 9) * 900
+          const h = 280 + ((i * 53) % 11) * 70
+          const ridge = new THREE.Mesh(ridgeGeo, ridgeMat)
+          ridge.scale.set(1800 + ((i * 17) % 5) * 300, h, 1800)
+          ridge.position.set(Math.sin(a) * dist, h / 2 - 10, Math.cos(a) * dist)
+          scene.add(ridge)
+        }
 
-        const skySun = sky
-          .createSun({
-            intensity: 4.0,
-            castShadow: true,
-            shadowCamera: { left: -8, right: 8, top: 8, bottom: -8, near: 1, far: 200 },
-          })
-          .attach(scene)
-
-        const skyMoon = sky
-          .createMoon({
-            intensity: 0.15,
-            phase: 0.5,
-            followSun: true,
-            castShadow: true,
-            shadowCamera: { left: -8, right: 8, top: 8, bottom: -8, near: 1, far: 200 },
-          })
-          .attach(scene)
-
-        demo.meshes.mirror.castShadow = true
-        demo.meshes.pbr.castShadow = true
-        ground.mesh.receiveShadow = true
+        const sun = sky.createSun({ intensity: 3 }).attach(scene)
+        const moon = sky.createMoon({ intensity: state.moonIntensity, phase: state.moonPhase, followSun: true })
+        moon.setDiscVisible(false)
 
         const controls = new OrbitControls(camera, renderer.domElement)
-        controls.target.set(0, 1.5, 0)
-        controls.minDistance = 4
-        controls.maxDistance = 40
+        // Orbit a point a few metres ahead so dragging looks around the sky.
+        controls.target.set(0, 1.7 + Math.tan(0.3) * 5, -5)
+        controls.enablePan = false
+        controls.enableZoom = false
+        controls.rotateSpeed = -0.35
         controls.update()
 
-        createNightSkyGui({ renderer, sky, moon: skyMoon, hdrUrl: HDR_URL })
+        markStage(5, 'running')
+
+        // --- GUI ---
+        const setTime = () => {
+          sky.setTimeOfDay(state.timeOfDay)
+          updateClock()
+        }
+        const timeGroup = renderer.inspector.createParameters('Time & place')
+        timeGroup.add(state, 'timeOfDay', 0, 24, 0.01).onChange(setTime).listen?.()
+        timeGroup.add(state, 'play')
+        timeGroup.add(state, 'hoursPerSecond', 0.05, 3, 0.05)
+        timeGroup.add(state, 'dayOfYear', 1, 365, 1).onChange(() => {
+          sky.setDayOfYear(state.dayOfYear)
+          updateClock()
+        })
+        timeGroup.add(state, 'latitude', -90, 90, 0.1).onChange(() => sky.setLatitude(state.latitude))
+        timeGroup.add(state, 'exposure', 0, 3, 0.01).onChange(() => (renderer.toneMappingExposure = state.exposure))
+
+        const starsGroup = renderer.inspector.createParameters('Stars')
+        starsGroup.add(state, 'stars').onChange(() => (state.stars ? sky.enableStars() : sky.disableStars()))
+        starsGroup.add(state, 'intensity', 0, 4, 0.01).onChange(() => stars.setIntensity(state.intensity))
+        starsGroup.add(state, 'size', 0.3, 2, 0.01).onChange(() => stars.setSize(state.size))
+        starsGroup.add(state, 'twinkle', 0, 1, 0.01).onChange(() => stars.setTwinkle(state.twinkle))
+        starsGroup.add(state, 'contrast', 1, 200, 1).onChange(() => stars.setContrast(state.contrast))
+        starsGroup
+          .add(state, 'magnitudeContrast', 0.3, 1, 0.01)
+          .onChange(() => stars.setMagnitudeContrast(state.magnitudeContrast))
+        starsGroup.add(state, 'count', 1000, 50000, 1000).onChange(() => stars.enable({ count: state.count }))
+
+        const milkyGroup = renderer.inspector.createParameters('Milky Way')
+        milkyGroup.add(state, 'milkyWay', 0, 2, 0.01).onChange(() => stars.setMilkyWay(state.milkyWay))
+        milkyGroup
+          .add(state, 'milkyWayContrast', 1, 200, 0.5)
+          .onChange(() => stars.setMilkyWayContrast(state.milkyWayContrast))
+
+        const moonGroup = renderer.inspector.createParameters('Moon')
+        moonGroup.add(state, 'moon').onChange(() => {
+          if (state.moon) moon.attach(scene)
+          else moon.detach()
+          moon.setDiscVisible(state.moon)
+        })
+        moonGroup.add(state, 'moonIntensity', 0, 1, 0.01).onChange(() => moon.setIntensity(state.moonIntensity))
+        moonGroup.add(state, 'moonPhase', 0, 1, 0.01).onChange(() => moon.setPhase(state.moonPhase))
+
+        // --- HUD clock ---
+        const clockEl = document.getElementById('clock')
+        function updateClock() {
+          const h = ((state.timeOfDay % 24) + 24) % 24
+          const hh = String(Math.floor(h)).padStart(2, '0')
+          const mm = String(Math.floor((h % 1) * 60)).padStart(2, '0')
+          clockEl.textContent = `${hh}:${mm} local solar time · day ${state.dayOfYear} · sun ${sky.sunElevation.toFixed(1)}°`
+        }
+        updateClock()
 
         window.addEventListener('resize', () => {
           camera.aspect = window.innerWidth / window.innerHeight
           camera.updateProjectionMatrix()
           renderer.setSize(window.innerWidth, window.innerHeight)
         })
-        markStage(5, 'running')
 
+        const timer = new THREE.Timer()
         renderer.setAnimationLoop(() => {
+          timer.update()
+          if (state.play) {
+            // Sidereal motion is visible within minutes of sim time; every
+            // step also moves the sun, so the cube + PMREM re-bake each frame.
+            state.timeOfDay = (state.timeOfDay + timer.getDelta() * state.hoursPerSecond) % 24
+            setTime()
+          }
+          controls.update()
           try {
-            sky.update(camera)
+            sky.update(camera) // bakes when dirty + moves the star sprites with the camera
           } catch (err) {
             console.error('[animate] sky.update() failed:', err)
             renderer.setAnimationLoop(null)
             return
           }
-
-          controls.update()
           renderer.render(scene, camera)
         })
 
         window.sky = sky
-        window.skySun = skySun
-        window.skyMoon = skyMoon
-        window.skyGround = ground
+        window.stars = stars
         window.scene = scene
+        window.sun = sun
       })
-
-      function createNightSkyGui({ renderer, sky, moon, hdrUrl }) {
-        const state = {
-          elevation: -10,
-          azimuth: 180,
-          exposure: renderer.toneMappingExposure,
-          source: 'procedural',
-          intensity: 1.0,
-          density: 0.3,
-          brightness: 1.0,
-          rotation: 0.0,
-          moonIntensity: 0.15,
-          moonPhase: 0.5,
-          moonFollowSun: true,
-          moonElevation: 30,
-          moonAzimuth: 0,
-          moonShowDisc: true,
-          moonDiscIntensity: 1.0,
-        }
-
-        const sunGroup = renderer.inspector.createParameters('Sun')
-        sunGroup.add(state, 'elevation', -90, 90, 0.1).onChange(() => {
-          sky.setSunDirection({ elevation: state.elevation, azimuth: state.azimuth })
-        })
-        sunGroup.add(state, 'azimuth', -180, 180, 0.1).onChange(() => {
-          sky.setSunDirection({ elevation: state.elevation, azimuth: state.azimuth })
-        })
-        sunGroup.add(state, 'exposure', 0, 1, 0.001).onChange(() => {
-          renderer.toneMappingExposure = state.exposure
-        })
-
-        const starsGroup = renderer.inspector.createParameters('Stars')
-        starsGroup.add(state, 'source', ['procedural', 'hdri']).onChange(async () => {
-          if (state.source === 'hdri' && !sky.stars?.texture) {
-            // Lazy-load the HDR on first switch to HDR mode.
-            await sky.enableStars({ source: 'hdri', url: hdrUrl, intensity: state.intensity, rotation: state.rotation })
-          } else {
-            sky.setStarsSource(state.source)
-          }
-        })
-        starsGroup.add(state, 'intensity', 0, 4, 0.01).onChange(() => sky.setStarsIntensity(state.intensity))
-        starsGroup.add(state, 'density', 0, 1, 0.01).onChange(() => sky.setStarsDensity(state.density))
-        starsGroup.add(state, 'brightness', 0, 4, 0.01).onChange(() => sky.setStarsBrightness(state.brightness))
-        starsGroup.add(state, 'rotation', 0, Math.PI * 2, 0.01).onChange(() => sky.setStarsRotation(state.rotation))
-
-        const moonGroup = renderer.inspector.createParameters('Moon')
-        moonGroup.add(state, 'moonIntensity', 0, 2, 0.01).onChange(() => moon.setIntensity(state.moonIntensity))
-        moonGroup.add(state, 'moonPhase', 0, 1, 0.01).onChange(() => moon.setPhase(state.moonPhase))
-        moonGroup.add(state, 'moonFollowSun').onChange(() => {
-          moon.setFollowSun(state.moonFollowSun)
-          if (!state.moonFollowSun) {
-            moon.setDirection({ elevation: state.moonElevation, azimuth: state.moonAzimuth })
-          }
-        })
-        moonGroup.add(state, 'moonElevation', -90, 90, 0.1).onChange(() => {
-          if (!state.moonFollowSun) moon.setDirection({ elevation: state.moonElevation, azimuth: state.moonAzimuth })
-        })
-        moonGroup.add(state, 'moonAzimuth', -180, 180, 0.1).onChange(() => {
-          if (!state.moonFollowSun) moon.setDirection({ elevation: state.moonElevation, azimuth: state.moonAzimuth })
-        })
-        moonGroup.add(state, 'moonShowDisc').onChange(() => moon.setDiscVisible(state.moonShowDisc))
-        moonGroup
-          .add(state, 'moonDiscIntensity', 0, 5, 0.01)
-          .onChange(() => moon.setDiscIntensity(state.moonDiscIntensity))
-
-        return { state }
-      }
     </script>
   </body>
 </html>

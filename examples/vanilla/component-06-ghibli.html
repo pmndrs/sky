@@ -42,7 +42,7 @@
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky, looks, lookTracks, registerLook, registerLookTrack } from '@pmndrs/sky'
+      import { Sky, looks, lookTracks, registerLook, registerLookTrack, resolveLook, sampleLook } from '@pmndrs/sky'
 
       // -----------------------------------------------------------------
       // Renderer + Sky
@@ -110,58 +110,99 @@
       // own well-saturated stops rather than trying to detect AM/PM.
       // -----------------------------------------------------------------
 
-      registerLook('ghibli-summer-night', {
-        stops: [
-          { at: 0.0, color: '#22335f' },
-          { at: 1.0, color: '#070c20' },
-        ],
-        chroma: 0.85,
-        value: 0.55,
-      })
+      // The four summer looks are authored as plain stop lists, then all
+      // re-expressed on ONE shared set of positions before registering. A
+      // track resamples any keyframe whose stops differ from the union of all
+      // keyframes, and resampling turns eased segments linear — so without
+      // this alignment, easing on the horizon band never reached the track.
+      // `bandTop` is where the pale horizon band hands off to the cerulean;
+      // smooth easing on both segments meeting there removes the visible kink.
+      const SUMMER = {
+        night: {
+          stops: [
+            [0.0, '#22335f'],
+            [1.0, '#070c20'],
+          ],
+          chroma: 0.85,
+          value: 0.55,
+        },
+        dusk: {
+          stops: [
+            [-0.08, '#ff8a5c'],
+            [0.1, '#ffcf8f'],
+            [0.4, '#a685c9'],
+            [1.0, '#33448f'],
+          ],
+          chroma: 0.88,
+          value: 0.32,
+          sunTint: { color: '#ffdca0', falloff: 0.3, strength: 0.65 },
+        },
+        morning: {
+          stops: [
+            [-0.02, '#ffe3b0'],
+            [0.1, '#cdeaf7'],
+            [0.4, '#4f97dd'],
+            [1.0, '#2f7bd4'],
+          ],
+          chroma: 0.88,
+          value: 0.7,
+          sunTint: { color: '#fff0c0', falloff: 0.3, strength: 0.45 },
+        },
+        day: {
+          stops: [
+            [0.0, '#eef8ff'],
+            [0.08, '#bfe3f7'],
+            [0.35, '#3b86dc'],
+            [1.0, '#2f7bd4'],
+          ],
+          chroma: 0.88,
+          value: 0.7,
+          sunTint: { color: '#fff3c4', falloff: 0.35, strength: 0.12 },
+        },
+      }
+      const band = {
+        bandTop: 0.35,
+        bandEase: 'smooth',
+        zenithEase: 'smooth',
+        horizonColor: '#eef8ff',
+        zenithColor: '#2f7bd4',
+      }
+      const EASES = { linear: 'linear', smooth: 'smooth', 'late (pow 1.8)': 1.8, 'early (pow 0.6)': 0.6 }
 
-      registerLook('ghibli-summer-dusk', {
-        stops: [
-          { at: -0.08, color: '#ff8a5c' },
-          { at: 0.1, color: '#ffcf8f', ease: 'smooth' },
-          { at: 0.4, color: '#a685c9', ease: 'smooth' },
-          { at: 1.0, color: '#33448f' },
-        ],
-        chroma: 0.88,
-        value: 0.32,
-        sunTint: { color: '#ffdca0', falloff: 0.3, strength: 0.65 },
-      })
-
-      registerLook('ghibli-summer-morning', {
-        stops: [
-          { at: -0.02, color: '#ffe3b0' },
-          { at: 0.1, color: '#cdeaf7', ease: 'smooth' },
-          { at: 0.4, color: '#4f97dd' },
-          { at: 1.0, color: '#2f7bd4' },
-        ],
-        chroma: 0.88,
-        value: 0.7,
-        sunTint: { color: '#fff0c0', falloff: 0.3, strength: 0.45 },
-      })
-
-      registerLook('ghibli-summer-day', {
-        stops: [
-          { at: 0.0, color: '#eef8ff' },
-          { at: 0.08, color: '#bfe3f7', ease: 'smooth' },
-          { at: 0.35, color: '#3b86dc' },
-          { at: 1.0, color: '#2f7bd4' },
-        ],
-        chroma: 0.88,
-        value: 0.7,
-        sunTint: { color: '#fff3c4', falloff: 0.35, strength: 0.12 },
-      })
-
-      registerLookTrack('ghibli-summer', [
-        { elevation: -20, look: 'ghibli-summer-night' },
-        { elevation: -6, look: 'ghibli-summer-dusk' },
-        { elevation: -1, look: 'ghibli-summer-dusk' },
-        { elevation: 6, look: 'ghibli-summer-morning' },
-        { elevation: 14, look: 'ghibli-summer-day' },
-      ])
+      function buildSummerLooks() {
+        // Daytime anchors follow the band controls; the other looks keep their colours.
+        SUMMER.day.stops = [
+          [0.0, band.horizonColor],
+          [0.08, '#bfe3f7'],
+          [band.bandTop, '#3b86dc'],
+          [1.0, band.zenithColor],
+        ]
+        SUMMER.morning.stops = [
+          [-0.02, '#ffe3b0'],
+          [0.1, '#cdeaf7'],
+          [band.bandTop, '#4f97dd'],
+          [1.0, band.zenithColor],
+        ]
+        const positions = [-0.08, 0.0, 0.09, band.bandTop, 1.0]
+        const eases = ['linear', 'linear', 'smooth', EASES[band.bandEase], EASES[band.zenithEase]]
+        for (const [name, def] of Object.entries(SUMMER)) {
+          const source = resolveLook({ stops: def.stops.map(([at, color]) => ({ at, color })) })
+          registerLook(`ghibli-summer-${name}`, {
+            stops: positions.map((at, k) => ({ at, color: sampleLook(source, at), ease: eases[k] })),
+            chroma: def.chroma,
+            value: def.value,
+            sunTint: def.sunTint ?? null,
+          })
+        }
+        registerLookTrack('ghibli-summer', [
+          { elevation: -20, look: 'ghibli-summer-night' },
+          { elevation: -6, look: 'ghibli-summer-dusk' },
+          { elevation: -1, look: 'ghibli-summer-dusk' },
+          { elevation: 6, look: 'ghibli-summer-morning' },
+          { elevation: 14, look: 'ghibli-summer-day' },
+        ])
+      }
+      buildSummerLooks()
 
       // -----------------------------------------------------------------
       // Deterministic PRNG — stable prop placement across reloads.
@@ -1045,11 +1086,13 @@
         autoOrbit: false,
       }
 
+      /** Slider values the user has moved while a track is selected. */
+      const trackOverrides = {}
       const applySelectedLook = () => {
         if (state.look === 'physical') {
           sky.setLook(null)
         } else if (state.look.startsWith('track:')) {
-          sky.setLookTrack(state.look.slice('track:'.length))
+          sky.setLookTrack(state.look.slice('track:'.length), trackOverrides)
         } else {
           sky.setLook({ preset: state.look, chroma: state.chroma, value: state.value, intensity: state.intensity })
         }
@@ -1083,12 +1126,32 @@
 
       const lookGui = renderer.inspector.createParameters('Look')
       lookGui.add(state, 'look', lookChoices).onChange(() => {
+        for (const k of Object.keys(trackOverrides)) delete trackOverrides[k]
         syncSlidersFromPreset()
         applySelectedLook()
       })
-      lookGui.add(state, 'chroma', 0, 1, 0.01).onChange(applySelectedLook)
-      lookGui.add(state, 'value', 0, 1, 0.01).onChange(applySelectedLook)
-      lookGui.add(state, 'intensity', 0, 4, 0.01).onChange(applySelectedLook)
+      // On a track, a slider pins its field across the whole track only once
+      // it has been moved; untouched fields keep each keyframe's own value.
+      const touch = (key) => () => {
+        trackOverrides[key] = state[key]
+        applySelectedLook()
+      }
+      lookGui.add(state, 'chroma', 0, 1, 0.01).onChange(touch('chroma'))
+      lookGui.add(state, 'value', 0, 1, 0.01).onChange(touch('value'))
+      lookGui.add(state, 'intensity', 0, 4, 0.01).onChange(touch('intensity'))
+
+      // Horizon band: where the pale horizon hands off to the cerulean, and how
+      // the two segments meeting there ease. Rebuilds the summer looks + track.
+      const bandGui = renderer.inspector.createParameters('Horizon band')
+      const rebuildBand = () => {
+        buildSummerLooks()
+        applySelectedLook()
+      }
+      bandGui.add(band, 'bandTop', 0.15, 0.8, 0.01).onChange(rebuildBand)
+      bandGui.add(band, 'bandEase', Object.keys(EASES)).onChange(rebuildBand)
+      bandGui.add(band, 'zenithEase', Object.keys(EASES)).onChange(rebuildBand)
+      bandGui.addColor(band, 'horizonColor').onChange(rebuildBand)
+      bandGui.addColor(band, 'zenithColor').onChange(rebuildBand)
 
       const sceneGui = renderer.inspector.createParameters('Scene')
       sceneGui.add(state, 'hazeStrength', 0, 2, 0.01).onChange((v) => sky.setHazeStrength(v))
@@ -1112,6 +1175,8 @@
       window.__controls = controls
       window.__state = state
       window.__applyLook = applySelectedLook
+      window.__band = band
+      window.__rebuildBand = rebuildBand
       window.__updateLighting = () => updateLighting(sky.sunElevation)
       window.__cloudMat = cloudMat
       window.__sunLight = sun.light

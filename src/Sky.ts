@@ -16,6 +16,13 @@ import type { Look, LookInput, LookKeyframe, LookTrack } from './looks'
 import { applyHaze, policyToHazeMode } from './applyHaze'
 import { solarPosition } from './solarPosition'
 
+/** Per-track scalar overrides for `Sky.setLookTrack`. */
+export interface LookTrackOverrides {
+  chroma?: number
+  value?: number
+  intensity?: number
+}
+
 interface SkyOptions {
   preset?: string
   quality?: string
@@ -91,6 +98,8 @@ export class Sky {
   /** Mie coefficients at turbidity 1, so `setTurbidity` is absolute. */
   _baseMie!: { scattering: Vector3; extinction: Vector3; absorption: Vector3 }
   _lookTrack: LookTrack | null = null
+  /** Scalar overrides applied on top of every track sample. */
+  _lookTrackOverrides: LookTrackOverrides | null = null
   _apDistanceScale: any = null
   _cameraFar?: any
   _hazeStrength?: any
@@ -284,9 +293,13 @@ export class Sky {
    * elevation is what actually determines how the sky reads — `time: 6` is full
    * night at latitude 65° in December and hours into daylight there in June.
    * Pass `{ by: 'time' }` to `createLookTrack` for fictional scenes.
+   *
+   * `overrides` pins `chroma` / `value` / `intensity` across the whole track
+   * (e.g. a GUI slider); omitted fields keep each keyframe's own value.
    */
-  setLookTrack(track: string | LookKeyframe[] | LookTrack | null) {
+  setLookTrack(track: string | LookKeyframe[] | LookTrack | null, overrides: LookTrackOverrides | null = null) {
     this._lookTrack = track === null ? null : resolveLookTrack(track)
+    this._lookTrackOverrides = overrides
     if (this._lookTrack === null) this.baker.setLook(null)
     else this._applyLookTrack()
     return this
@@ -294,7 +307,19 @@ export class Sky {
 
   _applyLookTrack() {
     if (!this._lookTrack) return
-    this.baker.setLook(sampleLookTrack(this._lookTrack, { elevation: this._elevation, time: this._timeOfDay }))
+    const sampled = sampleLookTrack(this._lookTrack, { elevation: this._elevation, time: this._timeOfDay })
+    const o = this._lookTrackOverrides
+    // `sampleLookTrack` can return a registry look by reference, so override on a copy.
+    this.baker.setLook(
+      o
+        ? {
+            ...sampled,
+            chroma: o.chroma ?? sampled.chroma,
+            value: o.value ?? sampled.value,
+            intensity: o.intensity ?? sampled.intensity,
+          }
+        : sampled,
+    )
   }
 
   setNorth(axis: string) {

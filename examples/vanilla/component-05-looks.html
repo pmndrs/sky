@@ -237,13 +237,15 @@
       /** The Look currently driving the shader, resolved in JS for the preview strip. */
       let activeLook = null
 
+      /** Slider values the user has moved while a track is selected. */
+      const trackOverrides = {}
       const applySelectedLook = () => {
         if (state.look === 'physical') {
           activeLook = null
           sky.setLook(null)
         } else if (state.look.startsWith('track:')) {
           const name = state.look.slice('track:'.length)
-          sky.setLookTrack(name)
+          sky.setLookTrack(name, trackOverrides)
           activeLook = sampleLookTrack(resolveLookTrack(name), { elevation: sky.sunElevation, time: state.timeOfDay })
         } else if (state.look === 'custom') {
           activeLook = registerLook('custom', customLookInput())
@@ -301,12 +303,19 @@
       const lookGui = renderer.inspector.createParameters('Look')
       const lookChoices = ['physical', ...trackNames.map((n) => `track:${n}`), ...Object.keys(looks), 'custom']
       lookGui.add(state, 'look', lookChoices).onChange(() => {
+        for (const k of Object.keys(trackOverrides)) delete trackOverrides[k]
         syncSlidersFromPreset()
         applySelectedLook()
       })
-      lookGui.add(state, 'chroma', 0, 1, 0.01).onChange(applySelectedLook)
-      lookGui.add(state, 'value', 0, 1, 0.01).onChange(applySelectedLook)
-      lookGui.add(state, 'intensity', 0, 4, 0.01).onChange(applySelectedLook)
+      // On a track, a slider pins its field across the whole track only once
+      // it has been moved; untouched fields keep each keyframe's own value.
+      const touch = (key) => () => {
+        trackOverrides[key] = state[key]
+        applySelectedLook()
+      }
+      lookGui.add(state, 'chroma', 0, 1, 0.01).onChange(touch('chroma'))
+      lookGui.add(state, 'value', 0, 1, 0.01).onChange(touch('value'))
+      lookGui.add(state, 'intensity', 0, 4, 0.01).onChange(touch('intensity'))
       lookGui.add(state, 'sunTintStrength', 0, 1, 0.01).onChange(applySelectedLook)
       lookGui.add(state, 'sunTintFalloff', 0.02, 1, 0.01).onChange(applySelectedLook)
 

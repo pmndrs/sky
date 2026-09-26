@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Color, Scene } from 'three/webgpu'
 
 import { Sky } from '../src/Sky'
+import { looks } from '../src/looks'
 
 // Controllable stand-in for the HDR loader `enableStars({ url })` imports lazily.
 const loader = vi.hoisted(() => ({ onLoad: undefined as undefined | ((tex: any) => void) }))
@@ -171,6 +172,22 @@ describe('Sky', () => {
     // A radius-only change keeps the configured softness.
     sky.baker.setAtmosphereParams({ sunAngularRadius: 0.01 })
     expect(sky.baker.sky.sunDiscCosInner.value).toBeCloseTo(Math.cos(0.01 * 0.6), 12)
+    sky.dispose()
+  })
+
+  it('setLookTrack overrides survive sun changes and leave the registry untouched', () => {
+    const sky = new Sky(mockRenderer())
+    sky.setLookTrack('ghibli', { chroma: 0.2, value: 0.9 })
+    const u = sky.mesh.lookUniforms
+    expect(u.chroma.value).toBeCloseTo(0.2, 9)
+    expect(u.value.value).toBeCloseTo(0.9, 9)
+    sky.setTimeOfDay(19) // re-samples the track
+    expect(u.chroma.value).toBeCloseTo(0.2, 9)
+    expect(u.value.value).toBeCloseTo(0.9, 9)
+    // the built-in look objects the track references are not mutated
+    expect(looks['ghibli-day'].chroma).toBe(0.7)
+    sky.setLookTrack('ghibli') // no overrides → keyframe values again
+    expect(u.chroma.value).toBeCloseTo(0.7, 9)
     sky.dispose()
   })
 })

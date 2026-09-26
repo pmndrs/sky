@@ -2,7 +2,7 @@
 //
 // The 90% surface — most users only need these:
 export { Sky } from './Sky'
-export type { SkyState } from './Sky'
+export type { SkyState, LookTrackOverrides } from './Sky'
 export { SkySun } from './sky/SkySun'
 export { SkyMoon } from './sky/SkyMoon'
 export { SkyGround } from './sky/SkyGround'

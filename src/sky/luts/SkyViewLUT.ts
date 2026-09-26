@@ -23,8 +23,9 @@ import type { MultiScatterLUT } from './MultiScatterLUT'
 const _quadMesh = /*@__PURE__*/ new QuadMesh()
 let _rendererState: any
 
-// HLSL:626. Unreal uses VariableSampleCount=true with RayMarchMinMaxSPP; we
-// simplify to a fixed 30-step inner loop (flagged in the constructor JSDoc).
+// HLSL:626. SebH uses VariableSampleCount=true (4–14 steps, quadratic spacing);
+// we keep a fixed 30 steps but with the same quadratic spacing — see the
+// constructor JSDoc.
 const SAMPLE_COUNT = 30
 
 interface Resolution2D {
@@ -59,11 +60,15 @@ interface SkyViewLUTOptions {
  * `viewHeight = bottomRadius + PLANET_RADIUS_OFFSET`. Phase 2 will promote this
  * to a camera-world-position uniform when we support non-ground views.
  *
- * Simplification vs. Unreal: the HLSL uses `VariableSampleCount=true`
- * (interpolates between RayMarchMinMaxSPP.x and .y based on distance). We use a
- * fixed 30-step loop — the HLSL's SampleCountIni default is 30 and a constant
- * step count lets `integrateScatteredLuminance` unroll cleanly. Quality
- * difference at the defaults is imperceptible.
+ * Sampling vs. the reference: the HLSL uses `VariableSampleCount=true`, which
+ * does two things — picks 4–14 steps from the ray length, and spaces them
+ * **quadratically** (`t = (s/N)²·tMax`) so they crowd the dense air near the
+ * origin. We keep a fixed 30 steps (a constant lets the loop compile cleanly)
+ * but use the same quadratic spacing on both backends. The spacing is not a
+ * detail: with uniform spacing this LUT measured ~15 % too dark across the sky
+ * and ~40 % too dark within a few degrees of a low sun against Bruneton's
+ * reference tables; quadratic spacing lands within ±3 %
+ * (research/bruneton-audit-2026-09-26.md).
  */
 export class SkyViewLUT {
   renderer: any
@@ -235,6 +240,8 @@ export class SkyViewLUT {
         sampleCount: SAMPLE_COUNT,
         ground: true,
         mieRayPhase: true,
+        // SebH's Sky-View LUT uses the quadratic (VariableSampleCount) spacing.
+        sampleDistribution: 'quadratic',
       })
 
       return vec4(ss.L, float(1.0))

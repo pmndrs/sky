@@ -1,5 +1,6 @@
 import {
   Fn,
+  uniform,
   uv,
   vec2,
   vec3,
@@ -245,6 +246,10 @@ export function createHazeOutputNode({
   // whose distance-along-ray exceeds this needs the raymarch fallback.
   const coverageKm = kmPerSlice * resZ
 
+  // Sky-depth tolerance: 4 ulps of a 24-bit depth value below 1.0. A uniform
+  // rather than a literal so the exact f32 survives shader generation.
+  const skyDepthEpsilon = uniform(4 * 2 ** -24)
+
   return Fn(() => {
     const u = uv()
     // A caller-supplied node is already a screen-space expression (texture
@@ -277,9 +282,18 @@ export function createHazeOutputNode({
     // distance computation above is unaffected because it only uses the
     // magnitude / cos-from-axis of the ray, both of which are sign-symmetric.)
     const ndc2 = vec2(u.x.mul(2.0).sub(1.0), float(1.0).sub(u.y.mul(2.0)))
-    const clipFar = vec4(ndc2.x, ndc2.y, float(1.0), float(1.0))
-    const viewFar = invProjUniform.mul(clipFar)
-    const rayDirView = viewFar.xyz.div(viewFar.w)
+    // Any clip-space point on the pixel's ray gives its direction, so pick a
+    // well-conditioned one. The far plane (clip z = 1) is NOT: with the far/near
+    // ratios planet-scale scenes use (far 4e7 m, near < 1 m), the inverse
+    // projection of a far-plane point loses the ray direction to float32
+    // rounding — `cosFromAxis` collapses, `distAlongRay` explodes, every
+    // geometry pixel samples the deepest AP slice and renders black. Measured
+    // 2026-09-26: fine at near 0.9 m, black at near 0.7 m with far 4e7. Mid
+    // depth (0.5) is what the AP LUT build uses for the same reconstruction,
+    // so build and sample now agree by construction.
+    const clipMid = vec4(ndc2.x, ndc2.y, float(0.5), float(1.0))
+    const viewMid = invProjUniform.mul(clipMid)
+    const rayDirView = viewMid.xyz.div(viewMid.w)
     // World-space ray direction, reconstructed once and shared by the raymarch
     // fallback, the look retint and the sky-cube shim (TSL does not CSE
     // distinct node instances). w = 0 so the camera translation is ignored.
@@ -309,22 +323,28 @@ export function createHazeOutputNode({
 
     // Sky-pixel detection.
     //
-    // Default: `linearDepthNode > 0.999` — works for normal `camera.far`
-    // values where the depth buffer's normalization gives sky pixels a
-    // linearDepth close to 1.0.
+    // Primary test: the raw depth-buffer value. The sky mesh draws with the
+    // `z = w` trick, so its depth is 1.0 up to float rounding — measured at
+    // one ulp below 1.0 (≈ 1 - 2^-24) on the default depth target, see
+    // `examples/vanilla/20-bruneton-compare.html?dbg=depth`. Anything within
+    // a few ulps of 1.0 is sky. Geometry sits at depth ≈ 1 - near/d, so with
+    // `near` = 1 m this only misclassifies surfaces beyond ~4000 km.
     //
-    // Override: when `cameraFarUniform` is supplied (planet-scale demos
-    // using `far = 20_000_000`), use `viewZ < -0.999 * far` instead. The
-    // sky mesh draws with the `z = w` trick → NDC depth = 1 → viewZ at
-    // sky pixels equals exactly `-far`. With huge `far`, geometry —
-    // including the planet sphere from low altitude — has |viewZ| many
-    // orders of magnitude smaller than far, so the test is unambiguous
-    // independent of how the depth buffer normalizes. The linearDepth
-    // path stops being reliable once geometry compresses into a thin
-    // sliver of [0, 1] near the camera.
-    const isSky = cameraFarUniform
+    // The two older tests are kept (OR-ed in) for callers that relied on
+    // them, but both silently failed for any far plane beyond a few km: with
+    // the sky one ulp below 1.0, `perspectiveDepthToViewZ` returns
+    // `-near·far / (near + ulp·far)` — only ≈ -0.45·far at far = 2e7 — far
+    // short of the `-0.999·far` / `linearDepth > 0.999` thresholds. Every sky
+    // pixel then took the geometry path and had AP inscatter added on top of
+    // the Sky-View LUT (measured +40% sky luminance against Bruneton's
+    // reference, 2026-09-26). The `viewZ`/`linearDepth` tests still hold for
+    // small far planes (≤ ~2 km) where one depth ulp is negligible.
+    const rawDepth = scenePass.getTextureNode('depth').x
+    const isSkyRaw = rawDepth.greaterThanEqual(float(1.0).sub(skyDepthEpsilon))
+    const isSkyLegacy = cameraFarUniform
       ? viewZ.lessThan(cameraFarUniform.mul(-0.999))
       : linearDepthNode.greaterThan(float(0.999))
+    const isSky = isSkyRaw.or(isSkyLegacy)
 
     // Past-coverage mask — geometry whose distance exceeds the AP LUT's
     // total range. Used to gate the raymarch fallback and to make the
@@ -380,8 +400,12 @@ export function createHazeOutputNode({
     if (debugMode === 'ap-rgb') return vec4(ap.rgb.mul(luminanceScale).mul(5.0), 1.0)
     if (debugMode === 'ap-alpha') return vec4(vec3(ap.a), 1.0)
     if (debugMode === 'w') return vec4(vec3(w), 1.0)
-    if (debugMode === 'is-sky') return vec4(vec3(isSky.select(1.0, 0.0)), 1.0)
-    if (debugMode === 'beyond') return vec4(vec3(beyondCoverage.select(1.0, 0.0)), 1.0)
+    // Select between vec3s: `vec3(cond.select(1.0, 0.0))` collapses to a bare
+    // f32 in the generated WGSL and fails the vec4 constructor.
+    const white = vec3(1.0, 1.0, 1.0)
+    const black = vec3(0.0, 0.0, 0.0)
+    if (debugMode === 'is-sky') return vec4(isSky.select(white, black), 1.0)
+    if (debugMode === 'beyond') return vec4(beyondCoverage.select(white, black), 1.0)
     if (debugMode === 'lin-depth') return vec4(vec3(linearDepthNode), 1.0)
     if (debugMode === 'view-z' && cameraFarUniform) return vec4(vec3(abs(viewZ).div(cameraFarUniform)), 1.0)
 
@@ -456,6 +480,8 @@ export function createHazeOutputNode({
           mieRayPhase: true,
           tMaxOverride: distKmVar,
           sampleJitter: hash01,
+          // Per-pixel raymarch = SebH's RenderRayMarchingPS (VariableSampleCount).
+          sampleDistribution: 'quadratic',
         })
 
         // Composite identically to the LUT path: rgb = inscatter,

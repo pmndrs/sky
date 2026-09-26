@@ -487,6 +487,16 @@ export function integrateScatteredLuminance({
   // extEpsNode — optional TSL float: minimum extinction for division; default 1e-6.
   sampleJitter = null,
   extEpsNode = undefined,
+  // How the `sampleCount` steps are spread along [0, tMax]:
+  //   'uniform'   — equal segments (SebH `VariableSampleCount = false`; what the
+  //                 Transmittance, Multi-Scatter and AP LUTs use).
+  //   'quadratic' — segment ends at `(s/N)²·tMax` (SebH `VariableSampleCount =
+  //                 true`; the Sky-View LUT and the per-pixel raymarch). Packs
+  //                 samples where the medium is dense, near the ray origin.
+  // Measured against Bruneton's reference (research/bruneton-audit-2026-09-26.md):
+  // uniform spacing under-integrates the sky by ~15 % everywhere and ~40 %
+  // within a few degrees of a low sun; quadratic lands within ±3 %.
+  sampleDistribution = 'uniform',
 }: {
   worldPos: any
   worldDir: any
@@ -500,6 +510,7 @@ export function integrateScatteredLuminance({
   tMaxOverride?: any
   sampleJitter?: any
   extEpsNode?: any
+  sampleDistribution?: 'uniform' | 'quadratic'
 }) {
   const earthO = vec3(0.0, 0.0, 0.0)
   const SAMPLE_SEGMENT_T = 0.3
@@ -536,8 +547,21 @@ export function integrateScatteredLuminance({
   // catastrophically large shaders. Accumulators above use `.toVar()` and
   // therefore carry state across iterations.
   Loop({ start: 0, end: sampleCount, type: 'int' }, ({ i }: any) => {
-    const newT = tMax.mul(float(i).add(segmentT).div(float(sampleCount)))
-    const dt = newT.sub(tPrev)
+    let newT: any
+    let dt: any
+    if (sampleDistribution === 'quadratic') {
+      // RenderSkyRayMarching.hlsl:115-131 — t0/t1 are the squared normalised
+      // segment bounds; the sample sits `segmentT` of the way into the segment.
+      const t0 = float(i).div(float(sampleCount))
+      const t1 = float(i).add(1.0).div(float(sampleCount))
+      const t0q = t0.mul(t0)
+      const t1q = t1.mul(t1)
+      newT = tMax.mul(t0q.add(t1q.sub(t0q).mul(segmentT)))
+      dt = tMax.mul(t1q.sub(t0q))
+    } else {
+      newT = tMax.mul(float(i).add(segmentT).div(float(sampleCount)))
+      dt = newT.sub(tPrev)
+    }
 
     const P = worldPos.add(worldDir.mul(newT))
     const pHeight = length(P)

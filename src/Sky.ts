@@ -406,7 +406,7 @@ export class Sky {
         ? value
         : typeof value === 'number'
           ? new Vector3(value, value, value)
-          : new Vector3(value.x ?? 0.3, value.y ?? 0.3, value.z ?? 0.3)
+          : new Vector3(value.x ?? 0.1, value.y ?? 0.1, value.z ?? 0.1)
     this.baker.setAtmosphereParams({ groundAlbedo: v })
     return this
   }
@@ -721,7 +721,7 @@ function applyShortcutScalars(base: any, { turbidity, groundAlbedo }: { turbidit
         ? groundAlbedo.clone()
         : typeof groundAlbedo === 'number'
           ? new Vector3(groundAlbedo, groundAlbedo, groundAlbedo)
-          : new Vector3(groundAlbedo.x ?? 0.3, groundAlbedo.y ?? 0.3, groundAlbedo.z ?? 0.3)
+          : new Vector3(groundAlbedo.x ?? 0.1, groundAlbedo.y ?? 0.1, groundAlbedo.z ?? 0.1)
   }
 
   return mergeAtmosphereParams(base, partial)

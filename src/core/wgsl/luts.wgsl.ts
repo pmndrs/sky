@@ -220,8 +220,20 @@ fn skyViewLutPixel(
   var tPrev = 0.0;
 
   for (var s = 0.0; s < sampleCount; s = s + 1.0) {
-    let newT = tMax * ((s + segmentT) / sampleCount);
-    let dt = newT - tPrev;
+    // Quadratic sample distribution (SebH VariableSampleCount = true,
+    // RenderSkyRayMarching.hlsl:115-131): segment s spans
+    // [(s/N)^2, ((s+1)/N)^2] * tMax, so samples crowd the dense air near the
+    // origin. Uniform spacing measured ~15 % too dark across the sky and ~40 %
+    // too dark near a low sun against Bruneton (research/bruneton-audit-
+    // 2026-09-26.md); this lands within +/-3 %. Mirrors the TSL twin's
+    // sampleDistribution: 'quadratic'. (No backticks in this comment: it lives
+    // inside a JS template literal.)
+    var t0q = s / sampleCount;
+    var t1q = (s + 1.0) / sampleCount;
+    t0q = t0q * t0q;
+    t1q = t1q * t1q;
+    let newT = tMax * (t0q + (t1q - t0q) * segmentT);
+    let dt = tMax * (t1q - t0q);
     let P = worldPos + worldDir * newT;
     let pHeight = length(P);
     let altitude = pHeight - bottomRadius;

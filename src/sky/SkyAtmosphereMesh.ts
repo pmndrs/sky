@@ -557,6 +557,8 @@ export class SkyAtmosphereMesh extends Mesh {
             sampleCount: 30,
             ground: true,
             mieRayPhase: true,
+            // Per-pixel raymarch = SebH's RenderRayMarchingPS (VariableSampleCount).
+            sampleDistribution: 'quadratic',
           })
 
           const validF = moved.valid.select(float(1.0), float(0.0))

@@ -119,8 +119,15 @@ export const EARTH: AtmosphereParams = {
   ozoneLayerCenterAltitude: 25.0,
   ozoneLayerHalfWidth: 15.0,
 
-  // Ground albedo used by multi-scattering LUT
-  groundAlbedo: new Vector3(0.3, 0.3, 0.3),
+  // Ground albedo used by the multi-scattering LUT (and the below-horizon
+  // ground term of the Sky-View LUT). 0.1 is what Bruneton's reference tables
+  // bake in; SebH's demo app uses 0. Keep it low: Hillaire's isotropic
+  // multi-scatter approximation spreads the sunlit-ground bounce into every
+  // direction, and a horizontal ray accumulates it over hundreds of km —
+  // measured against Bruneton (research/bruneton-audit-2026-09-26.md), the
+  // last ~3° above the horizon read 2× at 0.1 and 3–5× at the old default of
+  // 0.3, with the whole sky 30–40 % too bright at 0.3.
+  groundAlbedo: new Vector3(0.1, 0.1, 0.1),
   multiScatteringFactor: 1.0,
 
   // Sun

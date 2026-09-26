@@ -208,17 +208,27 @@
         atmospherePreset: 'earth',
         units: 'bruneton',
         luminanceScale: 40,
-        tone: 'bruneton', // bruneton | aces
-        acesExposure: 0.5,
+        // Sun spectrum applied to the sky (demo units only): 'neutral' is what the
+        // library ships; 'bruneton' is his (1.474, 1.85, 1.91) normalised to green.
+        sunTint: 'neutral', // neutral | bruneton | custom
+        tintR: 1.0,
+        tintG: 1.0,
+        tintB: 1.0,
+        tone: 'bruneton', // bruneton | aces | agx | neutral
+        toneExposure: 0.5,
+        // Multiplier on the physically consistent DirectionalLight (E_sun · T).
+        // The demos use a fixed intensity 4, which is ~1/7 of this at noon.
+        sunLightScale: 1.0,
+        hazeStrength: 1.0,
         groundAlbedo: BRUNETON_GROUND_ALBEDO,
         multiScatteringFactor: 1.0,
         turbidity: 1.0,
-        haze: true,
         sunDisc: true,
         sunLight: true,
         showSphere: true,
         showGround: true,
       }
+      const TONE_MODES = { bruneton: 0, aces: 1, agx: 2, neutral: 3 }
 
       // ------------------------------------------------------------------
       // Bruneton side — his demo.js verbatim. Only the two static loaders on his
@@ -448,7 +458,7 @@
         debugMode: params.get('debug'),
       })
 
-      const toneU = uniform(0) // 0 = bruneton curve, 1 = ACES (renderer.toneMappingExposure)
+      const toneU = uniform(0) // TONE_MODES; 1–3 use renderer.toneMappingExposure
       const exposureU = uniform(state.exposure)
       const diffU = uniform(0)
       const diffGainU = uniform(ui.diffGain)
@@ -491,7 +501,11 @@
         // His demo: color = pow(1 - exp(-radiance / white_point * exposure), 1/2.2), white_point = 1.
         const bruneton = pow(float(1.0).sub(exp(lin.mul(exposureU).negate())), float(1.0 / 2.2))
         const aces = renderOutput(vec4(lin, 1.0), THREE.ACESFilmicToneMapping, THREE.SRGBColorSpace).rgb
-        const out = mix(bruneton, aces, toneU)
+        const agx = renderOutput(vec4(lin, 1.0), THREE.AgXToneMapping, THREE.SRGBColorSpace).rgb
+        const neutral = renderOutput(vec4(lin, 1.0), THREE.NeutralToneMapping, THREE.SRGBColorSpace).rgb
+        const out = toneU
+          .lessThan(0.5)
+          .select(bruneton, toneU.lessThan(1.5).select(aces, toneU.lessThan(2.5).select(agx, neutral)))
         const his = hisTexNode.sample(uv()).rgb
         const diff = abs(out.sub(his)).mul(diffGainU)
         return vec4(mix(out, diff, diffU), 1.0)
@@ -501,6 +515,13 @@
       // Our-side knob application
       // ------------------------------------------------------------------
       let sunScale = SOLAR_IRRADIANCE
+      const BRUNETON_TINT = SOLAR_IRRADIANCE.map((v) => v / SOLAR_IRRADIANCE[1])
+      const currentTint = () =>
+        ours.sunTint === 'bruneton'
+          ? BRUNETON_TINT
+          : ours.sunTint === 'custom'
+            ? [ours.tintR, ours.tintG, ours.tintB]
+            : [1, 1, 1]
       const applyUnits = () => {
         if (ours.units === 'bruneton') {
           sky.setExposure(1)
@@ -509,15 +530,35 @@
           sunScale = SOLAR_IRRADIANCE
         } else {
           const L = ours.luminanceScale
+          const tint = currentTint()
           sky.setExposure(L)
-          sky.setSkyLuminanceFactor([1, 1, 1])
+          sky.setSkyLuminanceFactor(tint)
           sky.mesh.sunDiscIntensity.value = 20 // SkyAtmosphereMesh default
-          sunScale = [L, L, L]
+          sunScale = tint.map((t) => L * t)
         }
       }
       const applyTone = () => {
-        toneU.value = ours.tone === 'aces' ? 1 : 0
-        renderer.toneMappingExposure = ours.acesExposure
+        toneU.value = TONE_MODES[ours.tone] ?? 0
+        renderer.toneMappingExposure = ours.toneExposure
+      }
+      // One-click starting points for the tuning question "what should the demos ship?"
+      const applyPreset = (preset) => {
+        Object.assign(ours, preset)
+        applyUnits()
+        applyTone()
+        sky.setHazeStrength(ours.hazeStrength)
+        gui.controllersRecursive().forEach((c) => c.updateDisplay())
+      }
+      const tuningPresets = {
+        'bruneton units + his curve': () => applyPreset({ units: 'bruneton', tone: 'bruneton', sunTint: 'neutral' }),
+        'demo today (LS 40, ACES 0.5)': () =>
+          applyPreset({ units: 'demo', luminanceScale: 40, tone: 'aces', toneExposure: 0.5, sunTint: 'neutral' }),
+        'proposed (LS 40, ACES 0.3)': () =>
+          applyPreset({ units: 'demo', luminanceScale: 40, tone: 'aces', toneExposure: 0.3, sunTint: 'neutral' }),
+        'proposed + bruneton tint': () =>
+          applyPreset({ units: 'demo', luminanceScale: 40, tone: 'aces', toneExposure: 0.3, sunTint: 'bruneton' }),
+        'AgX 0.3 + bruneton tint': () =>
+          applyPreset({ units: 'demo', luminanceScale: 40, tone: 'agx', toneExposure: 0.3, sunTint: 'bruneton' }),
       }
       const applyAtmosphere = () => {
         sky.setPreset(ours.atmospherePreset)
@@ -632,20 +673,31 @@
         applyMode()
       })
 
-      const fOurs = gui.addFolder('Ours')
+      const fPresets = gui.addFolder('Tuning presets')
+      for (const name of Object.keys(tuningPresets)) fPresets.add(tuningPresets, name)
+
+      const fOurs = gui.addFolder('Ours — brightness & tone')
       fOurs.add(ours, 'units', ['bruneton', 'demo']).name('sky units').onChange(applyUnits)
       fOurs.add(ours, 'luminanceScale', 1, 100, 0.5).name('luminanceScale (demo)').onChange(applyUnits)
-      fOurs.add(ours, 'tone', ['bruneton', 'aces']).name('tone curve').onChange(applyTone)
-      fOurs.add(ours, 'acesExposure', 0.05, 2, 0.01).onChange(applyTone)
-      fOurs.add(ours, 'atmospherePreset', Object.keys(presets)).onChange(applyAtmosphere)
-      fOurs.add(ours, 'groundAlbedo', 0, 1, 0.01).onChange((v) => sky.setGroundAlbedo(v))
-      fOurs.add(ours, 'multiScatteringFactor', 0, 2, 0.01).onChange((v) => sky.setMultiScatteringFactor(v))
-      fOurs.add(ours, 'turbidity', 0, 4, 0.01).onChange((v) => sky.setTurbidity(v))
-      fOurs.add(ours, 'haze').onChange((v) => sky.setHazeStrength(v ? 1 : 0))
-      fOurs.add(ours, 'sunDisc').onChange((v) => sky.setSunDisc(v))
-      fOurs.add(ours, 'sunLight').onChange((v) => (sun.light.visible = v))
-      fOurs.add(ours, 'showSphere').onChange((v) => (sphere.visible = v))
-      fOurs.add(ours, 'showGround').onChange((v) => (groundCap.visible = groundSphere.visible = v))
+      fOurs.add(ours, 'sunTint', ['neutral', 'bruneton', 'custom']).name('sun tint (demo)').onChange(applyUnits)
+      fOurs.add(ours, 'tintR', 0.5, 1.5, 0.001).onChange(applyUnits)
+      fOurs.add(ours, 'tintG', 0.5, 1.5, 0.001).onChange(applyUnits)
+      fOurs.add(ours, 'tintB', 0.5, 1.5, 0.001).onChange(applyUnits)
+      fOurs.add(ours, 'tone', Object.keys(TONE_MODES)).name('tone curve').onChange(applyTone)
+      fOurs.add(ours, 'toneExposure', 0.05, 2, 0.01).name('tone exposure (aces/agx/neutral)').onChange(applyTone)
+      fOurs.add(ours, 'sunLightScale', 0, 2, 0.01).name('sun light × (E·T)')
+      fOurs.add(ours, 'hazeStrength', 0, 2, 0.01).onChange((v) => sky.setHazeStrength(v))
+
+      const fAtmo = gui.addFolder('Ours — atmosphere & scene')
+      fAtmo.add(ours, 'atmospherePreset', Object.keys(presets)).onChange(applyAtmosphere)
+      fAtmo.add(ours, 'groundAlbedo', 0, 1, 0.01).onChange((v) => sky.setGroundAlbedo(v))
+      fAtmo.add(ours, 'multiScatteringFactor', 0, 2, 0.01).onChange((v) => sky.setMultiScatteringFactor(v))
+      fAtmo.add(ours, 'turbidity', 0, 4, 0.01).onChange((v) => sky.setTurbidity(v))
+      fAtmo.add(ours, 'sunDisc').onChange((v) => sky.setSunDisc(v))
+      fAtmo.add(ours, 'sunLight').onChange((v) => (sun.light.visible = v))
+      fAtmo.add(ours, 'showSphere').onChange((v) => (sphere.visible = v))
+      fAtmo.add(ours, 'showGround').onChange((v) => (groundCap.visible = groundSphere.visible = v))
+      fAtmo.close()
 
       // ------------------------------------------------------------------
       // Readback: one pixel from each canvas at the probe, plus the linear
@@ -667,6 +719,43 @@
           return c >= 1 ? Infinity : -Math.log(1 - Math.pow(c, 2.2)) / state.exposure
         })
       const fmt = (a, d = 4) => a.map((v) => (Number.isFinite(v) ? v.toFixed(d) : 'sat')).join(' ')
+      // Sky-match score: a fixed grid of open-sky points (top third, away from the
+      // sphere), mean of ours/his per channel in 8-bit and — when both sides use
+      // his curve — in linear radiance. Points where his pixel is saturated (the
+      // sun disc) are skipped. This is the number to drive tuning by.
+      const GRID = []
+      for (const y of [0.06, 0.15, 0.24]) for (const x of [0.08, 0.26, 0.5, 0.74, 0.92]) GRID.push([x, y])
+      let lastGrid = null
+      const sampleGrid = () => {
+        const dpr = window.devicePixelRatio
+        const acc8 = [0, 0, 0]
+        const accLin = [0, 0, 0]
+        let n = 0
+        let nLin = 0
+        for (const [x, y] of GRID) {
+          const px = Math.floor(x * window.innerWidth * dpr)
+          const py = Math.floor(y * window.innerHeight * dpr)
+          const his = readPixel(bCanvas, px, py)
+          const mine = readPixel(renderer.domElement, px, py)
+          if (his.some((v) => v >= 250) || his.every((v) => v < 3)) continue
+          for (let i = 0; i < 3; i++) acc8[i] += mine[i] / Math.max(his[i], 1)
+          n++
+          if (ours.tone === 'bruneton') {
+            const hl = invertTone(his)
+            const ml = invertTone(mine)
+            if (hl.every(Number.isFinite) && ml.every(Number.isFinite)) {
+              for (let i = 0; i < 3; i++) accLin[i] += ml[i] / Math.max(hl[i], 1e-6)
+              nLin++
+            }
+          }
+        }
+        lastGrid = {
+          n,
+          rgb8: n ? acc8.map((v) => v / n) : [NaN, NaN, NaN],
+          linear: nLin ? accLin.map((v) => v / nLin) : [NaN, NaN, NaN],
+        }
+        return lastGrid
+      }
       let lastProbe = null
       // The WebGPU canvas is only readable inside the frame that drew it, so
       // scripted probes queue a request that the loop fulfils right after render.
@@ -749,7 +838,7 @@
         // --- sun ---
         sky.setSunDirection({ elevation: sunElevationDeg(), azimuth: sunAzimuthDeg(), raw: true })
         const T = transmittanceToSun(0, Math.cos(state.sunZenith), sky.baker.atmosphereParams)
-        const e = [0, 1, 2].map((i) => sunScale[i] * T[i])
+        const e = [0, 1, 2].map((i) => sunScale[i] * T[i] * ours.sunLightScale)
         const eMax = Math.max(e[0], e[1], e[2], 1e-6)
         sun.light.color.setRGB(e[0] / eMax, e[1] / eMax, e[2] / eMax, THREE.LinearSRGBColorSpace)
         sun.light.intensity = eMax
@@ -780,6 +869,8 @@
             pendingProbe(p)
             pendingProbe = null
           }
+          if (frame % 30 === 0 || !lastGrid) sampleGrid()
+          const g = lastGrid
           const altKm = (camera.position.distanceTo(planetCenter) - bottomRadiusM) / KM
           const els = sunElevationDeg()
           info.textContent =
@@ -789,7 +880,9 @@
             `\nprobe (${(p.x * 100).toFixed(0)}%, ${(p.y * 100).toFixed(0)}%)  shift+click to move` +
             `\n  his  rgb8 ${fmt(p.his, 0).padEnd(12)} linear ${fmt(p.hisLin)}` +
             `\n  ours rgb8 ${fmt(p.mine, 0).padEnd(12)} linear ${fmt(p.mineLin)}` +
-            `\n  ours/his  ${fmt(p.ratio, 3)}`
+            `\n  ours/his  ${fmt(p.ratio, 3)}` +
+            `\nsky match (${g.n} open-sky points) ours/his  rgb8 ${fmt(g.rgb8, 3)}` +
+            (ours.tone === 'bruneton' ? `   linear ${fmt(g.linear, 3)}` : '   (linear needs the bruneton curve)')
           probeEl.style.left = `${p.x * 100}%`
           probeEl.style.top = `${p.y * 100}%`
         }
@@ -826,6 +919,8 @@
         },
         sampleProbe,
         probeAsync,
+        sampleGrid: () => lastGrid,
+        tuningPresets,
         applyUnits,
         applyTone,
         applyAtmosphere,

@@ -158,6 +158,24 @@ sky point:
 | ours, demo units + ACES 0.3         | 126 / 167 / 211 | 173 / 202 / 225 |
 | ours, his units + ACES 7            | 122 / 173 / 216 | 170 / 206 / 228 |
 
+The compare page's "Tuning presets" folder and its live sky-match score (mean
+ours ÷ his over 15 open-sky points, 8-bit) give the same answer at every sun
+elevation:
+
+| preset (demo units, LS 40)      | noon r / g / b     | sun 30°            | sun 15.5°          | sun 1.8°           |
+| ------------------------------- | ------------------ | ------------------ | ------------------ | ------------------ |
+| today: ACES 0.5, neutral sun    | 1.41 / 1.14 / 1.04 | 1.33 / 1.11 / 1.03 | 1.34 / 1.14 / 1.06 | 1.37 / 1.22 / 1.20 |
+| ACES 0.3, neutral sun           | 1.18 / 1.02 / 0.98 | 1.17 / 1.01 / 0.98 | 1.14 / 1.02 / 0.99 | 1.02 / 0.90 / 0.90 |
+| ACES 0.3, Bruneton sun tint     | 1.11 / 1.02 / 0.98 | 1.11 / 1.01 / 0.98 | 1.08 / 1.02 / 0.99 | 0.89 / 0.90 / 0.92 |
+| **AgX 0.35, Bruneton sun tint** | 1.08 / 0.96 / 0.92 | 1.04 / 0.94 / 0.91 | 1.03 / 0.95 / 0.92 | 1.06 / 1.04 / 1.02 |
+| AgX 0.3, Bruneton sun tint      | 1.03 / 0.92 / 0.89 | 0.99 / 0.91 / 0.89 | 0.98 / 0.92 / 0.89 | 0.99 / 0.98 / 0.96 |
+
+ACES at 0.3 fixes the brightness but keeps a red excess (its knee desaturates
+toward white); AgX at 0.3–0.35 with the spectral sun tint is within ±8 % in
+every channel from noon to sunset and is the closest match to his look on
+the existing API: `renderer.toneMapping = AgXToneMapping`,
+`toneMappingExposure ≈ 0.35`, `sky.setSkyLuminanceFactor([0.797, 1.0, 1.033])`.
+
 Two effects. ACES 0.5 with `luminanceScale 40` is ~1.7× too bright (the
 ACES knee is reached across the whole sky, which is the "white" look); 0.3
 matches his brightness. And his sun is spectral, `(1.474, 1.85, 1.91)`, ~30 %

@@ -6,9 +6,9 @@
  * look (chroma 1, value 1) with a known ramp, and then reads the centre pixel
  * column of a screenshot. Each row maps to a view elevation from the camera
  * pitch + FOV; the expected colour is `sampleLook()` at sin(elevation), scaled
- * by `intensity × exposure × LOOK_UNIT_LUMINANCE` (the value-axis unit
- * contract) and sRGB-encoded — exactly what the mesh should have written into
- * the cube. Reports the worst per-channel error and fails above TOL.
+ * by `intensity` and sRGB-encoded. Looks are display-referred and three
+ * applies no exposure under NoToneMapping, so the rendered pixel must equal the
+ * authored ramp colour whatever the sky exposure — the WYSIWYG contract. Reports the worst per-channel error and fails above TOL.
  *
  *   pnpm --filter @pmndrs/sky-example-vanilla dev          # note the port
  *   BASE=http://localhost:5173/ node scripts/verify-looks-ramp.mjs
@@ -26,10 +26,10 @@ const W = 800
 const H = 600
 const FOV = 70
 const PITCH = 45
-const INTENSITY = 1.0
-// Sky exposure (luminanceScale). Chosen with INTENSITY so the ramp stays below
-// 1.0 in the frame buffer: 1 × 2 × 0.3 = 0.6 of the authored colour.
-const EXPOSURE = 2.0
+const INTENSITY = 0.9
+// Sky exposure (luminanceScale). Deliberately far from 1: the ramp must not
+// depend on it.
+const EXPOSURE = 40
 
 const settle = (page, n = 30) =>
   page.evaluate(
@@ -86,8 +86,7 @@ await page.evaluate(
   },
   { fov: FOV, pitch: PITCH, exposure: EXPOSURE },
 )
-const unit = await page.evaluate(() => window.__looks.LOOK_UNIT_LUMINANCE)
-const rampScale = INTENSITY * EXPOSURE * unit
+const rampScale = INTENSITY
 
 const srgb = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055)
 const report = {}

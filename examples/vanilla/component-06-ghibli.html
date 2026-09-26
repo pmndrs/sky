@@ -51,11 +51,11 @@
       const renderer = new THREE.WebGPURenderer({ antialias: true })
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
       renderer.setSize(window.innerWidth, window.innerHeight)
-      // ACES read the best of the three tried here — AgX's shoulder washed
-      // the night look's dark navy stops toward cornflower blue, and
-      // Neutral looked photographic rather than illustrated. ACES keeps
-      // night moody while still giving golden hour a warm, un-crushed glow.
-      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      // Neutral: looks are display-referred, and Neutral leaves mid-range
+      // values untouched, so the authored cerulean / peach / navy stops show
+      // on screen as authored. ACES and AgX desaturate bright values, which
+      // is what made the noon sky read white.
+      renderer.toneMapping = THREE.NeutralToneMapping
       renderer.toneMappingExposure = 0.5
       renderer.inspector = new Inspector()
       document.body.appendChild(renderer.domElement)
@@ -140,7 +140,6 @@
         ],
         chroma: 0.88,
         value: 0.7,
-        intensity: 0.5,
         sunTint: { color: '#fff0c0', falloff: 0.3, strength: 0.45 },
       })
 
@@ -153,7 +152,6 @@
         ],
         chroma: 0.88,
         value: 0.7,
-        intensity: 0.45,
         sunTint: { color: '#fff3c4', falloff: 0.35, strength: 0.12 },
       })
 
@@ -1036,7 +1034,7 @@
         animateDay: false,
         daySpeed: 0.5,
         exposure: 40,
-        toneMapping: 'ACES',
+        toneMapping: 'Neutral',
         toneExposure: renderer.toneMappingExposure,
         look: 'track:ghibli-summer',
         chroma: 0.88,

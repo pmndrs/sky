@@ -38,18 +38,25 @@ Every look has two strengths, not one:
 | `ghibli-*` built-ins             | 0.7      | 0.25    |
 | full gradient override           | 1        | 1       |
 
-The `value` axis compares an authored 0..1 ramp against scene luminance, so it
-needs **`intensity`** to put them in the same units. `intensity` is relative
-to a clear daytime sky: at `intensity: 1` a ramp value of 1.0 is as bright as
-the physical zenith at the sky's current `exposure`, and the ramp scales with
-the exposure so the physical / ramp balance never depends on it (the shader
-multiplies by `intensity × luminanceScale × LOOK_UNIT_LUMINANCE`). Night looks
-are authored with dark colours rather than a low intensity, so a moonlit ramp
-at the default intensity already sits where a dim sky should.
+Looks are **display-referred**. The ramp is authored in display colours and
+enters the tonemapper at its authored value: the sky divides it by
+`renderer.toneMappingExposure` for you. So a look at `value: 1` shows its
+authored colours on screen, exactly under `NeutralToneMapping` or no
+tonemapping, and with the curve's own contrast under ACES or AgX. It also
+does not drift when you change `exposure` on the sky, which only moves the
+physical side of the blend.
 
-> Changed in 0.2.1: before, `intensity` was an absolute post-exposure
-> luminance, which at the default `exposure: 40` made a `value` blend roughly
-> twelve times too dark and made looks drift whenever the exposure changed.
+**`intensity`** is a plain multiplier on the ramp for the `value` axis;
+leave it at 1 unless you want the authored colours brighter or darker on
+screen.
+
+**Why stylized skies need `value`, not just `chroma`.** Chroma swaps hue but
+keeps the physical brightness, and a filmic tonemapper desaturates anything
+bright. A noon sky that the physics makes bright stays pale under a
+chroma-only look no matter how saturated the ramp is. Give daytime stylized
+looks enough `value` to bring the brightness toward the authored colours.
+For the most faithful colours use `NeutralToneMapping`, which leaves
+mid-range values untouched.
 
 ## Authoring a look
 

@@ -193,7 +193,23 @@ TSL-only and had zero visible effect (diff 0.0003). The LUTs are built by the
 WGSL backend; the TSL twin only runs in the raymarch fallbacks. Now recorded
 as a CLAUDE.md gotcha. Both twins carry the multiply.
 
-## 7. Follow-up (2026-09-24) — intensity units, palette, workbench
+## 7. Follow-up (2026-09-24, corrected 2026-09-26) — intensity units, palette, workbench
+
+**Correction.** The 2026-09-24 measurement below it was wrong and the
+change it motivated (`LOOK_UNIT_LUMINANCE`, ramp × luminanceScale × 0.3) made
+every `value > 0` look white out. The readback used NoToneMapping + a tiny
+`toneMappingExposure`, but three ignores the exposure under NoToneMapping,
+so the numbers were ~20× too high. Real noon sky at exposure 40 is L ≈ 0.5–1
+in scene units. Fix: looks are **display-referred** — the ramp is multiplied
+by `displayScale = 1 / toneMappingExposure` (kept current by `Sky.update`),
+independent of `luminanceScale`. At `value: 1` under NeutralToneMapping the
+noon sky renders the authored colour within a few 8-bit steps (measured
+59,127,208 vs authored 55,130,217 in component-06). A cube-root luminance
+blend for `value` was prototyped and made no measurable difference, so the
+blend stays linear. `verify-looks-ramp.mjs` now asserts the WYSIWYG contract
+directly (pixel == authored ramp at sky exposure 40).
+
+The palette, workbench and ramp-verifier parts of the original entry stand.
 
 Measured the physical sky in scene units from the new workbench (headless
 WebGPU, `NoToneMapping`, `exposure: 40`): noon zenith L ≈ 10.5, horizon ≈ 19;

@@ -81,14 +81,12 @@ export interface LookInput {
   chroma?: number
   value?: number
   /**
-   * Brightness of the ramp on the `value` axis, relative to a clear daytime
-   * sky: a ramp value of 1.0 at `intensity: 1` lands on the luminance the
-   * physical zenith reaches at the sky's current `exposure` / `luminanceScale`.
-   * The shader scales the ramp by `intensity × luminanceScale ×
-   * {@link LOOK_UNIT_LUMINANCE}`, so a look keeps the same physical / ramp
-   * balance when the exposure changes. Night looks are usually authored with
-   * dark colours rather than a low intensity, so the same ramp reads right
-   * under any exposure.
+   * Brightness multiplier on the ramp for the `value` axis. Looks are
+   * display-referred: at `intensity: 1` the ramp reaches the tonemapper at its
+   * authored value (the sky divides by `renderer.toneMappingExposure`), so a
+   * `value: 1` look shows its authored colours on screen — exactly under
+   * Neutral or no tonemapping, with the curve's contrast under ACES/AgX.
+   * Only the `value` axis reads it.
    */
   intensity?: number
   sunTint?: LookSunTint | null
@@ -137,16 +135,6 @@ const POSITION_EPSILON = 1e-6
  * see {@link evaluatePackedRamp}. The TSL node uses the same value.
  */
 export const RAMP_SPAN_EPSILON = 1e-6
-
-/**
- * Sky-view luminance of a clear daytime sky per unit `luminanceScale` — the
- * measured zenith response of the LUT chain (`ILLUMINANCE_IS_ONE`, see
- * CLAUDE.md) at the default Earth preset, ~0.26 at the zenith rising to ~0.47
- * at the horizon. The shader multiplies an authored ramp by
- * `intensity × luminanceScale × LOOK_UNIT_LUMINANCE`, which is what makes
- * `intensity: 1` mean "as bright as the daytime sky" regardless of exposure.
- */
-export const LOOK_UNIT_LUMINANCE = 0.3
 
 const DEFAULT_CHROMA = 1
 const DEFAULT_VALUE = 0

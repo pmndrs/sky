@@ -608,7 +608,6 @@ export class SkyAtmosphereMesh extends Mesh {
           viewZenithCosAngle,
           lightViewCosAngle,
           look: lookU,
-          luminanceScale: luminanceScaleU,
         }),
       )
       // Final per-channel grade (Unreal SkyLuminanceFactor). After the look so

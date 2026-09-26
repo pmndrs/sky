@@ -31,6 +31,13 @@ export interface LookUniforms {
   sunTintColor: any
   sunTintFalloff: any
   sunTintStrength: any
+  /**
+   * `1 / renderer.toneMappingExposure` (1 under NoToneMapping). Multiplies
+   * the ramp so that, before the tonemapper's curve, it lands on its authored
+   * value — which is what makes a `value: 1` look show its authored colours.
+   * `Sky.update` keeps it current; standalone mesh users can set it directly.
+   */
+  displayScale: any
   /** Reused packing scratch, so per-frame updates don't allocate. */
   packed: PackedLook
 }
@@ -48,6 +55,8 @@ export function createLookUniforms(): LookUniforms {
     sunTintColor: uniform(new Vector3()),
     sunTintFalloff: uniform(0.3),
     sunTintStrength: uniform(0),
+    // 1 / renderer.toneMappingExposure, kept current by `Sky.update`.
+    displayScale: uniform(1),
     packed: null as unknown as PackedLook,
   }
 }

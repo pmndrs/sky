@@ -263,18 +263,19 @@ signature in `luts.wgsl.ts`, (b) the multiply site, (c) the named key in the
 ~0.0003 where >0 was expected. For any new atmosphere param: edit both twins,
 then check `examples/vanilla/parity/` still agrees.
 
-### Look `intensity` is in `luminanceScale` units — measure, don't assume
+### `toneMappingExposure` is ignored under `NoToneMapping` — don't use it to read HDR values
 
-The physical sky after `luminanceScale` (default 40) sits at L ≈ 10–19 by day
-(measured 2026-09-24 with `NoToneMapping`; see SKY_LOOKS_PLAN.md §7). A look
-ramp is authored 0..1, so the shader scales it by `intensity × luminanceScale
-× LOOK_UNIT_LUMINANCE` (0.3). The first version multiplied by `intensity`
-alone: everything compiled, every diff-based check passed ("value moves the
-luminance" — it did, downward by 12×), and the night look was near-black.
-For any new knob that mixes an authored quantity with the physical sky,
-measure the physical range first (`scripts/verify-looks-ramp.mjs` shows the
-`NoToneMapping` + low `toneMappingExposure` readback trick) and put both in
-the same units.
+three applies `renderer.toneMappingExposure` only inside a tone-mapping
+operator. With `NoToneMapping` the exposure does nothing, so "set
+NoToneMapping + a tiny exposure, read the pixel back and divide by the
+exposure" returns clipped garbage ×(1/exposure). That exact trick produced a
+20× wrong measurement of the noon sky (read ~10.5, really ~0.5–1) and PR #10
+recalibrated look `intensity` against it, which pushed every `value > 0` look
+to white (fixed 2026-09-26: looks are now display-referred, ramp ÷
+toneMappingExposure). To read linear HDR values, scale the source instead
+(e.g. `sky.setExposure(40 * k)` with a small k and NoToneMapping), or read a
+render target directly. Sanity-check any readback against a tonemapped render
+of the same pixel before trusting it.
 
 ### Vite HMR + WebGPU shader edits
 

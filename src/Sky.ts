@@ -1,4 +1,4 @@
-import { Color, Vector3 } from 'three/webgpu'
+import { Color, NoToneMapping, Vector3 } from 'three/webgpu'
 import { uniform } from 'three/tsl'
 
 import { SkyAtmosphereBaker } from './sky/SkyAtmosphereBaker'
@@ -469,6 +469,18 @@ export class Sky {
       if (this._cameraFar) this._cameraFar.value = camera.far
     }
 
+    // Keep looks display-referred: the ramp is divided by the renderer's
+    // tone-mapping exposure (which three ignores under NoToneMapping), so a
+    // look's authored colours survive exposure changes. The cube holds the
+    // look, so a change re-bakes it.
+    const r = this._renderer
+    const toneExposure = r && r.toneMapping !== NoToneMapping ? (r.toneMappingExposure ?? 1) : 1
+    const displayScale = 1 / Math.max(toneExposure, 1e-4)
+    const lookU = this.baker.sky.lookUniforms
+    if (lookU.displayScale.value !== displayScale) {
+      lookU.displayScale.value = displayScale
+      this.baker.cubeDirty = true
+    }
     this.baker.update()
 
     if (this._scene && this._scene.environment !== this.baker.environmentTexture) {

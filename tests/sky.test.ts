@@ -5,17 +5,6 @@ import { Color, Scene } from 'three/webgpu'
 import { Sky } from '../src/Sky'
 import { looks } from '../src/looks'
 
-// Controllable stand-in for the HDR loader `enableStars({ url })` imports lazily.
-const loader = vi.hoisted(() => ({ onLoad: undefined as undefined | ((tex: any) => void) }))
-vi.mock('three/addons/loaders/RGBELoader.js', () => ({
-  RGBELoader: class {
-    setDataType() {}
-    load(_url: string, onLoad: (tex: any) => void) {
-      loader.onLoad = onLoad
-    }
-  },
-}))
-
 // Minimal renderer surface for constructing and disposing a Sky in node.
 function mockRenderer(): any {
   return {
@@ -71,18 +60,6 @@ describe('Sky', () => {
     expect(disposeBaker).toHaveBeenCalledOnce()
   })
 
-  it('frees an HDR that finishes loading after dispose() and resolves quietly', async () => {
-    const sky = new Sky(mockRenderer())
-    const pending = sky.enableStars({ url: 'stars.hdr' })
-    await vi.waitFor(() => expect(loader.onLoad).toBeDefined(), { timeout: 5000 })
-    sky.dispose()
-
-    const texture = { dispose: vi.fn() }
-    loader.onLoad!(texture)
-    await expect(pending).resolves.toBeDefined()
-    expect(texture.dispose).toHaveBeenCalledOnce()
-  })
-
   it('throws on use after dispose()', () => {
     const sky = new Sky(mockRenderer())
     sky.dispose()
@@ -91,6 +68,7 @@ describe('Sky', () => {
     expect(() => sky.setTimeOfDay(6)).toThrow(/disposed/)
     expect(() => sky.baker).toThrow(/disposed/)
     expect(() => sky.createGroundedSkybox()).toThrow(/disposed/)
+    return expect(sky.enableStars()).rejects.toThrow(/disposed/)
   })
 
   it('setTurbidity is absolute: 0 then 1 restores the Mie coefficients', () => {

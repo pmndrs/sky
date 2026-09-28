@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>16 — Stars / background bench</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #hud {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">starting…</div>
+    <script type="module">
+      /*
+       * Per-frame cost of the sky background + night sky, A/B'd:
+       *
+       *   none      black clear — the floor (scene geometry + output only)
+       *   cube      scene.background = sky.texture, no night sky
+       *   stars     cube + SkyStars sprites (Milky Way off)
+       *   stars+mw  cube + sprites + Milky Way baked into the cube (the default design)
+       *   live      SkyAtmosphereMesh evaluated per pixel instead of the cube
+       *
+       * `sunAnim` moves the sun every frame so the SkyView + cube + PMREM
+       * re-bake cost shows up; `__bench.bakeBreakdown()` splits it by stage.
+       *
+       * GPU time: with the Inspector (default), its Performance tab has a
+       * per-pass breakdown. For numbers, run scripts/bench-stars.mjs — it uses
+       * `__bench.burst()`, wall-clock over back-to-back frames drained with
+       * onSubmittedWorkDone. (WebGPU timestamp totals are unreliable on Apple
+       * GPUs for frames with many small passes such as PMREM.)
+       *
+       * URL: ?mode=stars+mw&dpr=2&sun=-16&inspector=0
+       */
+      import * as THREE from 'three/webgpu'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { Sky } from '@pmndrs/sky'
+
+      const MODES = ['none', 'cube', 'stars', 'stars+mw', 'live']
+      const q = new URLSearchParams(location.search)
+      const cfg = {
+        mode: MODES.includes(q.get('mode')) ? q.get('mode') : 'stars+mw',
+        dpr: Number(q.get('dpr') ?? window.devicePixelRatio),
+        sunElevation: Number(q.get('sun') ?? -16),
+        sunAnim: q.get('sunAnim') === '1',
+        starCount: Number(q.get('count') ?? 9000),
+      }
+      const useInspector = q.get('inspector') !== '0'
+      const hud = document.getElementById('hud')
+
+      const renderer = new THREE.WebGPURenderer({ antialias: false })
+      renderer.setPixelRatio(cfg.dpr)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      if (useInspector) renderer.inspector = new Inspector()
+      document.body.appendChild(renderer.domElement)
+      await renderer.init()
+
+      const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 20_000_000)
+      camera.position.set(0, 2, 0)
+
+      const sky = new Sky(renderer, {
+        sunDirection: { elevation: cfg.sunElevation, azimuth: 30 },
+        timeOfDay: 23,
+        dayOfYear: 176,
+        latitude: 48.9,
+        enableAerialPerspective: false,
+      })
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+      const night = await sky.enableStars({ count: cfg.starCount })
+
+      const liveSky = sky.baker.createSkyMesh()
+      scene.add(liveSky)
+
+      // Foreground: ground + mountains filling the lower third.
+      scene.add(
+        new THREE.Mesh(
+          new THREE.CircleGeometry(200_000, 64).rotateX(-Math.PI / 2),
+          new THREE.MeshStandardMaterial({ color: 0x3a342d, roughness: 0.95 }),
+        ),
+      )
+      const mountainGeom = new THREE.ConeGeometry(1, 1, 12)
+      const mountainMat = new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 0.9 })
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2
+        const dist = 6000 + (i % 5) * 4000
+        const h = 500 + ((i * 37) % 7) * 180
+        const m = new THREE.Mesh(mountainGeom, mountainMat)
+        m.scale.set(1400, h, 1400)
+        m.position.set(Math.sin(a) * dist, h / 2, Math.cos(a) * dist)
+        scene.add(m)
+      }
+
+      const controls = new OrbitControls(camera, renderer.domElement)
+      controls.target.set(0, 2 + Math.tan(0.25) * 10, 10) // ~15° above the horizon
+      controls.enableDamping = true
+      controls.update()
+
+      const setSun = (elevation) => {
+        cfg.sunElevation = elevation
+        sky.setSunDirection({ elevation, azimuth: 30 })
+      }
+
+      function applyMode(mode) {
+        cfg.mode = mode
+        liveSky.visible = mode === 'live'
+        scene.background = mode === 'none' || mode === 'live' ? null : sky.texture
+        if (mode === 'stars' || mode === 'stars+mw') {
+          sky.enableStars()
+          night.setMilkyWay(mode === 'stars+mw' ? 0.25 : 0)
+        } else {
+          sky.disableStars()
+        }
+      }
+      applyMode(cfg.mode)
+
+      if (useInspector) {
+        const gui = renderer.inspector.createParameters('Stars bench')
+        gui.add(cfg, 'mode', MODES).onChange(applyMode)
+        gui.add(cfg, 'dpr', 0.5, 3, 0.25).onChange((v) => renderer.setPixelRatio(v))
+        gui.add(cfg, 'sunElevation', -20, 30, 0.1).onChange(setSun)
+        gui.add(cfg, 'sunAnim')
+        gui.add(cfg, 'starCount', 1000, 50000, 1000).onChange((n) => night.enable({ count: n }))
+      }
+
+      addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight
+        camera.updateProjectionMatrix()
+        renderer.setSize(innerWidth, innerHeight)
+      })
+
+      const frameTimes = []
+      let lastFrame = performance.now()
+      let sunPhase = 0
+      const wiggleSun = () => {
+        sunPhase += 1
+        sky.setSunDirection({ elevation: cfg.sunElevation + (sunPhase % 2 ? 0.05 : -0.05), azimuth: 30 })
+      }
+
+      const loop = () => {
+        const now = performance.now()
+        frameTimes.push(now - lastFrame)
+        lastFrame = now
+        if (frameTimes.length > 60) frameTimes.shift()
+
+        controls.update()
+        if (cfg.sunAnim) wiggleSun()
+        sky.update(camera)
+        renderer.render(scene, camera)
+
+        const avg = frameTimes.reduce((s, x) => s + x, 0) / frameTimes.length
+        const { width, height } = renderer.domElement
+        hud.textContent =
+          `mode   ${cfg.mode}${cfg.sunAnim ? '  (sunAnim: re-bake every frame)' : ''}\n` +
+          `target ${width}×${height} (${((width * height) / 1e6).toFixed(2)} Mpx, dpr ${cfg.dpr})\n` +
+          `frame  ${avg.toFixed(2)} ms (${(1000 / avg).toFixed(0)} fps, vsync-capped — see Inspector for GPU)`
+      }
+      renderer.setAnimationLoop(loop)
+
+      // --- scripted A/B (scripts/bench-stars.mjs) ---
+      const drain = () => renderer.backend.device.queue.onSubmittedWorkDone()
+      async function paused(fn) {
+        renderer.setAnimationLoop(null)
+        try {
+          return await fn()
+        } finally {
+          renderer.setAnimationLoop(loop)
+        }
+      }
+
+      window.__bench = {
+        MODES,
+        applyMode,
+        setSun,
+        setDpr(v) {
+          cfg.dpr = v
+          renderer.setPixelRatio(v)
+        },
+        setStarCount(n) {
+          cfg.starCount = n
+          night.enable({ count: n })
+        },
+        size: () => [renderer.domElement.width, renderer.domElement.height],
+        /**
+         * Pause the loop, submit `n` frames back-to-back, drain the queue and
+         * divide wall-clock by n: ~max(CPU, GPU) per frame, what an app pays.
+         * `render: false` times the sky update alone (with `sunAnim`).
+         */
+        burst: ({ modes = MODES, n = 120, rounds = 3, sunAnim = false, render = true } = {}) =>
+          paused(async () => {
+            const out = Object.fromEntries(modes.map((m) => [m, []]))
+            for (let r = 0; r < rounds; r++) {
+              for (const m of modes) {
+                applyMode(m)
+                sky.update(camera)
+                renderer.render(scene, camera)
+                await drain()
+                const t0 = performance.now()
+                for (let i = 0; i < n; i++) {
+                  if (sunAnim) wiggleSun()
+                  sky.update(camera)
+                  if (render) renderer.render(scene, camera)
+                }
+                await drain()
+                out[m].push((performance.now() - t0) / n)
+              }
+            }
+            return Object.fromEntries(
+              modes.map((m) => {
+                const s = [...out[m]].sort((a, b) => a - b)
+                return [m, { median: +s[Math.floor(s.length / 2)].toFixed(4), min: +s[0].toFixed(4), rounds: s.length }]
+              }),
+            )
+          }),
+        /** Split one sun-change re-bake into SkyView LUT, cube faces and PMREM. */
+        bakeBreakdown: ({ n = 60 } = {}) =>
+          paused(async () => {
+            const baker = sky.baker
+            const time = async (fn) => {
+              fn()
+              await drain()
+              const t0 = performance.now()
+              for (let i = 0; i < n; i++) fn()
+              const cpu = (performance.now() - t0) / n
+              await drain()
+              return { wall: +((performance.now() - t0) / n).toFixed(3), cpuSubmit: +cpu.toFixed(3) }
+            }
+            return {
+              skyViewLUT: await time(() => baker.skyViewLUT.render()),
+              cube6Faces: await time(() => baker.cubeCamera.update(renderer, baker.skyScene)),
+              pmrem: await time(() =>
+                baker.pmremGenerator.fromCubemap(baker.cubeRenderTarget.texture, baker._pmremTarget),
+              ),
+              fullUpdate: await time(() => {
+                wiggleSun()
+                baker.update()
+              }),
+            }
+          }),
+      }
+      window.__benchReady = true
+    </script>
+  </body>
+</html>

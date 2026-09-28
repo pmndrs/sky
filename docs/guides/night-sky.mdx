@@ -1,0 +1,134 @@
+---
+title: Night sky
+description: Pixel-sharp stars and a Milky Way that rise with the real sky, fade in through twilight, and cost almost nothing per frame.
+---
+
+```js
+import { Sky } from '@pmndrs/sky'
+
+const sky = new Sky(renderer, { timeOfDay: 21.25, dayOfYear: 196, latitude: 38 })
+sky.attach(scene)
+const night = await sky.enableStars()
+
+renderer.setAnimationLoop(() => {
+  sky.update(camera) // bakes when dirty, and moves the star sprites with the camera
+  renderer.render(scene, camera)
+})
+```
+
+That is the whole setup. The stars and the Milky Way appear on their own as
+the sun goes down and leave again at dawn — there is no day/night switch to
+manage.
+
+## What you get
+
+The night sky is split by frequency, because a point of light and a diffuse
+glow need opposite treatment:
+
+- **Stars** are drawn as sprites in _your_ scene (`SkyStars`, added by
+  `attach()`). Each is a small energy-normalised Gaussian, so it stays sharp
+  at any resolution, doesn't shimmer as the camera turns, and faint stars are
+  faint rather than tiny. About 9,000 stars — roughly what the eye sees on a
+  dark night — with the brightest ones at their real positions.
+- **The Milky Way** is a low-resolution glow map sampled by the sky shader and
+  baked into the sky cube with everything else. It shows up in
+  `scene.background`, in reflections, and (faintly) in the environment
+  lighting.
+
+Stars are **not** in the cube: at the cube's resolution a star smears into a
+blurry blob several pixels wide.
+
+## Driven by the sky's time and place
+
+Both layers are oriented from the same inputs as the sun — `timeOfDay`,
+`dayOfYear`, `latitude` and `north` — using local sidereal time from the same
+solar model, so the stars stay registered to the sunset (to within ~0.2°):
+
+```js
+sky.setTimeOfDay(23) // the sky turns about the celestial pole
+sky.setLatitude(-33.9) // southern sky
+sky.setNorth('+X') // stars follow the north axis, like the sun
+```
+
+`setSunDirection()` moves only the sun; the stars keep following the time and
+place you set.
+
+Both layers are also dimmed and reddened toward the horizon by atmospheric
+transmittance, hidden below the planet's horizon, and depth-tested against
+your geometry, so they set behind terrain.
+
+## Twilight
+
+A fixed exposure has no eye adaptation, so the twilight sky renders darker
+than it looks in reality and anything added on top would show far too early.
+Each star, and each pixel of the Milky Way, is instead compared with the sky
+directly behind it and faded in over a few stops as that sky darkens. Bright
+stars appear first, the dark side of the sky fills in before the twilight
+side, and the Milky Way emerges last.
+
+`contrast` and `milkyWayContrast` move that point: higher values hold them
+back until later in twilight.
+
+## Options
+
+`sky.enableStars(options)` (or `night.enable(options)`) updates in place;
+the setters change one value without enabling a disabled night sky.
+
+| Option              | Default | Setter                 | Effect                                                                                           |
+| ------------------- | ------- | ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `intensity`         | `1`     | `setIntensity`         | Star brightness.                                                                                 |
+| `size`              | `0.7`   | `setSize`              | Star blur spot σ in CSS pixels (≈1.6 px wide at half maximum). Bright stars grow on top of this. |
+| `magnitudeContrast` | `0.75`  | `setMagnitudeContrast` | `1` keeps true brightness ratios between magnitudes; lower compresses them.                      |
+| `contrast`          | `40`    | `setContrast`          | Star : sky ratio at the middle of the twilight fade.                                             |
+| `twinkle`           | `0.25`  | `setTwinkle`           | Scintillation depth; stronger toward the horizon.                                                |
+| `count`             | `9000`  | —                      | Procedural stars (the named bright stars are extra). Rebuilds the sprites.                       |
+| `seed`              | —       | —                      | Procedural field seed. Rebuilds the sprites.                                                     |
+| `catalog`           | —       | —                      | Your own `StarCatalog` (see below). Rebuilds the sprites.                                        |
+| `milkyWay`          | `0.25`  | `setMilkyWay`          | Milky Way intensity; `0` hides it.                                                               |
+| `milkyWayContrast`  | `20`    | `setMilkyWayContrast`  | Glow : sky ratio at the middle of its twilight fade.                                             |
+| `milkyWayTexture`   | —       | `setMilkyWayTexture`   | Your own map instead of the procedural one; `null` goes back.                                    |
+
+`sky.disableStars()` hides both layers; `sky.enableStars()` brings them back.
+
+## Your own Milky Way map or catalog
+
+`milkyWayTexture` takes an equirectangular map in **galactic** coordinates:
+the galactic centre at `u = 0.5` with longitude increasing with `u`, and
+galactic latitude from −90° at `v = 0` to +90° at `v = 1`, in linear colour.
+Most published all-sky maps (Gaia, for example) come in this layout; check
+the licence before shipping one. A texture you pass in is never disposed by
+the sky. `generateMilkyWayTexture({ width })` regenerates the procedural one
+at another resolution.
+
+`catalog` takes `{ directions, magnitudes, tones, count }`: unit
+**equatorial** direction vectors (`x = cos δ cos α`, `y = sin δ`,
+`z = cos δ sin α`), visual magnitudes, and a 0 (warm) to 1 (hot) colour per
+star. `generateStarCatalog()` shows the expected shape.
+
+## Cost
+
+Measured on an M5 Pro, per frame, over the plain cube background:
+
+|                              | 1920×1080 | 3840×2160    |
+| ---------------------------- | --------- | ------------ |
+| Stars + Milky Way (9k stars) | ~0.01 ms  | ~0.05–0.2 ms |
+| 50k stars                    | ~0.05 ms  | ~0.05 ms     |
+| Daytime (stars invisible)    | ~0        | ~0           |
+
+The Milky Way lives in the cube, so it only costs anything when the cube
+re-bakes. Moving the time of day re-bakes the cube anyway — that is the sun
+moving — and dominates everything above: see
+`examples/vanilla/16-stars-bench.html` and `scripts/bench-stars.mjs`.
+
+## Upgrading from 0.3
+
+The procedural hash-grid starfield and the HDRI star map were baked into the
+cube, which is what made them blurry, and are gone:
+
+| Before                                 | Now                                                                                                                                              |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enableStars({ source: 'hdri', url })` | Load the map yourself (it must be in galactic coordinates) and pass `milkyWayTexture`. Point stars in an HDRI blur in the cube; use the sprites. |
+| `density`, `setStarsDensity`           | `count`                                                                                                                                          |
+| `brightness`, `setStarsBrightness`     | `intensity` / `setStarsIntensity`                                                                                                                |
+| `rotation`, `setStarsRotation`         | Follows `timeOfDay`, `dayOfYear`, `latitude` and `north` automatically.                                                                          |
+| `setStarsSource`                       | —                                                                                                                                                |

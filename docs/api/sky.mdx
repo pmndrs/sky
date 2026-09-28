@@ -49,7 +49,7 @@ new Sky(renderer, options?)
 | `sky.aerialPerspectiveTexture`        | The 3D aerial-perspective LUT texture, or `null` if `enableAerialPerspective: false`.                                    |
 | `sky.mesh`                            | The baker's internal `SkyAtmosphereMesh` (lives in the baker's private scene, **not** your main scene — see note below). |
 | `sky.sunElevation` / `sky.sunAzimuth` | Current sun direction in degrees, as last set via `setTimeOfDay`/`setSunDirection`/etc.                                  |
-| `sky.stars`                           | The `SkyNight` instance if `enableStars()` was called, else `null`.                                                      |
+| `sky.stars`                           | The `SkyNight` instance if `enableStars()` was called, else `null`. See [Night sky](../guides/night-sky).                |
 | `sky.state`                           | `'detached'`, `'attached'` or `'disposed'`. Accessing `sky.baker` after disposal throws.                                 |
 
 > **Note:**
@@ -63,13 +63,13 @@ new Sky(renderer, options?)
 
 ## Lifecycle
 
-| Method                      | Description                                                                                               |
-| --------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `attach(scene)`             | Sets `scene.environment` + `scene.background`. Returns `this`.                                            |
-| `detach()`                  | Clears them (only if they still point at this sky's textures). Returns `this`.                            |
-| `update(camera, opts?)`     | Per-frame entry point — see below.                                                                        |
-| `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                               |
-| `dispose()`                 | Detaches, frees the stars HDR texture, and disposes the baker. Idempotent; baker-backed calls then throw. |
+| Method                      | Description                                                                                                                 |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `attach(scene)`             | Sets `scene.environment` + `scene.background`. Returns `this`.                                                              |
+| `detach()`                  | Clears them (only if they still point at this sky's textures). Returns `this`.                                              |
+| `update(camera, opts?)`     | Per-frame entry point — see below.                                                                                          |
+| `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                                                 |
+| `dispose()`                 | Detaches, removes the stars and frees the Milky Way map, and disposes the baker. Idempotent; baker-backed calls then throw. |
 
 > **Warning:**
 > `dispose()` does not dispose helpers created by `createSun`, `createGround`, `createGroundedSkybox`, or `createMoon`.
@@ -135,14 +135,14 @@ See the [Haze guide](../guides/haze) for the full picture. Facade methods:
 Each factory returns a standalone helper bound to this `Sky` — call
 `.attach(scene)` (or add the returned mesh directly) yourself.
 
-| Method                              | Returns                                                                              |
-| ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `createSun(opts?)`                  | `SkySun` — owns a `DirectionalLight` that auto-tracks every sun-direction change.    |
-| `createGround(opts?)`               | `SkyGround` — a ground plane/sphere auto-sized from `bottomRadius`.                  |
-| `createGroundedSkybox(opts?)`       | `GroundedSkybox` mesh — reprojects the cube's lower hemisphere onto a flat disc.     |
-| `createMoon(opts?)`                 | `SkyMoon` — owns a moonlight `DirectionalLight`; tracks anti-sun + phase by default. |
-| `enableStars(opts?)` (async)        | Lazily creates and enables a `SkyNight` starfield layer; returns the instance.       |
-| `disableStars()` / `setStars*(...)` | Control the `SkyNight` instance once created (see `sky.stars`).                      |
+| Method                                    | Returns                                                                                                                 |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `createSun(opts?)`                        | `SkySun` — owns a `DirectionalLight` that auto-tracks every sun-direction change.                                       |
+| `createGround(opts?)`                     | `SkyGround` — a ground plane/sphere auto-sized from `bottomRadius`.                                                     |
+| `createGroundedSkybox(opts?)`             | `GroundedSkybox` mesh — reprojects the cube's lower hemisphere onto a flat disc.                                        |
+| `createMoon(opts?)`                       | `SkyMoon` — owns a moonlight `DirectionalLight`; tracks anti-sun + phase by default.                                    |
+| `enableStars(opts?)` (async)              | Creates/updates the night sky (star sprites + Milky Way); returns the `SkyNight`. See [Night sky](../guides/night-sky). |
+| `disableStars()` / `setStarsIntensity(v)` | Hide the night sky / scale the stars once created (see `sky.stars`).                                                    |
 
 ## `presets`
 

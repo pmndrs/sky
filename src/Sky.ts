@@ -1,4 +1,4 @@
-import { Color, NoToneMapping, Vector3 } from 'three/webgpu'
+import { Color, Matrix4, NoToneMapping, Vector3 } from 'three/webgpu'
 import { uniform } from 'three/tsl'
 
 import { SkyAtmosphereBaker } from './sky/SkyAtmosphereBaker'
@@ -6,6 +6,7 @@ import { GroundedSkybox } from './sky/GroundedSkybox'
 import { SkyGround } from './sky/SkyGround'
 import { SkyMoon } from './sky/SkyMoon'
 import { SkyNight } from './sky/SkyNight'
+import { celestialOrientation } from './sky/stars/celestial'
 import { SkySun } from './sky/SkySun'
 import { mergeAtmosphereParams } from './core/AtmosphereParams'
 import { LUT_RESOLUTIONS } from './core/resolutions'
@@ -14,7 +15,9 @@ import { resolveLook, resolveLookTrack, sampleLookTrack } from './looks'
 
 import type { Look, LookInput, LookKeyframe, LookTrack } from './looks'
 import { applyHaze, policyToHazeMode } from './applyHaze'
-import { solarPosition } from './solarPosition'
+import { localSiderealTime, solarPosition } from './solarPosition'
+
+import type { SkyNightOptions } from './sky/SkyNight'
 
 /** Per-track scalar overrides for `Sky.setLookTrack`. */
 export interface LookTrackOverrides {
@@ -110,7 +113,7 @@ export class Sky {
   /** Set by `applyHaze` — signals that the AP LUT has a consumer and needs
    *  its per-frame `updateAerialPerspective()` refresh. */
   _hazeApplied?: boolean
-  _night?: any
+  _night?: SkyNight
 
   constructor(
     renderer: any,
@@ -215,6 +218,7 @@ export class Sky {
     if (!scene) return
     if (scene.environment === this._baker.environmentTexture) scene.environment = null
     if (scene.background === this._baker.texture) scene.background = null
+    this._night?._detachStars()
     this._scene = null
   }
 
@@ -225,6 +229,8 @@ export class Sky {
     this._scene = scene
     scene.environment = baker.environmentTexture
     scene.background = baker.texture
+    // Stars are sprites in the main scene, not part of the bake.
+    this._night?._attachStars()
     return this
   }
 
@@ -328,6 +334,7 @@ export class Sky {
       // Re-emit the current azimuth through the new offset — unless the last
       // sun was set `raw`, in which case there is no offset to apply.
       this.setSunDirection({ elevation: this._elevation, azimuth: this._azimuth, raw: this._sunRaw })
+      this._refreshStarOrientation()
     }
 
     return this
@@ -512,6 +519,8 @@ export class Sky {
       this._scene.environment = this.baker.environmentTexture
     }
 
+    if (this._night && camera) this._night.update(camera, this._renderer.getPixelRatio?.() ?? 1)
+
     return this
   }
 
@@ -604,32 +613,32 @@ export class Sky {
   }
 
   /**
-   * Opt into the night-sky stars layer. Default source is `'procedural'` —
-   * a shader-generated starfield with zero asset cost. Pass
-   * `{ source: 'hdri', url }` (or `{ texture }`) to use a real HDR sky
-   * map for a photoreal Milky Way look.
+   * Opt into the night sky: resolved stars (PSF sprites added to the attached
+   * scene) and the Milky Way (a glow map baked into the cube with the rest of
+   * the sky). Both are placed from this sky's `timeOfDay`, `dayOfYear`,
+   * `latitude` and `north`, dimmed toward the horizon by transmittance, hidden
+   * by the planet, and fade in through twilight by contrast against the sky.
    *
-   * Stars fade naturally with twilight (attenuated by camera→space
-   * transmittance) and flow into the IBL automatically via the cube bake.
+   * Needs `sky.update(camera)` each frame (the sprites follow the camera).
+   * Idempotent — calling again updates in place. Returns the `SkyNight`
+   * instance (`setIntensity`, `setSize`, `setTwinkle`, `setContrast`,
+   * `setMilkyWay`, `setMilkyWayContrast`, `setMilkyWayTexture`, `disable`,
+   * `dispose`).
    *
-   * Returns the `SkyNight` instance for further control (`setIntensity`,
-   * `setSource`, `setDensity`, `setBrightness`, `setRotation`, `disable`,
-   * `dispose`). Idempotent — calling again updates in place.
-   *
-   * @param {object} [opts] see `SkyNight.enable` for full schema.
-   * @returns {Promise<SkyNight>}
+   * Async for API stability; generating the procedural Milky Way map takes
+   * ~120 ms on first enable.
    */
-  async enableStars(opts?: any) {
-    if (!this._night) this._night = new SkyNight(this)
-    const night = this._night
-    await night.enable(opts)
-    return night
+  async enableStars(options?: SkyNightOptions) {
+    // Read through the guarded accessor so a disposed sky throws.
+    void this.baker
+    if (!this._night) {
+      this._night = new SkyNight(this)
+      this._refreshStarOrientation()
+    }
+    return this._night.enable(options)
   }
 
-  /**
-   * Hide stars without unloading the texture. Re-show via `enableStars()`
-   * (cheap — texture stays bound) or `setStarsIntensity( > 0 )`.
-   */
+  /** Hide stars and the Milky Way. `enableStars()` brings them back. */
   disableStars() {
     if (this._night) this._night.disable()
     return this
@@ -640,32 +649,26 @@ export class Sky {
     return this
   }
 
-  setStarsRotation(radians: number) {
-    if (this._night) this._night.setRotation(radians)
-    return this
-  }
-
-  setStarsDensity(value: number) {
-    if (this._night) this._night.setDensity(value)
-    return this
-  }
-
-  setStarsBrightness(value: number) {
-    if (this._night) this._night.setBrightness(value)
-    return this
-  }
-
-  setStarsSource(source: string) {
-    if (this._night) this._night.setSource(source)
-    return this
-  }
-
   get stars() {
     return this._night || null
   }
 
+  /** Re-derive the equatorial → world rotation from time, date, latitude and north. */
+  _refreshStarOrientation() {
+    if (!this._night) return
+    const orientation = celestialOrientation(
+      {
+        latitude: this._latitude,
+        siderealTime: localSiderealTime({ timeOfDay: this._timeOfDay, dayOfYear: this._dayOfYear }),
+        northOffsetDeg: NORTH_AXES[this._northKey]?.offsetDeg ?? 0,
+      },
+      _orientation,
+    )
+    this._night._setOrientation(orientation)
+  }
+
   /**
-   * Detach, free the stars texture (if loaded), dispose the baker and drop the
+   * Detach, remove the stars and free the Milky Way map, dispose the baker and drop the
    * haze uniforms. Idempotent and terminal: afterwards access to `baker` and
    * methods that rely on it throw, while the haze and star setters become
    * no-ops. Helpers from `createSun` / `createGround` /
@@ -695,8 +698,11 @@ export class Sky {
       dayOfYear: this._dayOfYear,
     })
     this.setSunDirection({ elevation, azimuth })
+    this._refreshStarOrientation()
   }
 }
+
+const _orientation = new Matrix4()
 
 function applyShortcutScalars(base: any, { turbidity, groundAlbedo }: { turbidity?: number; groundAlbedo?: any }) {
   if (turbidity == null && groundAlbedo == null) return base

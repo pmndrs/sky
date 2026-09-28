@@ -8,6 +8,13 @@ export { SkyMoon } from './sky/SkyMoon'
 export { SkyGround } from './sky/SkyGround'
 export { GroundedSkybox } from './sky/GroundedSkybox'
 export { SkyNight } from './sky/SkyNight'
+export type { SkyNightOptions } from './sky/SkyNight'
+export { SkyStars } from './sky/SkyStars'
+export type { SkyStarsOptions } from './sky/SkyStars'
+export { generateMilkyWayTexture } from './sky/stars/milkyWay'
+export type { MilkyWayTextureOptions } from './sky/stars/milkyWay'
+export { generateStarCatalog } from './sky/stars/catalog'
+export type { StarCatalog, StarCatalogOptions } from './sky/stars/catalog'
 export { applyHaze } from './applyHaze'
 export { presets, resolvePreset } from './presets'
 export {
@@ -36,7 +43,7 @@ export type {
   PackedLook,
   ColorInput,
 } from './looks'
-export { solarPosition } from './solarPosition'
+export { solarPosition, solarEquatorial, localSiderealTime } from './solarPosition'
 export { EARTH, mergeAtmosphereParams } from './core/AtmosphereParams'
 
 // Power-user surface — kept exported so callers can swap pieces without

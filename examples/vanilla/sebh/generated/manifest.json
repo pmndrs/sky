@@ -1,0 +1,806 @@
+{
+  "source": {
+    "repo": "https://github.com/sebh/UnrealEngineSkyAtmosphere.git",
+    "commit": "183ead5bdacc701b3b626347a680a2f3cd3d4fbd"
+  },
+  "patches": [
+    {
+      "file": "Resources/RenderSkyRayMarching.hlsl",
+      "find": "viewZenithSinAngle * sqrt(1.0 - lightViewCosAngle * lightViewCosAngle),",
+      "replace": "viewZenithSinAngle * sqrt(max(0.0, 1.0 - lightViewCosAngle * lightViewCosAngle)),",
+      "why": "SkyViewLutPS: the last LUT column maps to lightViewCosAngle = -(1+ε) once fromSubUvsToUnit(191.5/192) rounds above 1 (it does through Slang/Metal), so sqrt goes NaN and bilinear filtering spreads it across the anti-sun sky."
+    },
+    {
+      "file": "Resources/RenderSkyRayMarching.hlsl",
+      "find": "SunDir = normalize(float3(sqrt(1.0 - sunZenithCosAngle * sunZenithCosAngle), 0.0, sunZenithCosAngle));",
+      "replace": "SunDir = normalize(float3(sqrt(max(0.0, 1.0 - sunZenithCosAngle * sunZenithCosAngle)), 0.0, sunZenithCosAngle));",
+      "why": "SkyViewLutPS: same NaN when dot(up, sun) rounds above 1 (sun at the zenith)."
+    }
+  ],
+  "slang": "2026.18.3",
+  "flags": "-target wgsl -matrix-layout-row-major -fvk-b-shift 0 all -fvk-t-shift 10 all -fvk-s-shift 30 all -fvk-u-shift 40 all -warnings-disable 39029,39001,15400,30081",
+  "entries": {
+    "ScreenTriangleVS": {
+      "file": "ScreenTriangleVS.wgsl",
+      "entry": "ScreenTriangleVertexShader",
+      "stage": "vertex",
+      "defines": {},
+      "bindings": []
+    },
+    "TransmittanceLutPS": {
+      "file": "TransmittanceLutPS.wgsl",
+      "entry": "RenderTransmittanceLutPS",
+      "stage": "fragment",
+      "defines": {},
+      "bindings": [
+        {
+          "binding": 1,
+          "name": "SKYATMOSPHERE_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SKYATMOSPHERE_BUFFER_std140_0"
+        },
+        {
+          "binding": 0,
+          "name": "CONSTANT_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_CONSTANT_BUFFER_std140_0"
+        },
+        {
+          "binding": 12,
+          "name": "TransmittanceLutTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 30,
+          "name": "samplerLinearClamp",
+          "kind": "sampler",
+          "type": "sampler"
+        }
+      ]
+    },
+    "MultiScattCS": {
+      "file": "MultiScattCS.wgsl",
+      "entry": "NewMultiScattCS",
+      "stage": "compute",
+      "defines": {
+        "ILLUMINANCE_IS_ONE": 1
+      },
+      "bindings": [
+        {
+          "binding": 1,
+          "name": "SKYATMOSPHERE_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SKYATMOSPHERE_BUFFER_std140_0"
+        },
+        {
+          "binding": 0,
+          "name": "CONSTANT_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_CONSTANT_BUFFER_std140_0"
+        },
+        {
+          "binding": 12,
+          "name": "TransmittanceLutTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 30,
+          "name": "samplerLinearClamp",
+          "kind": "sampler",
+          "type": "sampler"
+        },
+        {
+          "binding": 40,
+          "name": "OutputTexture",
+          "kind": "storageTexture",
+          "type": "texture_storage_2d<rgba16float, write>"
+        }
+      ]
+    },
+    "SkyViewLutPS": {
+      "file": "SkyViewLutPS.wgsl",
+      "entry": "SkyViewLutPS",
+      "stage": "fragment",
+      "defines": {
+        "MULTISCATAPPROX_ENABLED": 1
+      },
+      "bindings": [
+        {
+          "binding": 1,
+          "name": "SKYATMOSPHERE_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SKYATMOSPHERE_BUFFER_std140_0"
+        },
+        {
+          "binding": 0,
+          "name": "CONSTANT_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_CONSTANT_BUFFER_std140_0"
+        },
+        {
+          "binding": 12,
+          "name": "TransmittanceLutTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 30,
+          "name": "samplerLinearClamp",
+          "kind": "sampler",
+          "type": "sampler"
+        },
+        {
+          "binding": 16,
+          "name": "MultiScatTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        }
+      ]
+    },
+    "CameraVolumeSlicePS": {
+      "file": "CameraVolumeSlicePS.wgsl",
+      "entry": "CameraVolumeSlicePS",
+      "stage": "fragment",
+      "defines": {
+        "MULTISCATAPPROX_ENABLED": 1
+      },
+      "bindings": [
+        {
+          "binding": 2,
+          "name": "SliceCB",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SliceCB_std140_0"
+        },
+        {
+          "binding": 1,
+          "name": "SKYATMOSPHERE_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SKYATMOSPHERE_BUFFER_std140_0"
+        },
+        {
+          "binding": 0,
+          "name": "CONSTANT_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_CONSTANT_BUFFER_std140_0"
+        },
+        {
+          "binding": 12,
+          "name": "TransmittanceLutTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 30,
+          "name": "samplerLinearClamp",
+          "kind": "sampler",
+          "type": "sampler"
+        },
+        {
+          "binding": 16,
+          "name": "MultiScatTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        }
+      ]
+    },
+    "RayMarchingFastPS": {
+      "file": "RayMarchingFastPS.wgsl",
+      "entry": "RenderRayMarchingPS",
+      "stage": "fragment",
+      "defines": {
+        "MULTISCATAPPROX_ENABLED": 1,
+        "FASTSKY_ENABLED": 1,
+        "FASTAERIALPERSPECTIVE_ENABLED": 1
+      },
+      "bindings": [
+        {
+          "binding": 1,
+          "name": "SKYATMOSPHERE_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SKYATMOSPHERE_BUFFER_std140_0"
+        },
+        {
+          "binding": 0,
+          "name": "CONSTANT_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_CONSTANT_BUFFER_std140_0"
+        },
+        {
+          "binding": 14,
+          "name": "ViewDepthTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 13,
+          "name": "SkyViewLutTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 30,
+          "name": "samplerLinearClamp",
+          "kind": "sampler",
+          "type": "sampler"
+        },
+        {
+          "binding": 17,
+          "name": "AtmosphereCameraScatteringVolume",
+          "kind": "texture",
+          "type": "texture_3d<f32>"
+        }
+      ]
+    },
+    "RayMarchingFullPS": {
+      "file": "RayMarchingFullPS.wgsl",
+      "entry": "RenderRayMarchingPS",
+      "stage": "fragment",
+      "defines": {
+        "MULTISCATAPPROX_ENABLED": 1,
+        "FASTSKY_ENABLED": 0,
+        "FASTAERIALPERSPECTIVE_ENABLED": 0
+      },
+      "bindings": [
+        {
+          "binding": 1,
+          "name": "SKYATMOSPHERE_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SKYATMOSPHERE_BUFFER_std140_0"
+        },
+        {
+          "binding": 0,
+          "name": "CONSTANT_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_CONSTANT_BUFFER_std140_0"
+        },
+        {
+          "binding": 14,
+          "name": "ViewDepthTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 12,
+          "name": "TransmittanceLutTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 30,
+          "name": "samplerLinearClamp",
+          "kind": "sampler",
+          "type": "sampler"
+        },
+        {
+          "binding": 16,
+          "name": "MultiScatTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        }
+      ]
+    },
+    "PathTracingPS": {
+      "file": "PathTracingPS.wgsl",
+      "entry": "RenderPathTracingPS",
+      "stage": "fragment",
+      "defines": {
+        "TRANSMITANCE_METHOD": 2,
+        "GROUND_GI_ENABLED": 0,
+        "MULTISCATAPPROX_ENABLED": 0,
+        "SHADOWMAP_ENABLED": 0
+      },
+      "bindings": [
+        {
+          "binding": 1,
+          "name": "SKYATMOSPHERE_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SKYATMOSPHERE_BUFFER_std140_0"
+        },
+        {
+          "binding": 0,
+          "name": "CONSTANT_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_CONSTANT_BUFFER_std140_0"
+        },
+        {
+          "binding": 11,
+          "name": "BlueNoise2dTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 14,
+          "name": "ViewDepthTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 12,
+          "name": "TransmittanceLutTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 30,
+          "name": "samplerLinearClamp",
+          "kind": "sampler",
+          "type": "sampler"
+        }
+      ]
+    },
+    "PathTracingGroundGiPS": {
+      "file": "PathTracingGroundGiPS.wgsl",
+      "entry": "RenderPathTracingPS",
+      "stage": "fragment",
+      "defines": {
+        "TRANSMITANCE_METHOD": 2,
+        "GROUND_GI_ENABLED": 1,
+        "MULTISCATAPPROX_ENABLED": 0,
+        "SHADOWMAP_ENABLED": 0
+      },
+      "bindings": [
+        {
+          "binding": 1,
+          "name": "SKYATMOSPHERE_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_SKYATMOSPHERE_BUFFER_std140_0"
+        },
+        {
+          "binding": 0,
+          "name": "CONSTANT_BUFFER",
+          "kind": "uniform",
+          "type": "SLANG_ParameterGroup_CONSTANT_BUFFER_std140_0"
+        },
+        {
+          "binding": 11,
+          "name": "BlueNoise2dTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 12,
+          "name": "TransmittanceLutTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 30,
+          "name": "samplerLinearClamp",
+          "kind": "sampler",
+          "type": "sampler"
+        },
+        {
+          "binding": 14,
+          "name": "ViewDepthTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        }
+      ]
+    },
+    "ApplySkyAtmospherePS": {
+      "file": "ApplySkyAtmospherePS.wgsl",
+      "entry": "ApplySkyAtmospherePS",
+      "stage": "fragment",
+      "defines": {},
+      "bindings": [
+        {
+          "binding": 12,
+          "name": "PathtracingLuminanceTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 13,
+          "name": "PathtracingTransmittanceTexture",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        }
+      ]
+    },
+    "PostProcessPS": {
+      "file": "PostProcessPS.wgsl",
+      "entry": "PostProcessPS",
+      "stage": "fragment",
+      "defines": {},
+      "bindings": [
+        {
+          "binding": 10,
+          "name": "texture2d",
+          "kind": "texture",
+          "type": "texture_2d<f32>"
+        }
+      ]
+    }
+  },
+  "cbuffers": {
+    "CONSTANT_BUFFER": {
+      "binding": 0,
+      "size": 160,
+      "fields": {
+        "gViewProjMat": {
+          "offset": 0,
+          "size": 64,
+          "kind": "matrix",
+          "scalar": "float32"
+        },
+        "gColor": {
+          "offset": 64,
+          "size": 16,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 4
+        },
+        "gSunIlluminance": {
+          "offset": 80,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "gScatteringMaxPathDepth": {
+          "offset": 92,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "gResolution": {
+          "offset": 96,
+          "size": 8,
+          "kind": "vector",
+          "scalar": "uint32",
+          "count": 2
+        },
+        "gFrameTimeSec": {
+          "offset": 104,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "gTimeSec": {
+          "offset": 108,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "gMouseLastDownPos": {
+          "offset": 112,
+          "size": 8,
+          "kind": "vector",
+          "scalar": "uint32",
+          "count": 2
+        },
+        "gFrameId": {
+          "offset": 120,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "uint32"
+        },
+        "gTerrainResolution": {
+          "offset": 124,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "uint32"
+        },
+        "gScreenshotCaptureActive": {
+          "offset": 128,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "RayMarchMinMaxSPP": {
+          "offset": 136,
+          "size": 8,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 2
+        },
+        "pad": {
+          "offset": 144,
+          "size": 8,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 2
+        }
+      }
+    },
+    "SKYATMOSPHERE_BUFFER": {
+      "binding": 1,
+      "size": 704,
+      "fields": {
+        "solar_irradiance": {
+          "offset": 0,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "sun_angular_radius": {
+          "offset": 12,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "absorption_extinction": {
+          "offset": 16,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "mu_s_min": {
+          "offset": 28,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "rayleigh_scattering": {
+          "offset": 32,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "mie_phase_function_g": {
+          "offset": 44,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "mie_scattering": {
+          "offset": 48,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "bottom_radius": {
+          "offset": 60,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "mie_extinction": {
+          "offset": 64,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "top_radius": {
+          "offset": 76,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "mie_absorption": {
+          "offset": 80,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "pad00": {
+          "offset": 92,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "ground_albedo": {
+          "offset": 96,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "pad0": {
+          "offset": 108,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "rayleigh_density": {
+          "offset": 112,
+          "size": 48,
+          "kind": "array",
+          "scalar": "float32",
+          "count": 3
+        },
+        "mie_density": {
+          "offset": 160,
+          "size": 48,
+          "kind": "array",
+          "scalar": "float32",
+          "count": 3
+        },
+        "absorption_density": {
+          "offset": 208,
+          "size": 48,
+          "kind": "array",
+          "scalar": "float32",
+          "count": 3
+        },
+        "TRANSMITTANCE_TEXTURE_WIDTH": {
+          "offset": 256,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "TRANSMITTANCE_TEXTURE_HEIGHT": {
+          "offset": 260,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "IRRADIANCE_TEXTURE_WIDTH": {
+          "offset": 264,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "IRRADIANCE_TEXTURE_HEIGHT": {
+          "offset": 268,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "SCATTERING_TEXTURE_R_SIZE": {
+          "offset": 272,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "SCATTERING_TEXTURE_MU_SIZE": {
+          "offset": 276,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "SCATTERING_TEXTURE_MU_S_SIZE": {
+          "offset": 280,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "SCATTERING_TEXTURE_NU_SIZE": {
+          "offset": 284,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "int32"
+        },
+        "SKY_SPECTRAL_RADIANCE_TO_LUMINANCE": {
+          "offset": 288,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "pad3": {
+          "offset": 300,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "SUN_SPECTRAL_RADIANCE_TO_LUMINANCE": {
+          "offset": 304,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "pad4": {
+          "offset": 316,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "gSkyViewProjMat": {
+          "offset": 320,
+          "size": 64,
+          "kind": "matrix",
+          "scalar": "float32"
+        },
+        "gSkyInvViewProjMat": {
+          "offset": 384,
+          "size": 64,
+          "kind": "matrix",
+          "scalar": "float32"
+        },
+        "gSkyInvProjMat": {
+          "offset": 448,
+          "size": 64,
+          "kind": "matrix",
+          "scalar": "float32"
+        },
+        "gSkyInvViewMat": {
+          "offset": 512,
+          "size": 64,
+          "kind": "matrix",
+          "scalar": "float32"
+        },
+        "gShadowmapViewProjMat": {
+          "offset": 576,
+          "size": 64,
+          "kind": "matrix",
+          "scalar": "float32"
+        },
+        "camera": {
+          "offset": 640,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "pad5": {
+          "offset": 652,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "sun_direction": {
+          "offset": 656,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "pad6": {
+          "offset": 668,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "view_ray": {
+          "offset": 672,
+          "size": 12,
+          "kind": "vector",
+          "scalar": "float32",
+          "count": 3
+        },
+        "pad7": {
+          "offset": 684,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "MultipleScatteringFactor": {
+          "offset": 688,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "MultiScatteringLUTRes": {
+          "offset": 692,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "pad9": {
+          "offset": 696,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        },
+        "pad10": {
+          "offset": 700,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "float32"
+        }
+      }
+    },
+    "SliceCB": {
+      "binding": 2,
+      "size": 16,
+      "fields": {
+        "gSlice": {
+          "offset": 0,
+          "size": 4,
+          "kind": "scalar",
+          "scalar": "uint32"
+        }
+      }
+    }
+  }
+}

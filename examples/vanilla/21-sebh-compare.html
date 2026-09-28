@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>21 — Hillaire's reference vs @pmndrs/sky</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #stage,
+      #his,
+      #ours {
+        position: absolute;
+        inset: 0;
+      }
+      #his canvas,
+      #ours canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #overlay {
+        position: absolute;
+        inset: 0;
+        cursor: grab;
+        touch-action: none;
+      }
+      #overlay.dragging {
+        cursor: grabbing;
+      }
+      #overlay.split-hover {
+        cursor: col-resize;
+      }
+      #divider {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        margin-left: -1px;
+        background: rgba(255, 255, 255, 0.85);
+        pointer-events: none;
+      }
+      .label {
+        position: absolute;
+        top: 8px;
+        padding: 4px 8px;
+        background: rgba(0, 0, 0, 0.55);
+        font-size: 12px;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #info {
+        position: absolute;
+        left: 8px;
+        bottom: 8px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.65);
+        font:
+          11px/1.45 ui-monospace,
+          Menlo,
+          monospace;
+        white-space: pre;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #probe {
+        position: absolute;
+        width: 13px;
+        height: 13px;
+        margin: -7px 0 0 -7px;
+        border: 1px solid #fff;
+        border-radius: 50%;
+        box-shadow: 0 0 0 1px #000;
+        pointer-events: none;
+        z-index: 5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="his"><canvas id="hiscanvas"></canvas></div>
+      <div id="ours"></div>
+      <div id="divider"></div>
+      <div id="overlay"></div>
+      <div id="probe"></div>
+      <div class="label" id="labelL" style="left: 8px">
+        Hillaire 2020 — his HLSL, unmodified (Slang → WGSL), his host logic
+      </div>
+      <div class="label" id="labelR" style="right: 8px">@pmndrs/sky</div>
+      <div id="info">loading…</div>
+    </div>
+
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { pass, uniform, float, vec3, vec4, exp, pow, renderOutput, Fn } from 'three/tsl'
+      import GUI from 'three/addons/libs/lil-gui.module.min.js'
+
+      import { Sky } from '@pmndrs/sky'
+      import { EARTH } from '@sky/core/AtmosphereParams'
+      import {
+        SebhReference,
+        SEBH_EARTH,
+        SEBH_WHITE_POINT,
+        SEBH_EXPOSURE,
+        sebhDirection,
+      } from './sebh/SebhReference.js'
+      import { readRenderTarget, flipY, ratioStats, meanAbsDeviation, windowMean, heatmaps } from './sebh/compare.js'
+
+      const params = new URLSearchParams(location.search)
+      const KM = 1000
+      const DPR = +(params.get('dpr') || 1)
+
+      // ------------------------------------------------------------------
+      // Shared state, in his parameterisation (Game.cpp): camera height and
+      // "forward" (backwards along the view, km), view pitch/yaw and sun
+      // elevation/azimuth in degrees — azimuth from +Y toward +X.
+      // ------------------------------------------------------------------
+      const VIEWS = {
+        1: {
+          label: 'his default — ground, facing a 25.8° sun',
+          height: 0.5,
+          forward: -1,
+          pitch: 0,
+          yaw: 0,
+          sunEl: 25.78,
+          sunAz: 0,
+        },
+        2: { label: 'ground, back to the sun', height: 0.5, forward: -1, pitch: 10, yaw: 180, sunEl: 25.78, sunAz: 0 },
+        3: { label: 'ground, zenith (pitch 80°)', height: 0.5, forward: 0, pitch: 80, yaw: 90, sunEl: 45, sunAz: 0 },
+        4: { label: 'sunset — sun 2°', height: 0.5, forward: -1, pitch: 5, yaw: 0, sunEl: 2, sunAz: 0 },
+        5: { label: 'twilight — sun −4°', height: 0.5, forward: -1, pitch: 5, yaw: 0, sunEl: -4, sunAz: 0 },
+        6: { label: '30 km, sun 25.8°', height: 30, forward: 0, pitch: -5, yaw: 30, sunEl: 25.78, sunAz: 0 },
+        7: { label: 'space — 400 km', height: 400, forward: 0, pitch: -35, yaw: 0, sunEl: 20, sunAz: 60 },
+      }
+      const state = {
+        height: 0.5,
+        forward: -1,
+        pitch: 0,
+        yaw: 0,
+        sunEl: 25.78,
+        sunAz: 0,
+        fovY: 66.6,
+        illuminance: 1, // his mSunIlluminanceScale ≡ our luminanceScale
+        groundAlbedo: 0, // his Earth
+        sunDisc: true,
+      }
+      const setView = (n) => {
+        const v = VIEWS[n]
+        if (!v) return
+        const { label, ...rest } = v
+        Object.assign(state, rest)
+      }
+      setView(params.get('view') || '1')
+
+      const ui = {
+        mode: params.get('mode') || 'split', // split | his | ours | diff
+        method: params.get('method') || 'lut', // his side: lut | raymarch | pathtrace
+        viewPreset: params.get('view') || '1',
+        display: 'his curve', // ours: 'his curve' | 'shipped demo (LS 40, ACES 0.5)'
+        split: 0.5,
+        diffGain: 4,
+        pathMaxDepth: 12,
+      }
+
+      // ------------------------------------------------------------------
+      // His side
+      // ------------------------------------------------------------------
+      const hisCanvas = document.getElementById('hiscanvas')
+      const sebh = await SebhReference.create({ canvas: hisCanvas })
+
+      // ------------------------------------------------------------------
+      // Our side — same setup as 20-bruneton-compare: live per-pixel sky mesh,
+      // no geometry, tone curve applied explicitly in the output node.
+      // ------------------------------------------------------------------
+      const renderer = new THREE.WebGPURenderer({ antialias: false })
+      renderer.setPixelRatio(DPR)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.toneMapping = THREE.NoToneMapping
+      renderer.outputColorSpace = THREE.LinearSRGBColorSpace
+      document.getElementById('ours').appendChild(renderer.domElement)
+      await renderer.init()
+
+      // His world is Z-up and left-handed (LookAtLH). Swapping y and z is a
+      // reflection, which is exactly what maps his LH screen onto three's RH
+      // one: same pixel ↔ same direction, sun on the same side.
+      const toThree = ([x, y, z], s = 1) => new THREE.Vector3(x * s, z * s, y * s)
+      const bottomRadiusM = EARTH.bottomRadius * KM
+      const planetCenter = new THREE.Vector3(0, -bottomRadiusM, 0)
+
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        exposure: state.illuminance,
+        sunDisc: true,
+        groundAlbedo: state.groundAlbedo,
+        sunDirection: { elevation: state.sunEl, azimuth: state.sunAz, raw: true },
+        enableAerialPerspective: false,
+      })
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+      scene.background = null
+      const skyMesh = sky.baker.createSkyMesh()
+      scene.add(skyMesh)
+      const camera = new THREE.PerspectiveCamera(state.fovY, window.innerWidth / window.innerHeight, 1, 4e7)
+
+      const scenePass = pass(scene, camera)
+      const post = new THREE.RenderPipeline(renderer)
+      post.outputColorTransform = false
+      const exposureU = uniform(SEBH_EXPOSURE)
+      const whiteU = uniform(new THREE.Vector3(...SEBH_WHITE_POINT))
+      const displayU = uniform(0)
+      post.outputNode = Fn(() => {
+        const lin = scenePass.getTextureNode().rgb
+        // PostProcess.hlsl: pow(1 - exp(-L / white_point * exposure), 1/2.2)
+        const his = pow(float(1.0).sub(exp(lin.div(whiteU).mul(exposureU).negate())), vec3(1.0 / 2.2))
+        const aces = renderOutput(vec4(lin, 1.0), THREE.ACESFilmicToneMapping, THREE.SRGBColorSpace).rgb
+        return vec4(displayU.lessThan(0.5).select(his, aces), 1.0)
+      })()
+
+      const applyDisplay = () => {
+        const shipped = ui.display !== 'his curve'
+        displayU.value = shipped ? 1 : 0
+        renderer.toneMappingExposure = shipped ? 0.5 : 1
+        sky.setExposure(shipped ? 40 : state.illuminance)
+      }
+
+      // ------------------------------------------------------------------
+      // Push shared state into both renderers
+      // ------------------------------------------------------------------
+      const cameraZup = () => {
+        const viewDir = sebhDirection(state.pitch, state.yaw)
+        const position = [
+          viewDir[0] * state.forward,
+          viewDir[1] * state.forward,
+          state.height + viewDir[2] * state.forward,
+        ]
+        // His "forward" moves the camera back along the view ray, vertical part
+        // included, so a steep pitch can put it underground — where his shaders
+        // return a flat colour and ours clamp to the surface. Keep it above ground.
+        position[2] = Math.max(0.01, position[2])
+        return { viewDir, position }
+      }
+      const applyState = () => {
+        const { viewDir, position } = cameraZup()
+        const sun = sebhDirection(state.sunEl, state.sunAz)
+
+        sebh.setCamera({ position, viewDir, fovYDeg: state.fovY })
+        sebh.setSun(sun)
+        sebh.sunIlluminance = state.illuminance
+        sebh.showSunDisc = state.sunDisc
+        sebh.pathMaxDepth = ui.pathMaxDepth
+        sebh.setAtmosphere({ groundAlbedo: [state.groundAlbedo, state.groundAlbedo, state.groundAlbedo] })
+
+        camera.fov = state.fovY
+        camera.position.copy(toThree(position, KM))
+        camera.up.set(0, 1, 0)
+        camera.lookAt(camera.position.clone().add(toThree(viewDir)))
+        camera.updateProjectionMatrix()
+        skyMesh.position.copy(camera.position)
+        // setFromSphericalCoords(1, 90° − el, az) = (cos el sin az, sin el, cos el cos az) = toThree(sun)
+        sky.setSunDirection({ elevation: state.sunEl, azimuth: state.sunAz, raw: true })
+        sky.setSunDisc(state.sunDisc)
+        if (ui.display === 'his curve') sky.setExposure(state.illuminance)
+        if (sky.baker.atmosphereParams.groundAlbedo.x !== state.groundAlbedo) sky.setGroundAlbedo(state.groundAlbedo)
+        sky.update(camera, { planetCenter })
+      }
+
+      // ------------------------------------------------------------------
+      // Layout: split / his / ours / diff (diff is drawn on his canvas)
+      // ------------------------------------------------------------------
+      const applyMode = () => {
+        const oursEl = document.getElementById('ours')
+        const divider = document.getElementById('divider')
+        if (ui.mode === 'split') {
+          const x = Math.round(ui.split * window.innerWidth)
+          oursEl.style.clipPath = `inset(0 0 0 ${x}px)`
+          divider.style.display = 'block'
+          divider.style.left = `${x}px`
+        } else {
+          oursEl.style.clipPath = ui.mode === 'ours' ? 'none' : 'inset(0 0 0 100%)'
+          divider.style.display = 'none'
+        }
+        const m = { lut: 'Sky-View LUT + AP volume', raymarch: 'per-pixel raymarch', pathtrace: 'path tracer' }[
+          ui.method
+        ]
+        document.getElementById('labelL').textContent =
+          ui.mode === 'diff'
+            ? `|his − ours| × ${ui.diffGain} (after each side's display curve)`
+            : `Hillaire 2020 — his HLSL, unmodified — ${m}`
+        document.getElementById('labelL').style.display = ui.mode === 'ours' ? 'none' : ''
+        document.getElementById('labelR').style.display = ui.mode === 'his' || ui.mode === 'diff' ? 'none' : ''
+      }
+
+      const resize = () => {
+        const w = window.innerWidth
+        const h = window.innerHeight
+        renderer.setSize(w, h)
+        camera.aspect = w / h
+        camera.updateProjectionMatrix()
+        sebh.resize(Math.round(w * DPR), Math.round(h * DPR))
+        applyMode()
+      }
+      window.addEventListener('resize', resize)
+      resize()
+      applyDisplay()
+
+      // ------------------------------------------------------------------
+      // Readback. Both sides are compared in linear radiance per unit sun
+      // illuminance: his HDR buffer / gSunIlluminance, ours scene pass /
+      // luminanceScale — no tone-curve inversion, no 8-bit quantisation.
+      // ------------------------------------------------------------------
+      let oursFrameFlip = null
+      const readBoth = async () => {
+        const his = await sebh.readFrame(ui.method)
+        let ours = await readRenderTarget(renderer, scenePass.renderTarget, sebh.width, sebh.height)
+        // Row order of three's render target vs his texture: settle it once
+        // from content rather than assume it.
+        if (oursFrameFlip === null) oursFrameFlip = meanAbsDeviation(his, flipY(ours)) < meanAbsDeviation(his, ours)
+        if (oursFrameFlip) ours = flipY(ours)
+        const hs = 1 / state.illuminance
+        const os = 1 / (ui.display === 'his curve' ? state.illuminance : 40)
+        for (let i = 0; i < his.data.length; i++) {
+          his.data[i] *= hs
+          ours.data[i] *= os
+        }
+        return { his, ours }
+      }
+
+      /** @param {{x:number,y:number,name?:string}[]} points normalised screen coords */
+      const probeHdr = async (points, radius = 2) => {
+        const { his, ours } = await readBoth()
+        return points.map((p) => {
+          const x = Math.floor(p.x * his.width)
+          const y = Math.floor(p.y * his.height)
+          const h = windowMean(his, x, y, radius)
+          const o = windowMean(ours, x, y, radius)
+          return { ...p, his: h, ours: o, ratio: o.map((v, i) => v / h[i]) }
+        })
+      }
+
+      // LUT-level parity: same atmosphere, sun and camera height on both sides,
+      // texel for texel. Needs his LUTs to be current, i.e. method 'lut'.
+      let lutFlip = {}
+      const lutParity = async ({ images = false } = {}) => {
+        const b = sky.baker
+        const pairs = {
+          transmittance: [sebh.transmittance, b.transmittanceLUT.renderTarget],
+          multiScattering: [sebh.multiScat, b.multiScatterLUT.renderTarget],
+          skyView: [sebh.skyView, b.skyViewLUT.renderTarget],
+        }
+        const out = { flipped: {}, stats: {}, images: {} }
+        for (const [name, [hisTex, ourRt]] of Object.entries(pairs)) {
+          const his = await sebh.readTexture(hisTex)
+          let ours = await readRenderTarget(renderer, ourRt)
+          if (ours.width !== his.width || ours.height !== his.height) {
+            out.stats[name] = {
+              error: `size mismatch: his ${his.width}×${his.height}, ours ${ours.width}×${ours.height}`,
+            }
+            continue
+          }
+          if (lutFlip[name] === undefined)
+            lutFlip[name] = meanAbsDeviation(his, flipY(ours)) < meanAbsDeviation(his, ours)
+          if (lutFlip[name]) ours = flipY(ours)
+          out.flipped[name] = lutFlip[name]
+          if (name === 'skyView') {
+            // his Sky-View LUT carries gSunIlluminance; ours is per unit illuminance
+            for (let i = 0; i < his.data.length; i++) his.data[i] /= state.illuminance
+            const H = his.height
+            out.stats[name] = {
+              all: ratioStats(his, ours),
+              aboveHorizon: ratioStats(his, ours, { where: (x, y) => y < H / 2 }),
+              belowHorizon: ratioStats(his, ours, { where: (x, y) => y >= H / 2 }),
+              horizonBand: ratioStats(his, ours, { where: (x, y) => y >= H / 2 - 6 && y < H / 2 }),
+              zenithRows: ratioStats(his, ours, { where: (x, y) => y < 8 }),
+              towardSun: ratioStats(his, ours, { where: (x, y) => x < 24 && y < H / 2 }),
+              awayFromSun: ratioStats(his, ours, { where: (x, y) => x >= his.width - 24 && y < H / 2 }),
+            }
+          } else {
+            out.stats[name] = { all: ratioStats(his, ours) }
+          }
+          if (images) out.images[name] = heatmaps(his, ours)
+        }
+        return out
+      }
+
+      // ------------------------------------------------------------------
+      // Controls: drag = view, ctrl/⌘/alt + drag = sun, wheel = height,
+      // 1–7 views, shift+click moves the probe, drag near the divider = split.
+      // ------------------------------------------------------------------
+      const overlay = document.getElementById('overlay')
+      const probeEl = document.getElementById('probe')
+      const probe = { x: 0.5, y: 0.3 }
+      let drag = null
+      let prev = { x: 0, y: 0 }
+      const nearDivider = (x) => ui.mode === 'split' && Math.abs(x - ui.split * window.innerWidth) < 8
+      overlay.addEventListener('contextmenu', (e) => e.preventDefault())
+      overlay.addEventListener('pointerdown', (e) => {
+        overlay.setPointerCapture(e.pointerId)
+        prev = { x: e.clientX, y: e.clientY }
+        if (e.shiftKey) {
+          probe.x = e.clientX / window.innerWidth
+          probe.y = e.clientY / window.innerHeight
+          drag = null
+          return
+        }
+        drag = nearDivider(e.clientX) ? 'split' : e.ctrlKey || e.metaKey || e.altKey ? 'sun' : 'camera'
+        overlay.classList.add('dragging')
+      })
+      overlay.addEventListener('pointermove', (e) => {
+        overlay.classList.toggle('split-hover', !drag && nearDivider(e.clientX))
+        if (!drag) return
+        const dx = e.clientX - prev.x
+        const dy = e.clientY - prev.y
+        if (drag === 'sun') {
+          state.sunEl = Math.max(-10, Math.min(90, state.sunEl - dy * 0.1))
+          state.sunAz -= dx * 0.2
+        } else if (drag === 'camera') {
+          state.pitch = Math.max(-80, Math.min(80, state.pitch + dy * 0.15))
+          state.yaw -= dx * 0.15
+        } else if (drag === 'split') {
+          ui.split = Math.max(0.02, Math.min(0.98, e.clientX / window.innerWidth))
+          applyMode()
+        }
+        prev = { x: e.clientX, y: e.clientY }
+      })
+      overlay.addEventListener('pointerup', () => {
+        drag = null
+        overlay.classList.remove('dragging')
+      })
+      overlay.addEventListener(
+        'wheel',
+        (e) => {
+          e.preventDefault()
+          state.height = Math.max(0.01, Math.min(20000, state.height * (e.deltaY > 0 ? 1.05 : 1 / 1.05)))
+        },
+        { passive: false },
+      )
+      window.addEventListener('keydown', (e) => {
+        if (e.target !== document.body || !VIEWS[e.key]) return
+        setView(e.key)
+        ui.viewPreset = e.key
+      })
+
+      // ------------------------------------------------------------------
+      // GUI
+      // ------------------------------------------------------------------
+      const gui = new GUI({ title: 'Hillaire reference vs @pmndrs/sky' })
+      const fView = gui.addFolder('View (both sides)')
+      fView.add(ui, 'mode', ['split', 'his', 'ours', 'diff']).onChange(applyMode).listen()
+      fView
+        .add(ui, 'method', sebh.canPathTrace ? ['lut', 'raymarch', 'pathtrace'] : ['lut', 'raymarch'])
+        .name('his method')
+        .onChange(applyMode)
+        .listen()
+      fView.add(ui, 'viewPreset', Object.keys(VIEWS)).name('view (1–7)').onChange(setView).listen()
+      fView.add(state, 'height', 0.01, 1000, 0.01).name('height (km)').listen()
+      fView.add(state, 'pitch', -80, 80, 0.1).name('view pitch (°)').listen()
+      fView.add(state, 'yaw', -180, 180, 0.1).name('view yaw (°)').listen()
+      fView.add(state, 'sunEl', -10, 90, 0.01).name('sun elevation (°)').listen()
+      fView.add(state, 'sunAz', -180, 180, 0.1).name('sun azimuth (°)').listen()
+      fView.add(ui, 'diffGain', 1, 32, 1).onChange(applyMode)
+
+      const fAtmo = gui.addFolder('Atmosphere & display')
+      fAtmo.add(state, 'illuminance', 0.1, 100, 0.1).name('sun illuminance (both)').listen()
+      fAtmo.add(state, 'groundAlbedo', 0, 1, 0.01).name('ground albedo (both; his 0)')
+      fAtmo.add(state, 'sunDisc')
+      fAtmo
+        .add(ui, 'display', ['his curve', 'shipped demo (LS 40, ACES 0.5)'])
+        .name('ours display')
+        .onChange(applyDisplay)
+      fAtmo.add(ui, 'pathMaxDepth', 1, 32, 1).name('path tracer max depth')
+
+      // ------------------------------------------------------------------
+      // Frame loop
+      // ------------------------------------------------------------------
+      const info = document.getElementById('info')
+      let paused = false
+      let frame = 0
+      let lastProbe = null
+      let probing = false
+      let fps = 0
+      let fpsT = performance.now()
+      let fpsN = 0
+      const drawFrame = () => {
+        applyState()
+        post.render()
+        sebh.render(ui.method)
+        sebh.present(ui.mode === 'diff' ? { diffAgainst: renderer.domElement, gain: ui.diffGain } : {})
+      }
+      const fmt = (a, d = 4) => a.map((v) => (Number.isFinite(v) ? v.toExponential(d - 1) : 'n/a')).join(' ')
+      const updateHud = () => {
+        const p = paused ? null : lastProbe
+        info.textContent =
+          (paused ? 'scripted' : `${fps.toFixed(0)} fps`) +
+          ` · his method ${ui.method}` +
+          (ui.method === 'pathtrace' ? ` (${sebh.pathTracedSamples} spp)` : '') +
+          ` · height ${state.height.toFixed(2)} km · sun ${state.sunEl.toFixed(2)}°/${state.sunAz.toFixed(1)}°` +
+          `\nprobe (${(probe.x * 100).toFixed(0)}%, ${(probe.y * 100).toFixed(0)}%) — linear, per unit sun illuminance · shift+click to move` +
+          (p
+            ? `\n  his  ${fmt(p.his)}\n  ours ${fmt(p.ours)}\n  ours/his ${p.ratio.map((v) => v.toFixed(3)).join(' ')}`
+            : '') +
+          (sebh.errors.length ? `\nhis WebGPU errors: ${sebh.errors.length} (see console)` : '')
+        probeEl.style.left = `${probe.x * 100}%`
+        probeEl.style.top = `${probe.y * 100}%`
+        probeEl.style.display = paused ? 'none' : ''
+      }
+      renderer.setAnimationLoop(() => {
+        if (paused) return
+        drawFrame()
+        frame++
+        fpsN++
+        const now = performance.now()
+        if (now - fpsT > 500) {
+          fps = (fpsN * 1000) / (now - fpsT)
+          fpsN = 0
+          fpsT = now
+        }
+        if (frame % 15 === 0 && !probing) {
+          probing = true
+          probeHdr([probe], 1)
+            .then(([p]) => (lastProbe = p))
+            .finally(() => (probing = false))
+        }
+        updateHud()
+        if (frame === 3) window.__ready = true
+      })
+
+      // Scripted access (scripts/verify-sebh.mjs). Scripted calls pause the
+      // loop so nothing moves between a render and its readback.
+      window.__cmp = {
+        state,
+        ui,
+        sky,
+        sebh,
+        renderer,
+        VIEWS,
+        EARTH,
+        SEBH_EARTH,
+        setView: (n) => {
+          setView(String(n))
+          ui.viewPreset = String(n)
+        },
+        setMode: (m) => {
+          ui.mode = m
+          applyMode()
+        },
+        setDisplay: (d) => {
+          ui.display = d
+          applyDisplay()
+        },
+        pause: (v = true) => (paused = v),
+        /** Render both sides `n` times (path tracer: n more samples) and wait for the GPU. */
+        renderFrames: async (n = 1) => {
+          // A viewport change fires 'resize' asynchronously; never render or
+          // read back across it.
+          if (
+            sebh.width !== Math.round(window.innerWidth * DPR) ||
+            sebh.height !== Math.round(window.innerHeight * DPR)
+          )
+            resize()
+          applyMode()
+          for (let i = 0; i < n; i++) {
+            drawFrame()
+            if (i % 16 === 15) await sebh.device.queue.onSubmittedWorkDone()
+          }
+          await sebh.device.queue.onSubmittedWorkDone()
+          updateHud()
+        },
+        probeHdr,
+        lutParity,
+        get oursFrameFlip() {
+          return oursFrameFlip
+        },
+        get errors() {
+          return sebh.errors
+        },
+      }
+    </script>
+  </body>
+</html>

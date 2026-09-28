@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "sebh:build": "node scripts/build-sebh-wgsl.mjs",
+    "sebh:verify": "node scripts/verify-sebh.mjs"
   },
   "dependencies": {
     "@pmndrs/sky": "workspace:*",

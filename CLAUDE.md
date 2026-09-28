@@ -407,6 +407,35 @@ page ran at 120 fps. Use the burst method in `examples/vanilla/16-stars-bench.ht
 divide). And the number that matters for time-of-day animation: a sun-change
 re-bake is ~9 ms, ~95% of it PMREM — not the LUTs, not the cube faces.
 
+### His code runs here now — check against it before arguing about brightness (2026-09-28)
+
+`examples/vanilla/21-sebh-compare.html` runs Hillaire's HLSL unmodified next to
+ours: Slang compiles it to WGSL (`scripts/build-sebh-wgsl.mjs`, output committed
+under `sebh/generated/`), and `sebh/SebhReference.js` stands in for his D3D11
+host on its own `GPUDevice`. It includes **his path tracer** as ground truth.
+`pnpm --filter @pmndrs/sky-example-vanilla sebh:verify` gates on the
+Transmittance and Multi-scattering LUTs matching texel for texel (they do,
+1.000 and 0.999). If those fail, the harness is broken, not the sky. Findings:
+`research/sebh-reference-2026-09-28.md`.
+
+Traps hit while building it:
+
+- **His Sky-View LUT goes NaN on Metal.** `sqrt(1 − lightViewCosAngle²)` in
+  `SkyViewLutPS` is unclamped, and the last column rounds to |cos| > 1, so
+  bilinear filtering smears NaN across the anti-sun sky. The build patches
+  it (listed in `manifest.json`). Our port always had the clamp.
+- **His transmittance pass declares the LUT it writes as an input.** D3D
+  leaves a null SRV there; WebGPU rejects the usage conflict. Bind a zero
+  texture.
+- **His "forward" camera offset includes the vertical component**, so a steep
+  pitch puts the camera underground: his shaders return one flat colour
+  and ours clamp. That looked like a 2× mismatch.
+- **`readRenderTargetPixelsAsync` returns rows padded to 256 bytes.**
+  `sebh/compare.js#readRenderTarget` handles the stride.
+- **Compare his path tracer at 4096 spp.** It converges there (within 1% of
+  8192); his comment that its RNG "goes super wrong after a while" didn't
+  show up at these counts.
+
 ### The benign `<!DOCTYPE` JSON parse error
 
 Every page logs `Uncaught (in promise) SyntaxError: Unexpected token '<'`
@@ -471,3 +500,5 @@ blocked on r3f-canary/three-webgpu build interop).
   one sun and one tone curve; `scripts/verify-bruneton.mjs` writes a
   per-pixel ours/his radiance report. Use it before trusting any brightness
   or colour change. Findings live in `research/bruneton-audit-2026-09-26.md`.
+  To see what Hillaire's code actually renders, use `21-sebh-compare.html`
+  rather than reading the HLSL (see the section above).

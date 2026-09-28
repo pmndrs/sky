@@ -75,6 +75,35 @@ just a camera-height comparison.
 > must re-render every frame the camera moves, regardless of any other dirty state. Call it explicitly each frame if
 > you've wired `applyHaze`.
 
+## Environment (PMREM) refresh
+
+"PMREM" in the table above means the IBL refresh is **scheduled**, not run
+inline. three r185's `PMREMGenerator` prefilters with GGX importance sampling
+at a fixed 512 samples per texel over about ten roughness levels. That is
+~7 ms on an Apple M-series GPU and it is latency-bound, so a smaller cube
+barely helps. Sky lighting changes slowly, so the baker's `PmremScheduler`:
+
+- **throttles**: while the sky keeps changing, a refresh starts at most every
+  `minInterval` ms (default 250). When changes stop, the final state is
+  refreshed on the next frame, so the IBL never stays stale;
+- **time-slices**: each refresh filters `levelsPerFrame` roughness levels per
+  frame (default 1) into a scratch target and copies into the persistent
+  target when complete. The result is identical to a whole bake, and
+  `environmentTexture` never changes identity;
+- bakes the **first** environment synchronously, so frame one has IBL.
+
+```js
+new Sky(renderer, { pmrem: { minInterval: 250, levelsPerFrame: 1 } }) // defaults
+new Sky(renderer, { pmrem: { minInterval: 0, levelsPerFrame: Infinity } }) // old behaviour
+sky.flushEnvironment() // finish any pending refresh now (screenshots, hard cuts)
+```
+
+Measured with the sun moving every frame (headless Chromium, Apple M-series):
+the old whole bake cost 7.7 ms mean / 17 ms max per update; the defaults cost
+1.0 ms mean / 3.1 ms max. The cube background itself (`texture`) still
+re-bakes on every change; only the IBL lags, by at most `minInterval` plus
+about ten frames.
+
 ## Sun and camera
 
 ### `setSun({ elevation, azimuth })`

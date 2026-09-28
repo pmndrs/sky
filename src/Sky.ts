@@ -14,6 +14,7 @@ import { presets, resolvePreset } from './presets'
 import { resolveLook, resolveLookTrack, sampleLookTrack } from './looks'
 
 import type { Look, LookInput, LookKeyframe, LookTrack } from './looks'
+import type { PmremSchedulerOptions } from './sky/PmremScheduler'
 import { applyHaze, policyToHazeMode } from './applyHaze'
 import { createHazeShadowState, disposeHazeShadowState, updateHazeShadowState } from './sky/hazeShadows'
 import type { HazeShadowOptions, HazeShadowState } from './sky/hazeShadows'
@@ -46,6 +47,8 @@ interface SkyOptions {
   enableAerialPerspective?: boolean
   apKmPerSlice?: number
   mirrorBelowHorizon?: boolean
+  /** IBL refresh throttling / time-slicing (`{ minInterval, levelsPerFrame }`). */
+  pmrem?: PmremSchedulerOptions
 }
 
 /**
@@ -159,6 +162,7 @@ export class Sky {
       // you want a clean sky HDRI for IBL. See `SkyAtmosphereBaker`'s
       // constructor JSDoc.
       mirrorBelowHorizon = false,
+      pmrem,
     }: SkyOptions = {},
   ) {
     const baseAtmosphere = resolvePreset(preset)
@@ -175,6 +179,7 @@ export class Sky {
       enableAerialPerspective,
       apKmPerSlice,
       mirrorBelowHorizon,
+      pmrem,
     })
 
     this._renderer = renderer
@@ -565,6 +570,15 @@ export class Sky {
 
     if (this._night && camera) this._night.update(camera, this._renderer.getPixelRatio?.() ?? 1)
 
+    return this
+  }
+
+  /**
+   * Finish any throttled / time-sliced IBL refresh now, so the environment
+   * lighting matches the current sky. Useful before a screenshot.
+   */
+  flushEnvironment() {
+    this.baker.flushPmrem()
     return this
   }
 

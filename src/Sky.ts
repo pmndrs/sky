@@ -15,6 +15,8 @@ import { resolveLook, resolveLookTrack, sampleLookTrack } from './looks'
 
 import type { Look, LookInput, LookKeyframe, LookTrack } from './looks'
 import { applyHaze, policyToHazeMode } from './applyHaze'
+import { createHazeShadowState, disposeHazeShadowState, updateHazeShadowState } from './sky/hazeShadows'
+import type { HazeShadowOptions, HazeShadowState } from './sky/hazeShadows'
 import { localSiderealTime, solarPosition } from './solarPosition'
 
 import type { SkyNightOptions } from './sky/SkyNight'
@@ -122,6 +124,9 @@ export class Sky {
   _hazeRaymarchOnly?: any
   _hazeAltStart?: any
   _hazeAltEnd?: any
+  /** Shadowed-haze state (light + live knobs), created by `applyHaze({ shadows })`
+   *  or `setHazeShadows`. */
+  _hazeShadow?: HazeShadowState
   /** Set by `applyHaze` — signals that the AP LUT has a consumer and needs
    *  its per-frame `updateAerialPerspective()` refresh. */
   _hazeApplied?: boolean
@@ -615,6 +620,24 @@ export class Sky {
   }
 
   /**
+   * Shadowed haze (light shafts): live knobs for the in-scatter the sun's
+   * shadow map removes. Accepts `{ light, samples, maxDistance, strength,
+   * resolution }` (`maxDistance` in metres, `resolution` relative to the
+   * drawing buffer); anything omitted is left as is. `strength: 0` skips the
+   * march at run time.
+   *
+   * The feature is compiled into the haze shader only when `applyHaze` is
+   * called with `shadows` — or after this setter supplied a `light`, in which
+   * case the next `applyHaze` adopts it. Calling this after `applyHaze` without
+   * `shadows` changes nothing on screen until `applyHaze` is called again.
+   */
+  setHazeShadows(options: HazeShadowOptions) {
+    if (!this._hazeShadow) this._hazeShadow = createHazeShadowState(options)
+    else updateHazeShadowState(this._hazeShadow, options)
+    return this
+  }
+
+  /**
    * Convenience: build a `SkySun` bound to this Sky. The returned instance
    * owns a `THREE.DirectionalLight` that auto-tracks every `setSunDirection`
    * / `baker.setSun` via the baker's listener hook. Call `sun.attach(scene)`.
@@ -726,6 +749,8 @@ export class Sky {
     this._baker.dispose()
     this._hazeStrength = this._hazePolicy = this._hazeRaymarchOnly = undefined
     this._hazeAltStart = this._hazeAltEnd = this._cameraFar = undefined
+    disposeHazeShadowState(this._hazeShadow)
+    this._hazeShadow = undefined
     this._apDistanceScale = null
     this._hazeApplied = false
   }

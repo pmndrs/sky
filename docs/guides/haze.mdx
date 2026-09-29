@@ -1,6 +1,6 @@
 ---
 title: Aerial-perspective haze
-description: applyHaze, the AP LUT vs raymarch policies, and the known altitude-banding issue.
+description: applyHaze, the AP LUT vs raymarch policies, light shafts from the sun's shadow map, and the known altitude-banding issue.
 ---
 
 Aerial-perspective ("AP") haze is what makes distant geometry desaturate
@@ -163,6 +163,68 @@ Multiplies both the inscatter colour and the AP alpha (surface-occlusion)
 term. Useful as an art-direction knob independent of the physical
 atmosphere parameters.
 
+## Light shafts (shadowed haze)
+
+Without a shadow term every point of air glows as if the sun reached it, so
+an object's shadow stops at its surface. Pass the shadow-casting light and the
+haze removes the sunlight its shadow map blocks — objects then cast shafts
+through the haze and against the sky:
+
+```js
+renderer.shadowMap.enabled = true
+const sun = sky.createSun({ castShadow: true, shadowMapSize: 4096 })
+sun.attach(scene)
+sun.fitShadowToBox(new THREE.Box3(min, max)) // must enclose the *air* the shafts cross
+
+post.outputNode = sky.applyHaze(scenePass.getTextureNode(), {
+  scenePass,
+  shadows: { light: sun }, // or a THREE.DirectionalLight
+})
+
+sky.setHazeShadows({ samples: 16, strength: 1.5 }) // live, no rebuild
+```
+
+| option        | default | meaning                                                                         |
+| ------------- | ------- | ------------------------------------------------------------------------------- |
+| `light`       | —       | `DirectionalLight` with `castShadow`, or a `SkySun`                             |
+| `samples`     | `32`    | march steps per pixel inside the shadow frustum                                 |
+| `maxDistance` | `20000` | metres from the camera beyond which nothing is marched                          |
+| `strength`    | `1`     | multiplier on the removed light; `0` skips the march                            |
+| `resolution`  | `0.5`   | march resolution vs the drawing buffer; depth-aware upsample keeps edges intact |
+
+How it works: the view ray is clipped to the light's shadow frustum (an
+orthographic box), marched through the shadow map with per-pixel jitter, and
+the single-scattered sunlight in shadow — `T(camera→x) · σₛ·phase · T(x→sun)`
+— is removed. That is the term SebH's `IntegrateScatteredLuminance` multiplies
+by `getShadow`; multiple scattering stays unshadowed, as in his reference. Sky
+pixels lose the absolute amount; geometry loses the same _fraction_ of its AP
+in-scatter, so the result agrees with the AP LUT instead of fighting its depth
+slices. Rays that never enter the frustum are untouched, and leaving `shadows`
+out compiles nothing.
+
+Things to know:
+
+- **The frustum is the effect's extent.** Outside the shadow camera's box
+  everything counts as lit, so a tight caster-only frustum gives short,
+  clipped shafts. Size it to the air you want shafted; `SkySun.fitShadowToBox`
+  handles the light-space fit (refit after the sun moves).
+- **The shadow map must exist.** three allocates it when a lit material that
+  can receive the light is compiled, and only with `renderer.shadowMap.enabled`.
+  Until then the shafts are simply off; nothing errors.
+- **Physical magnitude.** At `strength: 1` the removed light is the physical
+  single-scattering share, so shafts are clearest looking toward a low sun
+  (Mie forward peak) and over long shadowed paths. Against Bruneton's
+  reference scene (1 km sphere, sun 15.5°, `20-reference-compare` view 1) the
+  air in the sphere's shadow reads 0.97–1.16× his radiance with shafts on,
+  1.2–2.1× without. ACES at high exposure compresses the difference — the
+  `22-haze-shadows` example uses AgX 0.35.
+- **Cost** (1080p, 32 samples, most of the frame inside the frustum, Apple
+  GPU via headless Chromium):
+  +0.6–1.1 ms at `resolution: 0.5`, +2.1–3.1 ms at `1` (spread across
+  runs). It scales with the number of
+  pixels whose ray enters the frustum times `samples`.
+- One light, orthographic (`DirectionalLight`) shadows only; no cascades.
+
 ## Known issue: concentric banding at 50–100 km altitude (AP LUT only)
 
 > **Warning:**
@@ -200,7 +262,9 @@ the output node's return value for a diagnostic view instead of the
 composited result — useful when bisecting haze issues:
 
 `'ap-rgb'`, `'ap-alpha'`, `'w'`, `'is-sky'`, `'beyond'`, `'lin-depth'`,
-`'view-z'`, `'rm-rgb'`, `'rm-alpha'`. See `src/sky/HazePostProcess.ts` for
+`'view-z'`, `'rm-rgb'`, `'rm-alpha'`, and with `shadows` on
+`'shadow-occlusion'` (fraction of march samples in shadow) and
+`'shadow-deficit'` (the removed light, ×5). See `src/sky/HazePostProcess.ts` for
 exactly what each mode returns — this is a debug-only surface, not a
 stable part of the public API.
 

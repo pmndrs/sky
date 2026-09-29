@@ -35,9 +35,11 @@ export const fract: any
 export const instanceIndex: any
 export const instancedBufferAttribute: any
 export const int: any
+export const ivec2: any
 export const ivec3: any
 export const length: any
 export const log2: any
+export const log: any
 export const logarithmicDepthToViewZ: any
 export const luminance: any
 export const max: any
@@ -52,8 +54,10 @@ export const positionWorld: any
 export const pow: any
 export const reflect: any
 export const reflector: any
+export const rtt: any
 export const saturate: any
 export const screenSize: any
+export const screenCoordinate: any
 export const select: any
 export const sin: any
 export const smoothstep: any
@@ -62,6 +66,8 @@ export const step: any
 export const sub: any
 export const texture: any
 export const texture3D: any
+export const textureLoad: any
+export const textureSize: any
 export const textureStore: any
 export const time: any
 export const uint: any

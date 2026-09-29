@@ -206,6 +206,9 @@ current status and open work.
 
 ## Changelog
 
+- **Unreleased**
+  - **Sun colour.** `sunColor` option / `setSunColor('neutral' | 'bruneton' | color)` tints sky, haze, sun disc and `createSun()` lights together. Default is a white sun.
+  - **Haze sky mask is exact.** Geometry near the far plane is no longer taken for sky (a black, flickering line along the horizon of a ground plane that runs past `far`). The one-ulp tolerance applies only once `baker.createSkyMesh()` hands out a live sky mesh.
 - **0.3.0**
   - **Fix React Suspense disposal.** Keep the `<Sky>` resource owner mounted while children load assets, preventing `Sky: instance is disposed` errors when StrictMode replays effects. Suspended children now render a null fallback inside `<Sky>`.
   - Add a regression test covering suspended child rendering, layout effects, and passive effects in StrictMode.

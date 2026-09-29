@@ -117,6 +117,7 @@ export class SkyAtmosphereMesh extends Mesh {
   luminanceScale: any
   lookUniforms: ReturnType<typeof createLookUniforms>
   skyLuminanceFactor: any
+  sunColor: any
   /** Last rim softness passed to `setSunAngularRadius` (fraction of the radius). */
   _sunEdgeSoftness = 0.1
   _milkyWayPlaceholder: DataTexture
@@ -353,6 +354,16 @@ export class SkyAtmosphereMesh extends Mesh {
     this.skyLuminanceFactor = uniform(new Vector3(1.0, 1.0, 1.0))
 
     /**
+     * Colour of the sun as a light source (linear RGB, green-normalised).
+     * The LUTs store sky response per unit white sun illuminance, so this
+     * multiplies everything the sun lights: the sky *before* the look, the
+     * sun disc, and (via `applyHaze`) AP inscatter. `SkySun` tints its
+     * DirectionalLight from the same value. Default white = no-op, which is
+     * Hillaire's reference behaviour.
+     */
+    this.sunColor = uniform(new Vector3(1.0, 1.0, 1.0))
+
+    /**
      * Milky Way / unresolved-star glow, driven by `SkyNight`. An equirect
      * texture in GALACTIC coordinates (u = longitude with the galactic centre
      * at 0.5, v = latitude), sampled through `milkyWayMatrix` (world →
@@ -476,6 +487,7 @@ export class SkyAtmosphereMesh extends Mesh {
     const mirrorBelowHorizonU = this.mirrorBelowHorizon
     const lookU = this.lookUniforms
     const skyLuminanceFactorU = this.skyLuminanceFactor
+    const sunColorU = this.sunColor
 
     return Fn(() => {
       // View direction from the camera to this fragment's world position.
@@ -573,6 +585,10 @@ export class SkyAtmosphereMesh extends Mesh {
         skyColor.assign(texture(skyViewTex, lutUv).rgb.mul(luminanceScaleU))
       }
 
+      // Sun colour: the LUTs assume a white sun, so the source colour is a
+      // plain multiply on the scattered light, ahead of any look.
+      skyColor.mulAssign(sunColorU)
+
       // Stylized look remap. Applied here — after the LUT/raymarch branches
       // have merged, and before Milky Way/sun/moon are added — so it covers both
       // sky paths and excludes the discs by construction. Identity while no
@@ -654,7 +670,7 @@ export class SkyAtmosphereMesh extends Mesh {
       // light far more than red, so `tToSpace` skews red and drops in
       // magnitude — see `sunDiscIntensity`'s doc comment for the exposure
       // math this relies on.
-      const sunContribution = tToSpace.mul(sunDiscMask).mul(sunDiscIntensityU)
+      const sunContribution = tToSpace.mul(sunDiscMask).mul(sunDiscIntensityU).mul(sunColorU)
 
       // Moon disc — same shape as the sun disc, separate uniforms so the
       // sun stays unaffected. Constantly "full" — no phase-shaded

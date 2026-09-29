@@ -133,6 +133,7 @@
         Fn,
         pmremTexture,
         normalWorld,
+        positionWorld,
         materialColor,
       } from 'three/tsl'
       import GUI from 'three/addons/libs/lil-gui.module.min.js'
@@ -220,6 +221,11 @@
         // The demos use a fixed intensity 4, which is ~1/7 of this at noon.
         sunLightScale: 1.0,
         hazeStrength: 1.0,
+        // Sky light on the sphere and ground: 'environment' is the library's way
+        // (irradiance from the baked sky, which includes light from below the
+        // horizon); 'hemisphere (his)' is his GetSunAndSkyIrradiance model — see
+        // wireSkyIrradiance.
+        skyLight: 'environment',
         groundAlbedo: BRUNETON_GROUND_ALBEDO,
         multiScatteringFactor: 1.0,
         turbidity: 1.0,
@@ -334,13 +340,33 @@
           reflectivity: 0,
           side: THREE.DoubleSide,
         })
+      // 'hemisphere (his)': sky irradiance of a horizontal surface scaled by
+      // (1 + n·up) / 2, so nothing arrives from below, and on the ground his
+      // closed-form occlusion of the sky by the sphere (GetSkyVisibility).
       const lambertMaterials = []
+      const hisSkyLightU = uniform(0)
+      const planetCenterU = uniform(new THREE.Vector3())
+      const sphereCenterU = uniform(new THREE.Vector3(0, 1 * KM, 0))
       const wireSkyIrradiance = () => {
         const env = sky.baker.environmentTexture
         if (!env) return
         for (const m of lambertMaterials) {
           if (m.userData.envWired === env) continue
-          m.emissiveNode = materialColor.mul(pmremTexture(env, normalWorld, float(1.0)))
+          const envLight = pmremTexture(env, normalWorld, float(1.0))
+          const up = positionWorld.sub(planetCenterU).normalize()
+          const hemisphere = pmremTexture(env, vec3(0, 1, 0), float(1.0)).mul(normalWorld.dot(up).add(1).mul(0.5))
+          let hisLight = hemisphere
+          if (m.userData.skyOccluder) {
+            const p = positionWorld.sub(sphereCenterU)
+            const d = p.length()
+            hisLight = hemisphere.mul(
+              p.y
+                .div(d)
+                .mul(float(KM * KM).div(d.mul(d)))
+                .add(1),
+            )
+          }
+          m.emissiveNode = materialColor.mul(mix(envLight, hisLight, hisSkyLightU))
           m.userData.envWired = env
           m.needsUpdate = true
         }
@@ -390,6 +416,8 @@
         return g
       }
       const groundMat = lambert(0, 0, 0.04)
+      groundMat.userData.skyOccluder = true
+      planetCenterU.value.copy(planetCenter)
       lambertMaterials.push(groundMat)
       const groundCap = new THREE.Mesh(buildCap(bottomRadiusM, 5, 1500 * KM, 200, 128), groundMat)
       groundCap.receiveShadow = true
@@ -525,6 +553,7 @@
       const applyUnits = () => {
         if (ours.units === 'bruneton') {
           sky.setExposure(1)
+          sky.setSunColor('neutral')
           sky.setSkyLuminanceFactor(SOLAR_IRRADIANCE)
           sky.mesh.sunDiscIntensity.value = SOLAR_RADIANCE_G
           sunScale = SOLAR_IRRADIANCE
@@ -532,7 +561,8 @@
           const L = ours.luminanceScale
           const tint = currentTint()
           sky.setExposure(L)
-          sky.setSkyLuminanceFactor(tint)
+          sky.setSunColor(tint)
+          sky.setSkyLuminanceFactor([1, 1, 1])
           sky.mesh.sunDiscIntensity.value = 20 // SkyAtmosphereMesh default
           sunScale = tint.map((t) => L * t)
         }
@@ -687,6 +717,11 @@
       fOurs.add(ours, 'toneExposure', 0.05, 2, 0.01).name('tone exposure (aces/agx/neutral)').onChange(applyTone)
       fOurs.add(ours, 'sunLightScale', 0, 2, 0.01).name('sun light × (E·T)')
       fOurs.add(ours, 'hazeStrength', 0, 2, 0.01).onChange((v) => sky.setHazeStrength(v))
+      const applySkyLight = () => (hisSkyLightU.value = ours.skyLight === 'environment' ? 0 : 1)
+      fOurs
+        .add(ours, 'skyLight', ['environment', 'hemisphere (his)'])
+        .name('sky light on objects')
+        .onChange(applySkyLight)
 
       const fAtmo = gui.addFolder('Ours — atmosphere & scene')
       fAtmo.add(ours, 'atmospherePreset', Object.keys(presets)).onChange(applyAtmosphere)
@@ -923,6 +958,7 @@
         tuningPresets,
         applyUnits,
         applyTone,
+        applySkyLight,
         applyAtmosphere,
         transmittanceToSun,
       }

@@ -30,6 +30,13 @@ import {
 import { applyLook } from '../backends/tsl/look.tsl'
 import { createHazeDepthNodes } from './hazeScenePassDepth'
 
+/**
+ * Depth tolerance that catches a live sky mesh: its `z = w` depth lands one
+ * ulp below 1.0. 1.25 ulps rounds to exactly that value in f32 (1.5 would tie
+ * and round to two).
+ */
+export const LIVE_SKY_DEPTH_EPSILON = 1.25 * 2 ** -24
+
 interface CreateHazeOutputNodeArgs {
   scenePass: any
   /**
@@ -70,6 +77,13 @@ interface CreateHazeOutputNodeArgs {
   /** Y-up world-space up vector (`baker.sky.upVector`). Required with
    *  `lookUniforms`. */
   upVector?: any
+  /** Sun colour applied to AP inscatter before the look
+   *  (`baker.sky.sunColor`), so haze is lit by the same sun as the sky. */
+  sunColor?: any
+  /** Uniform: how far below 1.0 a depth value still counts as sky
+   *  (`baker.skyDepthEpsilon`). 0 for a background, one ulp for a live sky
+   *  mesh. Defaults to the live-sky-mesh value. */
+  skyDepthEpsilon?: any
   /** Per-channel grade applied to AP inscatter after the look
    *  (`baker.sky.skyLuminanceFactor`), so haze matches the graded sky. */
   skyLuminanceFactor?: any
@@ -195,6 +209,8 @@ export function createHazeOutputNode({
   lookUniforms = null,
   upVector = null,
   skyLuminanceFactor = null,
+  skyDepthEpsilon: skyDepthEpsilonNode = null,
+  sunColor = null,
   apDistanceScale = null,
   viewHeightKm = null,
   cameraPositionKm = null,
@@ -246,9 +262,10 @@ export function createHazeOutputNode({
   // whose distance-along-ray exceeds this needs the raymarch fallback.
   const coverageKm = kmPerSlice * resZ
 
-  // Sky-depth tolerance: 4 ulps of a 24-bit depth value below 1.0. A uniform
-  // rather than a literal so the exact f32 survives shader generation.
-  const skyDepthEpsilon = uniform(4 * 2 ** -24)
+  // Sky-depth tolerance below 1.0 (see the sky-pixel test). A uniform rather
+  // than a literal so the exact f32 survives shader generation. Direct callers
+  // that pass nothing get the live-sky-mesh value, which is safe either way.
+  const skyDepthEpsilon = skyDepthEpsilonNode ?? uniform(LIVE_SKY_DEPTH_EPSILON)
 
   return Fn(() => {
     const u = uv()
@@ -326,9 +343,16 @@ export function createHazeOutputNode({
     // Primary test: the raw depth-buffer value. The sky mesh draws with the
     // `z = w` trick, so its depth is 1.0 up to float rounding — measured at
     // one ulp below 1.0 (≈ 1 - 2^-24) on the default depth target, see
-    // `examples/vanilla/20-bruneton-compare.html?dbg=depth`. Anything within
-    // a few ulps of 1.0 is sky. Geometry sits at depth ≈ 1 - near/d, so with
-    // `near` = 1 m this only misclassifies surfaces beyond ~4000 km.
+    // `examples/vanilla/20-bruneton-compare.html?dbg=depth`. A background
+    // (cube or colour) leaves the cleared depth, exactly 1.0.
+    //
+    // The tolerance has a price: geometry close to the far plane lands on the
+    // same depth values and is taken for sky, so it gets no haze and shows its
+    // raw colour (a black line along the horizon of a ground plane that runs
+    // past `far`, flickering as the camera moves). With near 1 m and far
+    // 200 km, 4 ulps swallowed everything past 191 km. So the test is exact
+    // (`>= 1.0`) unless the baker has handed out a live sky mesh, and then it
+    // is a single ulp (`SkyAtmosphereBaker.skyDepthEpsilon`).
     //
     // The two older tests are kept (OR-ed in) for callers that relied on
     // them, but both silently failed for any far plane beyond a few km: with
@@ -509,6 +533,9 @@ export function createHazeOutputNode({
         rmDebugAlpha.assign(rmA)
       })
     }
+
+    // Sun colour, ahead of the look — same order as the sky mesh.
+    if (sunColor) apRgbScaled.mulAssign(sunColor)
 
     // Stylized look retint. Applied to AP inscatter after both the LUT and
     // raymarch paths have merged, so haze agrees with the styled sky rather

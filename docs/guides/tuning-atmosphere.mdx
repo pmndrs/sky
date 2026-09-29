@@ -161,6 +161,35 @@ few degrees above the horizon read about 2× at `0.1` and 3–5× at `0.3`,
 with the whole sky 30–40 % too bright at `0.3`. Use `0` for the cleanest
 horizon, `0.1` for Bruneton-like brightness.
 
+## Sun colour
+
+The sky is computed for a white sun. `sunColor` sets the colour of the sun as
+a light source, and tints everything it lights: the sky, the haze, the sun
+disc and the light of every `sky.createSun()` helper.
+
+```js
+const sky = new Sky(renderer, { sunColor: 'bruneton' })
+
+sky.setSunColor('neutral') // white sun, the default
+sky.setSunColor('bruneton') // (0.797, 1.0, 1.033): less red, a more cyan sky
+sky.setSunColor([1.0, 0.95, 0.9]) // linear RGB
+sky.setSunColor('#fff4e0') // sRGB hex, converted to linear
+```
+
+`'neutral'` matches Hillaire's reference. `'bruneton'` is the solar spectrum
+Bruneton's model uses, normalised to green; it is a small number with a large
+effect, because it shifts the whole sky from blue toward cyan.
+
+Changing it re-bakes the cube and PMREM only, like a sun move. The named
+values are exported as `SUN_COLORS`.
+
+`sunColor` is not the same as `setSkyLuminanceFactor`, which is a grade on the
+sky and haze alone and leaves the sun disc and the light untouched.
+
+A `createSun()` light's colour is its own colour multiplied by the sun
+colour. Set its own colour with `sun.setColor(...)`; a colour written straight
+to `sun.light.color` is replaced on the next `setSunColor`.
+
 ## Direct overrides
 
 ```js

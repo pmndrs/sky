@@ -21,7 +21,9 @@ import { TransmittanceLUT } from './luts/TransmittanceLUT'
 import { MultiScatterLUT } from './luts/MultiScatterLUT'
 import { SkyViewLUT } from './luts/SkyViewLUT'
 import { AerialPerspectiveLUT } from './luts/AerialPerspectiveLUT'
+import { uniform } from 'three/tsl'
 import { SkyAtmosphereMesh } from './SkyAtmosphereMesh'
+import { LIVE_SKY_DEPTH_EPSILON } from './HazePostProcess'
 import type { Look } from '../looks'
 
 import type { AtmosphereParams } from '../core/AtmosphereParams'
@@ -96,6 +98,9 @@ export class SkyAtmosphereBaker {
   _sunVec: Vector3
   _skyViewSunZenith: number
   _sunListeners: Set<(sunVec: Vector3) => void>
+  /** Haze sky-mask tolerance: 0 until `createSkyMesh()` hands out a live sky mesh. */
+  skyDepthEpsilon: any
+  _sunColorListeners: Set<(sunColor: Vector3) => void>
   _camera: PerspectiveCamera | null
   _cameraPositionKm: Vector3
   _cameraUp: Vector3
@@ -239,6 +244,8 @@ export class SkyAtmosphereBaker {
     // Observers fired at the end of setSun(). SkySun uses this to keep a
     // DirectionalLight in lockstep without per-frame polling.
     this._sunListeners = new Set()
+    this.skyDepthEpsilon = uniform(0)
+    this._sunColorListeners = new Set()
 
     // Camera handle, set by setCamera(). Used to refresh per-frame uniforms
     // (viewHeight on SkyView/mesh; matrices on AP LUT).
@@ -536,6 +543,33 @@ export class SkyAtmosphereBaker {
     this.cubeDirty = true
   }
 
+  /**
+   * Colour of the sun as a light source (linear RGB). Uniform on the sky
+   * mesh — tints the sky before the look and the sun disc — so only cube +
+   * PMREM re-bake. Haze shares the uniform via `applyHaze`; `SkySun` follows
+   * through `addSunColorListener`.
+   */
+  setSunColor(color: Vector3 | { x: number; y: number; z: number } | number[]): void {
+    const v = this.sky.sunColor.value as Vector3
+    if (color instanceof Vector3) v.copy(color)
+    else if (Array.isArray(color)) v.fromArray(color)
+    else v.set(color.x, color.y, color.z)
+    this.cubeDirty = true
+
+    for (const fn of this._sunColorListeners) fn(v)
+  }
+
+  /**
+   * Subscribe to sun-colour changes. The listener receives the current
+   * colour by reference — clone it if you need to keep a copy.
+   *
+   * @returns unsubscribe function
+   */
+  addSunColorListener(fn: (sunColor: Vector3) => void): () => void {
+    this._sunColorListeners.add(fn)
+    return () => this._sunColorListeners.delete(fn)
+  }
+
   markCubeDirty(): void {
     this.cubeDirty = true
   }
@@ -583,6 +617,9 @@ export class SkyAtmosphereBaker {
     mesh.renderOrder = -1
 
     if (showSunDisc) this.sky.showSunDisc.value = 1.0
+
+    // A live sky mesh writes depth one ulp below 1.0; let the haze pass see it as sky.
+    this.skyDepthEpsilon.value = LIVE_SKY_DEPTH_EPSILON
 
     return mesh
   }

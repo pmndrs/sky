@@ -211,6 +211,26 @@ intensity and tint from the sky.
   darkens his in-scatter toward the sphere; ours has no equivalent, so
   sphere pixels read up to 1.6× when the camera looks along the shadow.
   Ignore sphere probes for atmosphere questions.
+- **Sky light on the sphere** (added 2026-09-28). His
+  `GetSunAndSkyIrradiance` scales the sky irradiance by `(1 + n·up) / 2`, so
+  nothing arrives from below; ours takes irradiance from the baked
+  environment, lower hemisphere included. The page's `sky light on objects`
+  control switches ours to his model (plus his `GetSkyVisibility` on the
+  ground). View 1, ours ÷ his, red channel:
+
+  | point                   | environment | hemisphere (his) |
+  | ----------------------- | ----------- | ---------------- |
+  | sphere top              | 1.14        | 1.00             |
+  | sphere middle           | 1.69        | 1.23             |
+  | sphere bottom           | 2.49        | 1.68             |
+  | ground outside shadow   | 1.00        | 1.00             |
+  | ground inside shadow    | 1.61        | 1.61             |
+  | ground at sphere's foot | 1.93        | 1.93             |
+
+  What is left sits only on rays that cross the sphere's shadow volume, where
+  in-scatter is most of the pixel (sphere middle: 0.004 surface, 0.019
+  in-scatter). That is the unshadowed haze, tracked on `feat/haze-shadows`.
+  The shadow map itself is fine: the ground shadow has his shape.
 
 ## Things checked that were fine
 

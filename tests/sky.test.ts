@@ -168,4 +168,37 @@ describe('Sky', () => {
     expect(u.chroma.value).toBeCloseTo(0.7, 9)
     sky.dispose()
   })
+
+  it('sun colour defaults to white and leaves a createSun light untouched', () => {
+    const sky = new Sky(mockRenderer())
+    const sun = sky.createSun({ color: 0xff8000 })
+    expect(sky.baker.sky.sunColor.value.toArray()).toEqual([1, 1, 1])
+    expect(sun.light.color.getHex()).toBe(0xff8000)
+    sun.dispose()
+    sky.dispose()
+  })
+
+  it('setSunColor accepts a name or a colour, tints createSun lights and re-bakes the cube', () => {
+    const sky = new Sky(mockRenderer(), { sunColor: 'bruneton' })
+    const tint = sky.baker.sky.sunColor.value
+    expect(tint.x).toBeCloseTo(0.7966, 4)
+    expect(tint.y).toBe(1)
+    expect(tint.z).toBeCloseTo(1.0333, 4)
+
+    // A light created after the colour was set picks it up...
+    const sun = sky.createSun()
+    expect(sun.light.color.r).toBeCloseTo(0.7966, 4)
+    // ...and follows later changes, on top of its own base colour.
+    sun.setColor(new Color(0.5, 0.5, 0.5))
+    sky.baker.cubeDirty = false
+    sky.setSunColor([1, 0.5, 0.25])
+    expect(sky.baker.cubeDirty).toBe(true)
+    expect(sun.light.color.toArray()).toEqual([0.5, 0.25, 0.125])
+
+    // After dispose the light stops listening.
+    sun.dispose()
+    sky.setSunColor('neutral')
+    expect(sun.light.color.toArray()).toEqual([0.5, 0.25, 0.125])
+    sky.dispose()
+  })
 })

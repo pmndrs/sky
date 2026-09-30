@@ -74,8 +74,8 @@ interface CreateHazeOutputNodeArgs {
    *  (`baker.sky.sunColor`), so haze is lit by the same sun as the sky. */
   sunColor?: any
   /** Uniform: how far below 1.0 a depth value still counts as sky
-   *  (`baker.skyDepthEpsilon`). 0 by default: backgrounds leave the cleared
-   *  1.0 and the live sky mesh writes exactly 1.0. */
+   *  (`baker.skyDepthEpsilon`). 0 by default: backgrounds and the live sky
+   *  mesh leave the cleared 1.0. */
   skyDepthEpsilon?: any
   /** Per-channel grade applied to AP inscatter after the look
    *  (`baker.sky.skyLuminanceFactor`), so haze matches the graded sky. */
@@ -256,7 +256,7 @@ export function createHazeOutputNode({
   const coverageKm = kmPerSlice * resZ
 
   // Sky-depth tolerance below 1.0 (see the sky-pixel test); 0 unless a caller
-  // has a far-plane sky that cannot write exactly 1.0.
+  // has a sky that writes a far-plane depth of its own.
   const skyDepthEpsilon = skyDepthEpsilonNode ?? uniform(0)
 
   return Fn(() => {
@@ -332,14 +332,14 @@ export function createHazeOutputNode({
 
     // Sky-pixel detection.
     //
-    // Primary test: the raw depth-buffer value, exactly 1.0. A background
-    // (cube or colour) leaves the cleared depth; the live sky mesh writes 1.0
-    // explicitly (`SkyAtmosphereMesh`, `depthNode`). Its `z = w` depth alone
-    // lands one or more ulps below 1.0 depending on the triangle and the view,
-    // and no tolerance works: 4 ulps swallowed geometry past 191 km at
-    // near 1 m / far 200 km (unhazed black line along the horizon), 1.25 ulps
-    // let whole sky triangles through as geometry mid-drag (hazed triangles
-    // across the sky).
+    // Primary test: the raw depth-buffer value, exactly 1.0. Nothing sky-like
+    // writes depth: a background (cube or colour) and the live sky mesh (drawn
+    // after opaques, depth write off; `SkyAtmosphereMesh`) both leave the
+    // cleared 1.0. A written `z = w` depth lands one or more ulps below 1.0
+    // depending on the triangle and the view, and no tolerance works: 4 ulps
+    // swallowed geometry past 191 km at near 1 m / far 200 km (unhazed black
+    // line along the horizon), 1.25 ulps let whole sky triangles through as
+    // geometry mid-drag (hazed triangles across the sky).
     //
     // The two older tests are kept (OR-ed in) for callers that relied on
     // them, but both silently failed for any far plane beyond a few km: with

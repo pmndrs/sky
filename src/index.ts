@@ -49,7 +49,7 @@ export { EARTH, mergeAtmosphereParams } from './core/AtmosphereParams'
 // Power-user surface — kept exported so callers can swap pieces without
 // vendoring the package.
 export { SkyAtmosphereBaker } from './sky/SkyAtmosphereBaker'
-export { SkyAtmosphereMesh } from './sky/SkyAtmosphereMesh'
+export { SKY_RENDER_ORDER, SkyAtmosphereMesh } from './sky/SkyAtmosphereMesh'
 export { SkyHelper } from './sky/SkyHelper'
 export { createHazeOutputNode } from './sky/HazePostProcess'
 export { LUT_RESOLUTIONS } from './core/resolutions'

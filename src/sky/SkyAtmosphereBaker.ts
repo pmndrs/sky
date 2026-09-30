@@ -22,7 +22,7 @@ import { MultiScatterLUT } from './luts/MultiScatterLUT'
 import { SkyViewLUT } from './luts/SkyViewLUT'
 import { AerialPerspectiveLUT } from './luts/AerialPerspectiveLUT'
 import { uniform } from 'three/tsl'
-import { SkyAtmosphereMesh } from './SkyAtmosphereMesh'
+import { SKY_RENDER_ORDER, SkyAtmosphereMesh } from './SkyAtmosphereMesh'
 import type { Look } from '../looks'
 
 import type { AtmosphereParams } from '../core/AtmosphereParams'
@@ -98,9 +98,9 @@ export class SkyAtmosphereBaker {
   _skyViewSunZenith: number
   _sunListeners: Set<(sunVec: Vector3) => void>
   /**
-   * Haze sky-mask tolerance below depth 1.0. 0: backgrounds leave the cleared
-   * 1.0 and the live sky mesh writes exactly 1.0. Raise it only for a custom
-   * far-plane sky that cannot.
+   * Haze sky-mask tolerance below depth 1.0. 0: backgrounds and the live sky
+   * mesh leave the cleared 1.0. Raise it only for a custom sky that writes a
+   * far-plane depth of its own.
    */
   skyDepthEpsilon: any
   _sunColorListeners: Set<(sunColor: Vector3) => void>
@@ -615,9 +615,10 @@ export class SkyAtmosphereBaker {
     const mesh = new Mesh(this.sky.geometry, this.sky.material)
     mesh.scale.setScalar(scale)
     mesh.frustumCulled = false
-    // Render before opaque geometry so depth writes from the scene cover the
-    // far-plane sky correctly. depthWrite is already off on the material.
-    mesh.renderOrder = -1
+    // Draw after opaque geometry, so the depth test rejects every sky pixel
+    // it hides before shading (see `SkyAtmosphereMesh`). Transparent objects
+    // are a later list in three and still draw over the sky.
+    mesh.renderOrder = SKY_RENDER_ORDER
 
     if (showSunDisc) this.sky.showSunDisc.value = 1.0
 

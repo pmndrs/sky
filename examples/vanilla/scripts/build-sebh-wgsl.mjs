@@ -1,7 +1,7 @@
 /**
  * Compile Sébastien Hillaire's reference HLSL (UnrealEngineSkyAtmosphere, EGSR
  * 2020 — the D3D11 demo Unreal's SkyAtmosphere grew out of) to WGSL with Slang,
- * so it runs unmodified next to @pmndrs/sky in 21-sebh-compare.html.
+ * so it runs unmodified next to @pmndrs/sky in 20-reference-compare.html.
  *
  * His repo is Windows-only because of its D3D11 host, not its shaders. Slang
  * reads the HLSL as-is; the only adaptations are mechanical and live here:
@@ -34,7 +34,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// Pinned inputs. Bump deliberately and re-run scripts/verify-sebh.mjs.
+// Pinned inputs. Bump deliberately and re-run scripts/verify-reference.mjs.
 const SEBH_URL = 'https://github.com/sebh/UnrealEngineSkyAtmosphere.git'
 const SEBH_COMMIT = '183ead5bdacc701b3b626347a680a2f3cd3d4fbd'
 const SLANG_VERSION = '2026.18.3'

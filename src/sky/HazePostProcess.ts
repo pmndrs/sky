@@ -343,7 +343,7 @@ export function createHazeOutputNode({
     // Primary test: the raw depth-buffer value. The sky mesh draws with the
     // `z = w` trick, so its depth is 1.0 up to float rounding — measured at
     // one ulp below 1.0 (≈ 1 - 2^-24) on the default depth target, see
-    // `examples/vanilla/20-bruneton-compare.html?dbg=depth`. A background
+    // `examples/vanilla/20-reference-compare.html?dbg=depth`. A background
     // (cube or colour) leaves the cleared depth, exactly 1.0.
     //
     // The tolerance has a price: geometry close to the far plane lands on the

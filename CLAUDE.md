@@ -321,7 +321,7 @@ show a bright horizon band — that is the technique, not a bug.
 
 ### Reading debug values through the compare page: know what the tone curve wraps
 
-`20-bruneton-compare.html` tone-maps whatever the haze node returns, so the
+`20-reference-compare.html` tone-maps whatever the haze node returns, so the
 library's `?debug=` modes (`w`, `ap-alpha`, `ap-rgb`, `is-sky`, `beyond`) come
 out **through the Bruneton curve**, while the page-local `?dbg=` modes (`depth`,
 `depthenc`, `viewz`, `viewzkm`, `issky`) return **before** it. Decoding a
@@ -409,13 +409,20 @@ re-bake is ~9 ms, ~95% of it PMREM — not the LUTs, not the cube faces.
 
 ### His code runs here now — check against it before arguing about brightness (2026-09-28)
 
-`examples/vanilla/21-sebh-compare.html` runs Hillaire's HLSL unmodified next to
-ours: Slang compiles it to WGSL (`scripts/build-sebh-wgsl.mjs`, output committed
-under `sebh/generated/`), and `sebh/SebhReference.js` stands in for his D3D11
-host on its own `GPUDevice`. It includes **his path tracer** as ground truth.
-`pnpm --filter @pmndrs/sky-example-vanilla sebh:verify` gates on the
-Transmittance and Multi-scattering LUTs matching texel for texel (they do,
-1.000 and 0.999). If those fail, the harness is broken, not the sky. Findings:
+`examples/vanilla/20-reference-compare.html` runs both references next to ours
+in up to three panels (two draggable seams, any source in any panel, solo, or
+a diff of any two): Bruneton's demo.js verbatim, and Hillaire's HLSL compiled
+to WGSL by Slang (`scripts/build-sebh-wgsl.mjs`, output committed under
+`sebh/generated/`, host `sebh/SebhReference.js` on its own `GPUDevice`),
+including **his path tracer** as ground truth (a method on his panel; cheap,
+~0.3 ms per sample at 640×360). One camera and sun (Bruneton's frame and
+orbit views; a free camera for looking up, swapped into his `model_from_view`
+at the GL call — demo.js stays verbatim), one set of units (his spectral
+radiance), one curve (his) — or `display: shipped` for each author's own.
+`pnpm --filter @pmndrs/sky-example-vanilla ref:verify` writes the three-way
+report and gates on Hillaire's Transmittance and Multi-scattering LUTs matching
+ours texel for texel (1.000 / 0.999); if those fail, the harness is broken, not
+the sky. `scripts/probe-reference.mjs` is the step-driven prober. Findings:
 `research/sebh-reference-2026-09-28.md`.
 
 Traps hit while building it:
@@ -496,9 +503,9 @@ blocked on r3f-canary/three-webgpu build interop).
 - Bruneton's precomputed-scattering demo is vendored verbatim under
   `examples/vanilla/public/bruneton/` (his `demo.js` + dumped shaders; the
   16 MB `.dat` tables are gitignored, `scripts/fetch-bruneton.mjs` downloads
-  them). `20-bruneton-compare.html` renders it next to ours with one camera,
-  one sun and one tone curve; `scripts/verify-bruneton.mjs` writes a
-  per-pixel ours/his radiance report. Use it before trusting any brightness
-  or colour change. Findings live in `research/bruneton-audit-2026-09-26.md`.
-  To see what Hillaire's code actually renders, use `21-sebh-compare.html`
-  rather than reading the HLSL (see the section above).
+  them). `20-reference-compare.html` renders it, Hillaire's own code and ours
+  with one camera, one sun and one tone curve; `scripts/verify-reference.mjs`
+  writes a per-pixel three-way radiance report. Use it before trusting any
+  brightness or colour change. Findings live in
+  `research/bruneton-audit-2026-09-26.md` and
+  `research/sebh-reference-2026-09-28.md`.

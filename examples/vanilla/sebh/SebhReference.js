@@ -168,7 +168,9 @@ export class SebhReference {
     this.atmosphere = { ...SEBH_EARTH }
     this.sunDirection = sebhDirection(25.8, 0) // Game.h: uiSunPitch 0.45 rad
     this.camera = { position: [0, 0, 0.5], viewDir: [0, 1, 0], fovYDeg: 66.6, near: 0.1, far: 20000 }
-    this.sunIlluminance = 1 // Game.h: mSunIlluminanceScale
+    // Game.h: mSunIlluminanceScale. A number, or [r, g, b]: gSunIlluminance is a
+    // float3, so a solar spectrum (e.g. Bruneton's) puts his output in its units.
+    this.sunIlluminance = 1
     this.showSunDisc = true
     this.pathMaxDepth = 12 // gScatteringMaxPathDepth; his UI default is 4
     this.rayMarchMinMaxSPP = [4, 14] // Game.h: uiViewRayMarchMin/MaxSPP
@@ -262,7 +264,7 @@ export class SebhReference {
     if (width === this.width && height === this.height) return
     this.width = width
     this.height = height
-    for (const t of [this.hdr, this.depth, this.ptLum, this.ptTrans, this.ldr, this.oursLdr]) t?.destroy()
+    for (const t of [this.hdr, this.depth, this.ptLum, this.ptTrans, this.ldr, ...(this.imports ?? [])]) t?.destroy()
     const d = this.device
     const T = GPUTextureUsage
     const tex = (format, usage, label) => d.createTexture({ size: [width, height], format, usage, label })
@@ -273,8 +275,9 @@ export class SebhReference {
     this.ptLum = tex(PT_FORMAT, T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | T.COPY_SRC, 'sebh PT luminance')
     this.ptTrans = tex(PT_FORMAT, T.RENDER_ATTACHMENT | T.TEXTURE_BINDING, 'sebh PT transmittance')
     if (this.canvas) {
-      this.ldr = tex(this.presentFormat, T.RENDER_ATTACHMENT | T.TEXTURE_BINDING, 'sebh post-processed')
-      this.oursLdr = tex('rgba8unorm', T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | T.COPY_DST, 'ours (for diff)')
+      this.ldr = tex(this.presentFormat, T.RENDER_ATTACHMENT | T.TEXTURE_BINDING, 'sebh display image')
+      const imp = (label) => tex('rgba8unorm', T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | T.COPY_DST, label)
+      this.imports = [imp('diff source A'), imp('diff source B')]
       this.canvas.width = width
       this.canvas.height = height
     }
@@ -339,16 +342,20 @@ export class SebhReference {
     }
     if (this.canvas) {
       this.pipelines.post = frag('PostProcessPS', [{ format: this.presentFormat }])
-      // Page-side presentation (not his code): his post-processed image, or
-      // |his − ours| × gain against a copy of our canvas.
-      const presentModule = d.createShaderModule({ code: PRESENT_WGSL, label: 'present' })
-      this.pipelines.present = d.createRenderPipeline({
-        label: 'present',
-        layout: 'auto',
-        vertex: { module: presentModule, entryPoint: 'vs' },
-        fragment: { module: presentModule, entryPoint: 'fs', targets: [{ format: this.presentFormat }] },
-      })
-      this.presentUniform = d.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+      // Page-side presentation (not his code): an alternative display curve,
+      // and the blit / |A − B| × gain that shows the result.
+      const page = (code, label) => {
+        const module = d.createShaderModule({ code, label })
+        return d.createRenderPipeline({
+          label,
+          layout: 'auto',
+          vertex: { module, entryPoint: 'vs' },
+          fragment: { module, entryPoint: 'fs', targets: [{ format: this.presentFormat }] },
+        })
+      }
+      this.pipelines.curve = page(CURVE_WGSL, 'bruneton curve')
+      this.pipelines.present = page(PRESENT_WGSL, 'present')
+      this.pageUniform = d.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
     }
   }
 
@@ -417,7 +424,11 @@ export class SebhReference {
     this.sunDirection = normalize(directionZup)
   }
 
-  /** @param {{ position?: number[], viewDir?: number[], fovYDeg?: number, near?: number, far?: number }} cam his frame, km */
+  /**
+   * @param {{ position?: number[], viewDir?: number[], up?: number[] | null, fovYDeg?: number, near?: number, far?: number }} cam
+   *   his frame, km. `up` defaults to +Z like his LookAtLH; pass one for views
+   *   along the vertical, where +Z leaves the basis undefined.
+   */
   setCamera(cam) {
     this.camera = { ...this.camera, ...cam, viewDir: normalize(cam.viewDir ?? this.camera.viewDir) }
   }
@@ -425,7 +436,7 @@ export class SebhReference {
   /** Matrices as Game::update builds them (LookAtLH + PerspectiveFovLH, Z-up). */
   _matrices() {
     const { position: eye, viewDir: f, fovYDeg, near, far } = this.camera
-    const up = [0, 0, 1]
+    const up = this.camera.up ?? [0, 0, 1]
     const x = normalize(cross(up, f))
     const y = cross(f, x)
     const view = [
@@ -520,7 +531,7 @@ export class SebhReference {
     })
     const common = (res) => ({
       gColor: [0, 1, 1, 1],
-      gSunIlluminance: [this.sunIlluminance, this.sunIlluminance, this.sunIlluminance],
+      gSunIlluminance: vec3(this.sunIlluminance),
       gScatteringMaxPathDepth: this.pathMaxDepth,
       gResolution: res,
       gFrameId: this._ptFrame,
@@ -648,35 +659,57 @@ export class SebhReference {
   }
 
   /**
-   * Present into the canvas: his PostProcessPS, or |his − ours| × gain.
-   * @param {{ diffAgainst?: CanvasImageSource, gain?: number }} [opts]
+   * Present into the canvas.
+   *
+   * His display image is his PostProcessPS (`curve: 'sebh'`: exposure 10 and
+   * his white point), or Bruneton's demo curve `pow(1 − exp(−L · exposure),
+   * 1/2.2)` with a white point of 1 (`curve: 'bruneton'`), so several
+   * renderers can share one display mapping.
+   *
+   * With `diff`, the canvas shows |A − B| × gain, where each of A and B is
+   * `'sebh'` (this image) or another canvas. Copy a WebGPU canvas in the same
+   * task that rendered it; after that its contents are gone.
+   *
+   * @param {{ curve?: 'sebh' | 'bruneton', exposure?: number,
+   *   diff?: { a: 'sebh' | CanvasImageSource, b: 'sebh' | CanvasImageSource, gain?: number } | null }} [opts]
    */
-  present({ diffAgainst, gain = 4 } = {}) {
+  present({ curve = 'sebh', exposure = 10, diff = null } = {}) {
     if (!this.canvas) return
     const g = this._ensureBindGroups()
     const d = this.device
+    const p = this.pipelines
     const enc = d.createCommandEncoder({ label: 'sebh present' })
-    if (!diffAgainst) {
-      this._fullscreen(enc, this.context.getCurrentTexture().createView(), this.pipelines.post, g.post, {
-        clear: [0, 0, 0, 1],
+    d.queue.writeBuffer(this.pageUniform, 0, new Float32Array([diff?.gain ?? 1, diff ? 1 : 0, exposure, 0]))
+
+    if (curve === 'sebh') {
+      this._fullscreen(enc, this.ldr.createView(), p.post, g.post, { clear: [0, 0, 0, 1] })
+    } else {
+      const bg = d.createBindGroup({
+        layout: p.curve.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: this.hdr.createView() },
+          { binding: 1, resource: { buffer: this.pageUniform } },
+        ],
       })
-      d.queue.submit([enc.finish()])
-      return
+      this._fullscreen(enc, this.ldr.createView(), p.curve, bg, { clear: [0, 0, 0, 1] })
     }
-    d.queue.copyExternalImageToTexture({ source: diffAgainst }, { texture: this.oursLdr }, [this.width, this.height])
-    this._fullscreen(enc, this.ldr.createView(), this.pipelines.post, g.post, { clear: [0, 0, 0, 1] })
-    d.queue.writeBuffer(this.presentUniform, 0, new Float32Array([gain, 0, 0, 0]))
+
+    const view = (src, i) => {
+      if (src === 'sebh') return this.ldr.createView()
+      d.queue.copyExternalImageToTexture({ source: src }, { texture: this.imports[i] }, [this.width, this.height])
+      return this.imports[i].createView()
+    }
+    const a = diff ? view(diff.a, 0) : this.ldr.createView()
+    const b = diff ? view(diff.b, 1) : this.ldr.createView()
     const bg = d.createBindGroup({
-      layout: this.pipelines.present.getBindGroupLayout(0),
+      layout: p.present.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: this.ldr.createView() },
-        { binding: 1, resource: this.oursLdr.createView() },
-        { binding: 2, resource: { buffer: this.presentUniform } },
+        { binding: 0, resource: a },
+        { binding: 1, resource: b },
+        { binding: 2, resource: { buffer: this.pageUniform } },
       ],
     })
-    this._fullscreen(enc, this.context.getCurrentTexture().createView(), this.pipelines.present, bg, {
-      clear: [0, 0, 0, 1],
-    })
+    this._fullscreen(enc, this.context.getCurrentTexture().createView(), p.present, bg, { clear: [0, 0, 0, 1] })
     d.queue.submit([enc.finish()])
   }
 
@@ -740,19 +773,33 @@ export class SebhReference {
   }
 }
 
-// Page-side presentation shader (not part of his code).
-const PRESENT_WGSL = /* wgsl */ `
-@group(0) @binding(0) var his : texture_2d<f32>;
-@group(0) @binding(1) var ours : texture_2d<f32>;
-@group(0) @binding(2) var<uniform> u : vec4<f32>;
+// Page-side shaders (not part of his code). u = (gain, diff?, exposure, 0).
+const FULLSCREEN_VS = /* wgsl */ `
 @vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
   let p = array(vec2(-1.0, -1.0), vec2(-1.0, 3.0), vec2(3.0, -1.0));
   return vec4(p[i], 0.0, 1.0);
 }
+`
+// Bruneton's demo curve (his fragment_shader.txt), white point 1.
+const CURVE_WGSL = /* wgsl */ `
+@group(0) @binding(0) var hdr : texture_2d<f32>;
+@group(0) @binding(1) var<uniform> u : vec4<f32>;
+${FULLSCREEN_VS}
+@fragment fn fs(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
+  let t = textureLoad(hdr, vec2<i32>(pos.xy), 0);
+  let l = t.rgb / select(1.0, t.a, t.a > 0.0);
+  return vec4(pow(vec3(1.0) - exp(-l * u.z), vec3(1.0 / 2.2)), 1.0);
+}
+`
+const PRESENT_WGSL = /* wgsl */ `
+@group(0) @binding(0) var ta : texture_2d<f32>;
+@group(0) @binding(1) var tb : texture_2d<f32>;
+@group(0) @binding(2) var<uniform> u : vec4<f32>;
+${FULLSCREEN_VS}
 @fragment fn fs(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
   let c = vec2<i32>(pos.xy);
-  let a = textureLoad(his, c, 0).rgb;
-  let b = textureLoad(ours, c, 0).rgb;
-  return vec4(abs(a - b) * u.x, 1.0);
+  let a = textureLoad(ta, c, 0).rgb;
+  if (u.y < 0.5) { return vec4(a, 1.0); }
+  return vec4(abs(a - textureLoad(tb, c, 0).rgb) * u.x, 1.0);
 }
 `

@@ -2,8 +2,8 @@
 
 Everything in this directory is Eric Bruneton's, from
 <https://github.com/ebruneton/precomputed_atmospheric_scattering> (BSD-3, see
-`LICENSE`). It is the reference the `20-bruneton-compare.html` example renders
-side-by-side with `@pmndrs/sky`.
+`LICENSE`). It is one of the two references `20-reference-compare.html` renders
+side by side with `@pmndrs/sky` (the other is Hillaire's, see `../../sebh/`).
 
 | File                    | Origin                                                              |
 | ----------------------- | ------------------------------------------------------------------- |

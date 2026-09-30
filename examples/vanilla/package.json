@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "sebh:build": "node scripts/build-sebh-wgsl.mjs",
-    "sebh:verify": "node scripts/verify-sebh.mjs"
+    "ref:verify": "node scripts/verify-reference.mjs"
   },
   "dependencies": {
     "@pmndrs/sky": "workspace:*",

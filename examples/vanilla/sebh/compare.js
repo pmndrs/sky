@@ -1,5 +1,5 @@
 /**
- * Numeric helpers for 21-sebh-compare.html: read our LUTs back, compare two
+ * Numeric helpers for 20-reference-compare.html: read our LUTs back, compare two
  * RGBA float images texel by texel, and render ratio heatmaps.
  */
 

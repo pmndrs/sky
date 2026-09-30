@@ -8,8 +8,9 @@ question with numbers._
 
 His HLSL is compiled to WGSL with Slang (`examples/vanilla/scripts/build-sebh-wgsl.mjs`) and driven by a
 small WebGPU host that reproduces his `Game.cpp` frame (`examples/vanilla/sebh/`).
-`21-sebh-compare.html` renders it next to `@pmndrs/sky` with the same camera and sun, and
-`scripts/verify-sebh.mjs` writes a report. His side offers three methods: his real-time LUT path, a
+It first ran as `21-sebh-compare.html` / `scripts/verify-sebh.mjs` (the numbers below); since 2026-09-30
+it is a panel of `20-reference-compare.html`, next to Bruneton's demo, and `scripts/verify-reference.mjs`
+writes the three-way report. His side offers three methods: his real-time LUT path, a
 per-pixel raymarch, and his **spectral path tracer**, the ground truth his paper validates against.
 
 All ratios are linear, read from float render targets, and per unit sun illuminance. Both sides run

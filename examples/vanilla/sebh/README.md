@@ -3,8 +3,8 @@
 Sébastien Hillaire's [UnrealEngineSkyAtmosphere](https://github.com/sebh/UnrealEngineSkyAtmosphere)
 (EGSR 2020, MIT, © Epic Games) is the demo this library ports. It only runs on Windows, but that's because
 of its D3D11 host, not its shaders. This folder runs **his HLSL, compiled to WGSL** on WebGPU, so
-`21-sebh-compare.html` can put it next to `@pmndrs/sky` with one camera and one sun, and compare the two
-numerically.
+`20-reference-compare.html` can put it next to Bruneton's demo and `@pmndrs/sky` with one camera and one
+sun, and compare the three numerically.
 
 | File                        | What it is                                                                                                                                      |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -13,21 +13,22 @@ numerically.
 | `generated/bluenoise64.bin` | The 64×64 tile of his `bluenoise.exr` that the path tracer reads, as r32f.                                                                      |
 | `CameraVolumeSlice.slang`   | Wrapper that draws his AP volume one slice at a time; WebGPU has no geometry shaders.                                                           |
 | `SebhReference.js`          | The host, standing in for his `Game.cpp` / `RenderSky.cpp`: his constant buffers, his LUT formats, his pass order. Runs on its own `GPUDevice`. |
-| `compare.js`                | Readback and ratio statistics used by the page.                                                                                                 |
+| `compare.js`                | Readback and ratio statistics used by the page (`../reference/` holds the Bruneton and ours panels).                                            |
 
 ## Running it
 
 ```sh
-pnpm --filter @pmndrs/sky-example-vanilla dev        # open /21-sebh-compare.html
-BASE=http://localhost:5173/ pnpm --filter @pmndrs/sky-example-vanilla sebh:verify   # headless report
+pnpm --filter @pmndrs/sky-example-vanilla dev        # open /20-reference-compare.html
+BASE=http://localhost:5173/ pnpm --filter @pmndrs/sky-example-vanilla ref:verify   # headless report
 ```
 
-The page has three reference methods for his side: `lut` (his real-time default: Sky-View LUT plus AP
+His panel has three methods: `lut` (his real-time default: Sky-View LUT plus AP
 volume), `raymarch` (the same shader with both LUT shortcuts off), and `pathtrace` (his spectral path
 tracer, with no multi-scattering approximation). The path tracer is the ground truth, and it needs the
 `float32-blendable` feature.
 
-`scripts/verify-sebh.mjs` writes `scripts/.verify-out/sebh-report.md`. It exits non-zero if the
+`scripts/verify-reference.mjs` writes `scripts/.verify-out/reference-report.md` (`--only sebh` for just his
+sections). It exits non-zero if the
 Transmittance or Multi-scattering LUT stop matching his to within 1%, or if WebGPU reports an error. Those
 two LUTs are ported literally and don't depend on the camera or the sun, so a failure there means the
 harness broke, not the sky. `--strict` also fails when the Sky-View LUT drifts past ±3%.

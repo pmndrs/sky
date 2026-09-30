@@ -1,0 +1,225 @@
+<!doctype html>
+<html>
+  <body>
+    <script type="module">
+      // Phase 1 timing prototype: raw WebGPU compute prefilter for a sky cube.
+      // Source cube (rgba16f, full mip chain) -> output cube with LOD_MIN=3 levels
+      // (the r187 layout: mips 0..log2(size)-3, roughness = 1 - sqrt(1 - lod/maxLod)).
+      const adapter = await navigator.gpu.requestAdapter()
+      const device = await adapter.requestDevice()
+      const FMT = 'rgba16float'
+
+      const COMMON = /* wgsl */ `
+fn faceDir(face: u32, px: vec2<f32>, size: f32) -> vec3<f32> {
+  let uv = (px + 0.5) / size * 2.0 - 1.0;
+  let u = uv.x; let v = uv.y;
+  switch face {
+    case 0u: { return normalize(vec3( 1.0, -v, -u)); }
+    case 1u: { return normalize(vec3(-1.0, -v,  u)); }
+    case 2u: { return normalize(vec3( u,  1.0,  v)); }
+    case 3u: { return normalize(vec3( u, -1.0, -v)); }
+    case 4u: { return normalize(vec3( u, -v,  1.0)); }
+    default: { return normalize(vec3(-u, -v, -1.0)); }
+  }
+}`
+
+      const SKY = /* wgsl */ `${COMMON}
+@group(0) @binding(0) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(1) var<uniform> size: u32;
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= size || id.y >= size) { return; }
+  let d = faceDir(id.z, vec2<f32>(id.xy), f32(size));
+  let sun = normalize(vec3(0.3, 0.25, 0.92));
+  let sky = mix(vec3(1.0, 0.95, 0.85), vec3(0.15, 0.35, 0.9), smoothstep(0.0, 0.6, d.y));
+  let glow = pow(max(dot(d, sun), 0.0), 64.0) * 20.0;
+  let c = mix(vec3(0.08, 0.07, 0.06), sky + glow, smoothstep(-0.02, 0.02, d.y));
+  textureStore(dst, id.xy, id.z, vec4(c, 1.0));
+}`
+
+      const DOWN = /* wgsl */ `
+@group(0) @binding(0) var src: texture_2d_array<f32>;
+@group(0) @binding(1) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(2) var<uniform> size: u32; // dst size
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= size || id.y >= size) { return; }
+  let p = vec2<i32>(id.xy) * 2;
+  let f = i32(id.z);
+  let c = textureLoad(src, p, f, 0) + textureLoad(src, p + vec2(1, 0), f, 0)
+        + textureLoad(src, p + vec2(0, 1), f, 0) + textureLoad(src, p + vec2(1, 1), f, 0);
+  textureStore(dst, id.xy, id.z, c * 0.25);
+}`
+
+      const FILTER = /* wgsl */ `${COMMON}
+struct Level { outSize: u32, samples: u32, roughness: f32, lodBias: f32 }
+@group(0) @binding(0) var src: texture_cube<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(3) var<uniform> L: Level;
+fn hammersley(i: u32, n: u32) -> vec2<f32> {
+  return vec2(f32(i) / f32(n), f32(reverseBits(i)) * 2.3283064365386963e-10);
+}
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= L.outSize || id.y >= L.outSize) { return; }
+  let N = faceDir(id.z, vec2<f32>(id.xy), f32(L.outSize));
+  if (L.roughness <= 0.0) {
+    textureStore(dst, id.xy, id.z, textureSampleLevel(src, samp, N, 0.0));
+    return;
+  }
+  let alpha = L.roughness * L.roughness;
+  let a2 = alpha * alpha;
+  let up = select(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), abs(N.z) < 0.999);
+  let T = normalize(cross(up, N));
+  let B = cross(N, T);
+  var col = vec3(0.0);
+  var w = 0.0;
+  for (var i = 0u; i < L.samples; i++) {
+    let xi = hammersley(i, L.samples);
+    let invQ = 1.0 / ((1.0 - xi.x) + a2 * xi.x);
+    let NdotL = ((1.0 - xi.x) - a2 * xi.x) * invQ;
+    if (NdotL > 0.0) {
+      let phi = xi.y * 6.283185307;
+      let sinT = alpha * 2.0 * sqrt(xi.x * (1.0 - xi.x)) * invQ;
+      let Ld = N * NdotL + (T * cos(phi) + B * sin(phi)) * sinT;
+      let lod = max(log2(a2 * invQ) + L.lodBias, 0.0);
+      col += textureSampleLevel(src, samp, Ld, lod).rgb * NdotL;
+      w += NdotL;
+    }
+  }
+  textureStore(dst, id.xy, id.z, vec4(col / w, 1.0));
+}`
+
+      const mod = (code) => device.createShaderModule({ code })
+      const pipe = (code) =>
+        device.createComputePipeline({ layout: 'auto', compute: { module: mod(code), entryPoint: 'main' } })
+      const skyPipe = pipe(SKY)
+      const downPipe = pipe(DOWN)
+      const filterPipe = pipe(FILTER)
+      const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' })
+      const ubuf = (arr) => {
+        const b = device.createBuffer({
+          size: Math.max(16, arr.byteLength),
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        })
+        device.queue.writeBuffer(b, 0, arr)
+        return b
+      }
+
+      function setup(srcSize, outSize, samples) {
+        const srcMips = Math.log2(srcSize) + 1
+        const src = device.createTexture({
+          size: [srcSize, srcSize, 6],
+          format: FMT,
+          mipLevelCount: srcMips,
+          usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+        })
+        const outMips = Math.log2(outSize) - 3 + 1
+        const out = device.createTexture({
+          size: [outSize, outSize, 6],
+          format: FMT,
+          mipLevelCount: outMips,
+          usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+        })
+        const view2d = (t, mip) => t.createView({ dimension: '2d-array', baseMipLevel: mip, mipLevelCount: 1 })
+        // fill mip 0 once (the sky cube render is a separate, already-cheap cost)
+        const skyBG = device.createBindGroup({
+          layout: skyPipe.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: view2d(src, 0) },
+            { binding: 1, resource: { buffer: ubuf(new Uint32Array([srcSize])) } },
+          ],
+        })
+        const e0 = device.createCommandEncoder()
+        const p0 = e0.beginComputePass()
+        p0.setPipeline(skyPipe)
+        p0.setBindGroup(0, skyBG)
+        p0.dispatchWorkgroups(srcSize / 8, srcSize / 8, 6)
+        p0.end()
+        device.queue.submit([e0.finish()])
+        const downs = []
+        for (let m = 1; m < srcMips; m++) {
+          const s = srcSize >> m
+          downs.push({
+            s,
+            bg: device.createBindGroup({
+              layout: downPipe.getBindGroupLayout(0),
+              entries: [
+                { binding: 0, resource: view2d(src, m - 1) },
+                { binding: 1, resource: view2d(src, m) },
+                { binding: 2, resource: { buffer: ubuf(new Uint32Array([s])) } },
+              ],
+            }),
+          })
+        }
+        const cubeView = src.createView({ dimension: 'cube' })
+        const maxLod = outMips - 1
+        const levels = []
+        for (let lod = 0; lod <= maxLod; lod++) {
+          const s = outSize >> lod
+          const r = 1 - Math.sqrt(1 - lod / maxLod)
+          const lodBias = r > 0 ? Math.log2(srcSize) + 0.5 * Math.log2(6 / (samples * Math.pow(r, 4))) + 0.5 : 0
+          const u = new ArrayBuffer(16)
+          new Uint32Array(u, 0, 2).set([s, samples])
+          new Float32Array(u, 8, 2).set([r, lodBias])
+          levels.push({
+            s,
+            bg: device.createBindGroup({
+              layout: filterPipe.getBindGroupLayout(0),
+              entries: [
+                { binding: 0, resource: cubeView },
+                { binding: 1, resource: sampler },
+                { binding: 2, resource: view2d(out, lod) },
+                { binding: 3, resource: { buffer: ubuf(new Uint8Array(u)) } },
+              ],
+            }),
+          })
+        }
+        return { src, out, downs, levels }
+      }
+
+      function encodeBake(ctx) {
+        const e = device.createCommandEncoder()
+        const p = e.beginComputePass()
+        p.setPipeline(downPipe)
+        for (const d of ctx.downs) {
+          p.setBindGroup(0, d.bg)
+          p.dispatchWorkgroups(Math.ceil(d.s / 8), Math.ceil(d.s / 8), 6)
+        }
+        p.setPipeline(filterPipe)
+        for (const l of ctx.levels) {
+          p.setBindGroup(0, l.bg)
+          p.dispatchWorkgroups(Math.ceil(l.s / 8), Math.ceil(l.s / 8), 6)
+        }
+        p.end()
+        return e.finish()
+      }
+
+      async function time(ctx, n = 40) {
+        for (let i = 0; i < 5; i++) device.queue.submit([encodeBake(ctx)])
+        await device.queue.onSubmittedWorkDone()
+        let t0 = performance.now()
+        const cbs = []
+        for (let i = 0; i < n; i++) cbs.push(encodeBake(ctx))
+        const cpu = (performance.now() - t0) / n
+        t0 = performance.now()
+        for (const cb of cbs) device.queue.submit([cb])
+        await device.queue.onSubmittedWorkDone()
+        return { wall: (performance.now() - t0) / n, cpu }
+      }
+
+      const rows = []
+      for (const size of [256, 128]) {
+        for (const samples of [16, 32, 64, 128, 256]) {
+          const ctx = setup(size, size, samples)
+          const t = await time(ctx)
+          rows.push({ size, samples, gpuWallMs: +t.wall.toFixed(3), encodeMs: +t.cpu.toFixed(3) })
+          ctx.src.destroy()
+          ctx.out.destroy()
+        }
+      }
+      window.__result = rows
+    </script>
+  </body>
+</html>

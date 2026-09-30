@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+  <body>
+    <script type="module">
+      // Phase 2b: candidate plans (FIS for sharp levels, shared-memory
+      // integration for rough ones) vs the brute-force reference, with
+      // honest timing (every GPU object cached; a bake only records dispatches).
+      import { initDevice, Lab, errStats, roughnessOf } from './lab.js'
+
+      const device = await initDevice()
+      const lab = new Lab(device)
+      const SRC = 256
+      const OUT = 256
+      const MAXLOD = Math.log2(OUT) - 3
+
+      const PLANS = {
+        'D2: fis 64/128 + integ16 x3': [{}, { fis: 64 }, { fis: 128 }, { integ: 16 }, { integ: 16 }, { integ: 16 }],
+        'D2b: same, bias -1': [
+          {},
+          { fis: 64, bias: -1 },
+          { fis: 128, bias: -1 },
+          { integ: 16 },
+          { integ: 16 },
+          { integ: 16 },
+        ],
+        'D3: fis 128/256 + integ16 x3': [{}, { fis: 128 }, { fis: 256 }, { integ: 16 }, { integ: 16 }, { integ: 16 }],
+        'D3h: same, bias -0.5': [
+          {},
+          { fis: 128, bias: -0.5 },
+          { fis: 256, bias: -0.5 },
+          { integ: 16 },
+          { integ: 16 },
+          { integ: 16 },
+        ],
+        'D3b: same, bias -1': [
+          {},
+          { fis: 128, bias: -1 },
+          { fis: 256, bias: -1 },
+          { integ: 16 },
+          { integ: 16 },
+          { integ: 16 },
+        ],
+        'three-dev-like: 256 + integ16': [{}, { fis: 256 }, { fis: 256 }, { integ: 16 }, { integ: 16 }, { integ: 16 }],
+      }
+      // Real sky captures (capture-sky.mjs); synthetic stress kept for Q3.
+      const CAPTURES = ['noon', 'golden', 'sunset', 'twilight', 'nautical', 'milkyway']
+      const CASES = [
+        ...CAPTURES.map((name) => ({ name, capture: name })),
+        { name: 'stress-sunset', sky: { sun: [0.95, 0.03, 0.3], glow: 60 } },
+      ]
+
+      const rows = []
+      for (const c of CASES) {
+        const src = c.capture
+          ? lab.makeSourceFromData(
+              SRC,
+              new Uint16Array(await (await fetch(`./captures/${c.capture}.bin`)).arrayBuffer()),
+            )
+          : lab.makeSource(SRC, c.sky)
+        // mips for the reference come from a throwaway prefilter's source chain
+        const warm = lab.prefilter(src, SRC, OUT, [{}, { fis: 16 }, { fis: 16 }, { fis: 16 }, { fis: 16 }, { fis: 16 }])
+        lab.run(warm)
+        await device.queue.onSubmittedWorkDone()
+        const ref = await lab.reference(src, SRC, OUT)
+        const refLv = []
+        for (let lod = 1; lod <= MAXLOD; lod++) refLv[lod] = await lab.readLevel(ref, lod, OUT)
+        for (const [name, plan] of Object.entries(PLANS)) {
+          const pf = lab.prefilter(src, SRC, OUT, plan)
+          lab.run(pf)
+          await device.queue.onSubmittedWorkDone()
+          const row = { case: c.name, plan: name }
+          for (let lod = 1; lod <= MAXLOD; lod++) {
+            const st = errStats(await lab.readLevel(pf.out, lod, OUT), refLv[lod])
+            row[`L${lod} r${roughnessOf(lod, MAXLOD).toFixed(2)}`] = `${st.mean} / ${st.p99}`
+          }
+          if (c.name === 'noon') {
+            const t = await lab.time(pf)
+            row.ms = +t.ms.toFixed(3)
+            row.medianMs = +t.medianMs.toFixed(3)
+            row.cpuMs = +t.cpuMs.toFixed(3)
+          }
+          rows.push(row)
+          pf.out.destroy()
+        }
+        ref.destroy()
+        warm.out.destroy()
+        src.destroy()
+      }
+      window.__result = rows
+    </script>
+  </body>
+</html>

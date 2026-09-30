@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+  <body>
+    <script type="module">
+      // Phase 2d: Q4 fireflies on the real captures, Q5 temporal stability
+      // under a sun sweep (SKY_PMREM_SPEC.md §5).
+      import { initDevice, Lab, errStats, imageDiff } from './lab.js'
+
+      const device = await initDevice()
+      const lab = new Lab(device)
+      const SIZE = 256
+      const MAXLOD = Math.log2(SIZE) - 3
+      const integ3 = [{ integ: 16 }, { integ: 16 }, { integ: 16 }]
+      const PLANS = {
+        D2: [{}, { fis: 64 }, { fis: 128 }, ...integ3],
+        'D3-96': [{}, { fis: 96 }, { fis: 256 }, ...integ3],
+        'three-dev-like': [{}, { fis: 256 }, { fis: 256 }, ...integ3],
+      }
+      // Stand-in for the reference in the sweep (the real reference is seconds per frame).
+      const SMOOTH = [{}, { fis: 2048 }, { fis: 2048 }, { integ: 32 }, { integ: 32 }, { integ: 32 }]
+      const params = new URLSearchParams(location.search)
+      const part = params.get('part') ?? 'both'
+      const out = { q4: [], q5: [], pop: [] }
+
+      // ---------------- Q4: per-level max(ours) / max(reference) ----------------
+      if (part === 'both' || part === 'q4') {
+        for (const name of ['noon', 'golden', 'sunset', 'twilight', 'nautical', 'milkyway']) {
+          const data = new Uint16Array(await (await fetch(`./captures/${name}.bin`)).arrayBuffer())
+          const src = lab.makeSourceFromData(SIZE, data)
+          const warm = lab.prefilter(src, SIZE, SIZE, PLANS.D2) // builds the source mips
+          lab.run(warm)
+          await device.queue.onSubmittedWorkDone()
+          const ref = await lab.reference(src, SIZE, SIZE)
+          const refLv = []
+          for (let lod = 1; lod <= MAXLOD; lod++) refLv[lod] = await lab.readLevel(ref, lod, SIZE)
+          for (const [plan, p] of Object.entries(PLANS)) {
+            const pf = lab.prefilter(src, SIZE, SIZE, p)
+            lab.run(pf)
+            await device.queue.onSubmittedWorkDone()
+            const row = { sky: name, plan }
+            for (let lod = 1; lod <= MAXLOD; lod++)
+              row[`L${lod}`] = errStats(await lab.readLevel(pf.out, lod, SIZE), refLv[lod]).maxRatio
+            out.q4.push(row)
+            pf.out.destroy()
+          }
+          ref.destroy()
+          warm.out.destroy()
+          src.destroy()
+        }
+      }
+
+      // ---------------- Q5: sun sweep, 0.1° per frame ----------------
+      if (part === 'both' || part === 'q5') {
+        const AZ = (40 * Math.PI) / 180
+        const FRAMES = 101 // 8° → −2°
+        for (const sky of [
+          { label: 'glow64', glow: 60, sharp: 64 },
+          { label: 'glow512', glow: 200, sharp: 512 },
+        ]) {
+          const src = lab.makeSource(SIZE, { ...sky, sun: [0, 1, 0] })
+          // control: undersampled and under-blurred, must show jitter or the test is blind
+          const control = [{}, ...Array.from({ length: MAXLOD }, () => ({ fis: 16, bias: -3 }))]
+          const all = { ...PLANS, smooth: SMOOTH, 'control (fis16, bias -3)': control }
+          const pfs = Object.fromEntries(Object.entries(all).map(([k, p]) => [k, lab.prefilter(src, SIZE, SIZE, p)]))
+          // per plan, per level: mean sequence, and the two previous frames for per-texel jitter
+          const st = Object.fromEntries(
+            Object.keys(all).map((k) => [
+              k,
+              Array.from({ length: MAXLOD + 1 }, () => ({ means: [], prev: null, prev2: null, jit: [] })),
+            ]),
+          )
+          for (let f = 0; f < FRAMES; f++) {
+            const el = ((8 - f * 0.1) * Math.PI) / 180
+            lab.fillSky(src, SIZE, {
+              ...sky,
+              sun: [Math.cos(el) * Math.sin(AZ), Math.sin(el), Math.cos(el) * Math.cos(AZ)],
+            })
+            for (const [k, pf] of Object.entries(pfs)) {
+              lab.run(pf)
+              await device.queue.onSubmittedWorkDone()
+              for (let lod = 1; lod <= MAXLOD; lod++) {
+                const lum = await lab.readLevel(pf.out, lod, SIZE)
+                const s = st[k][lod]
+                let m = 0
+                for (let i = 0; i < lum.length; i++) m += lum[i]
+                m /= lum.length
+                s.means.push(m)
+                if (s.prev2) {
+                  // per-texel second difference, relative (floored like errStats)
+                  const floor = m * 0.05
+                  let worst = 0
+                  const v = new Float32Array(lum.length)
+                  for (let i = 0; i < lum.length; i++) {
+                    v[i] = Math.abs(lum[i] - 2 * s.prev[i] + s.prev2[i]) / Math.max(s.prev[i], floor)
+                    worst = Math.max(worst, v[i])
+                  }
+                  v.sort()
+                  s.jit.push({ p99: v[Math.floor(v.length * 0.99)], max: worst })
+                }
+                s.prev2 = s.prev
+                s.prev = lum
+              }
+            }
+          }
+          for (const k of Object.keys(all)) {
+            const row = { sky: sky.label, plan: k }
+            for (let lod = 1; lod <= MAXLOD; lod++) {
+              const s = st[k][lod]
+              const steps = s.means.slice(1).map((m, i) => Math.abs(m - s.means[i]))
+              const sorted = [...steps].sort((a, b) => a - b)
+              const median = sorted[Math.floor(sorted.length / 2)]
+              // jitter: p99-over-texels, then the worst frame; and the absolute worst texel
+              const jp99 = Math.max(...s.jit.map((j) => j.p99))
+              const jmax = Math.max(...s.jit.map((j) => j.max))
+              row[`L${lod} step max/med`] = +(Math.max(...steps) / median).toFixed(2)
+              row[`L${lod} jit p99/max %`] = `${(100 * jp99).toFixed(2)} / ${(100 * jmax).toFixed(1)}`
+            }
+            out.q5.push(row)
+          }
+          for (const pf of Object.values(pfs)) pf.out.destroy()
+          src.destroy()
+        }
+      }
+      // ---------------- Tier switch: the one-frame pop when D2 hands over to D3-96 ----------------
+      if (part === 'both' || part === 'pop') {
+        for (const name of ['noon', 'golden', 'sunset', 'twilight', 'nautical', 'milkyway']) {
+          const data = new Uint16Array(await (await fetch(`./captures/${name}.bin`)).arrayBuffer())
+          const src = lab.makeSourceFromData(SIZE, data)
+          const pfs = Object.fromEntries(Object.entries(PLANS).map(([k, p]) => [k, lab.prefilter(src, SIZE, SIZE, p)]))
+          for (const pf of Object.values(pfs)) lab.run(pf)
+          await device.queue.onSubmittedWorkDone()
+          // same auto-exposure as spheres.html: roughest level's mean → mid-grey
+          const rough = await lab.readLevel(pfs['D3-96'].out, MAXLOD, SIZE)
+          const exposure = 0.5 / Math.max(rough.reduce((a, b) => a + b, 0) / rough.length, 1e-6)
+          const img = {}
+          for (const [k, pf] of Object.entries(pfs)) img[k] = await lab.renderSpheres(pf.out, MAXLOD, exposure)
+          const a = imageDiff(img.D2, img['D3-96'])
+          const b = imageDiff(img['D3-96'], img['three-dev-like'])
+          out.pop.push({
+            sky: name,
+            'D2→D3-96 mean': a.mean,
+            'D2→D3-96 p99': a.p99,
+            'D2→D3-96 max': a.max,
+            'D3-96 vs three-dev-like mean / p99': `${b.mean} / ${b.p99}`,
+          })
+          for (const pf of Object.values(pfs)) pf.out.destroy()
+          src.destroy()
+        }
+      }
+      window.__result = out
+    </script>
+  </body>
+</html>

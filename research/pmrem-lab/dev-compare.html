@@ -1,0 +1,171 @@
+<!doctype html>
+<html>
+  <head>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./three/dev-repo/src/Three.WebGPU.js",
+          "three/webgpu": "./three/dev-repo/src/Three.WebGPU.js",
+          "three/tsl": "./three/dev-repo/src/Three.TSL.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <script type="module">
+      // Phase 3 against three r187-dev's real output (SKY_PMREM_SPEC.md §5 Q6, §3 writer):
+      //  1. three's PMREMGenerator.fromCubemap on each capture, read back per level
+      //  2. our plans on the same source: per-level error vs three, and sphere-grid diff
+      //  3. writer: copy our mips into three's PMREM target, check it reads back identical
+      //  4. where three's 4.5 ms goes: source copy + mip generation vs the filter passes
+      import * as THREE from 'three/webgpu'
+      import { Lab, errStats, imageDiff } from './lab.js'
+
+      const SIZE = 256
+      const MAXLOD = Math.log2(SIZE) - 3
+      const integ3 = [{ integ: 16 }, { integ: 16 }, { integ: 16 }]
+      const PLANS = {
+        'three-dev-like': [{}, { fis: 256 }, { fis: 256 }, ...integ3],
+        'three-dev-like, mirrored': [{}, { fis: 256, mirror: true }, { fis: 256, mirror: true }, ...integ3],
+        'D3-96': [{}, { fis: 96 }, { fis: 256 }, ...integ3],
+        'D3-96, mirrored': [{}, { fis: 96, mirror: true }, { fis: 256, mirror: true }, ...integ3],
+        'D3-128, mirrored': [{}, { fis: 128, mirror: true }, { fis: 256, mirror: true }, ...integ3],
+        D2: [{}, { fis: 64 }, { fis: 128 }, ...integ3],
+      }
+
+      const renderer = new THREE.WebGPURenderer({ antialias: false })
+      renderer.setSize(64, 64)
+      document.body.appendChild(renderer.domElement)
+      await renderer.init()
+      const device = renderer.backend.device
+      const lab = new Lab(device)
+      const gpuTex = (t) => renderer.backend.get(t).texture
+      const sync = () => device.queue.onSubmittedWorkDone()
+
+      // A three cube render target we can fill from our GPU texture.
+      const srcRT = new THREE.CubeRenderTarget(SIZE, {
+        type: THREE.HalfFloatType,
+        generateMipmaps: false,
+        minFilter: THREE.LinearFilter,
+        depthBuffer: false,
+      })
+      new THREE.CubeCamera(0.1, 10, srcRT).update(renderer, new THREE.Scene()) // allocates it
+      const gen = new THREE.PMREMGenerator(renderer)
+      let target = null
+
+      const out = { quality: [], writer: [], timing: {} }
+      for (const name of ['noon', 'golden', 'sunset', 'twilight', 'nautical', 'milkyway']) {
+        const data = new Uint16Array(await (await fetch(`./captures/${name}.bin`)).arrayBuffer())
+        const src = lab.makeSourceFromData(SIZE, data)
+        {
+          const e = device.createCommandEncoder()
+          e.copyTextureToTexture({ texture: src }, { texture: gpuTex(srcRT.texture) }, [SIZE, SIZE, 6])
+          device.queue.submit([e.finish()])
+        }
+        target = gen.fromCubemap(srcRT.texture, target)
+        await sync()
+        const threeTex = gpuTex(target.texture)
+        const threeLv = []
+        for (let lod = 0; lod <= MAXLOD; lod++) threeLv[lod] = await lab.readLevel(threeTex, lod, SIZE)
+        const rough = threeLv[MAXLOD]
+        const exposure = 0.5 / Math.max(rough.reduce((a, b) => a + b, 0) / rough.length, 1e-6)
+        const threeImg = await lab.renderSpheres(threeTex, MAXLOD, exposure)
+
+        for (const [plan, p] of Object.entries(PLANS)) {
+          const pf = lab.prefilter(src, SIZE, SIZE, p)
+          lab.run(pf)
+          await sync()
+          const row = { sky: name, plan }
+          for (let lod = 0; lod <= MAXLOD; lod++) {
+            const st = errStats(await lab.readLevel(pf.out, lod, SIZE), threeLv[lod])
+            row[`L${lod} vs three`] = `${st.mean} / ${st.p99}`
+          }
+          const dd = imageDiff(await lab.renderSpheres(pf.out, MAXLOD, exposure), threeImg)
+          row['spheres mean/p99/max'] = `${dd.mean} / ${dd.p99} / ${dd.max}`
+          out.quality.push(row)
+
+          // writer (r187): per-mip copy into three's own PMREM target
+          if (plan === 'D3-96') {
+            const e = device.createCommandEncoder()
+            for (let lod = 0; lod <= MAXLOD; lod++) {
+              const s = SIZE >> lod
+              e.copyTextureToTexture({ texture: pf.out, mipLevel: lod }, { texture: threeTex, mipLevel: lod }, [
+                s,
+                s,
+                6,
+              ])
+            }
+            device.queue.submit([e.finish()])
+            await sync()
+            let maxAbs = 0
+            for (let lod = 0; lod <= MAXLOD; lod++) {
+              const a = await lab.readLevel(threeTex, lod, SIZE)
+              const b = await lab.readLevel(pf.out, lod, SIZE)
+              for (let i = 0; i < a.length; i++) maxAbs = Math.max(maxAbs, Math.abs(a[i] - b[i]))
+            }
+            out.writer.push({ sky: name, 'max |three target − ours| after copy': maxAbs })
+          }
+          pf.out.destroy()
+        }
+        src.destroy()
+      }
+
+      // ---- timing: three's stages vs ours, min of bursts ----
+      const burst = async (fn, n = 20, bursts = 7) => {
+        for (let i = 0; i < 3; i++) fn()
+        await sync()
+        const v = []
+        for (let b = 0; b < bursts; b++) {
+          const t0 = performance.now()
+          for (let i = 0; i < n; i++) fn()
+          await sync()
+          v.push((performance.now() - t0) / n)
+        }
+        v.sort((a, b) => a - b)
+        return +v[0].toFixed(3)
+      }
+      out.timing['three fromCubemap (total)'] = await burst(() => gen.fromCubemap(srcRT.texture, target))
+      out.timing['three _textureToCubemap (source copy + mips)'] = await burst(() =>
+        gen._textureToCubemap(srcRT.texture),
+      )
+      out.timing['three _applyPMREM (6 levels × 6 faces)'] = await burst(() => gen._applyPMREM(target))
+      // per level: replicate _applyPMREM's loop body for one lod
+      {
+        const ggx = gen._ggxMaterial
+        const integ = gen._integrationMaterial
+        for (let lod = 0; lod <= MAXLOD; lod++) {
+          const r = THREE.PMREMGenerator.lodToRoughness(lod, MAXLOD)
+          out.timing[`three L${lod}`] = await burst(() => {
+            if (lod > MAXLOD - 3) {
+              gen._renderCube(target, lod, integ)
+            } else {
+              gen._renderCube(target, lod, ggx)
+            }
+          })
+        }
+        out.timing['three L0 note'] = 'uniforms left at the last level set by _applyPMREM'
+      }
+      {
+        const data = new Uint16Array(await (await fetch('./captures/golden.bin')).arrayBuffer())
+        const src = lab.makeSourceFromData(SIZE, data)
+        for (const [plan, p] of Object.entries(PLANS)) {
+          const pf = lab.prefilter(src, SIZE, SIZE, p)
+          out.timing[`ours ${plan} (mips + levels)`] = +(await lab.time(pf, 30, 9)).ms.toFixed(3)
+        }
+        const pf = lab.prefilter(src, SIZE, SIZE, PLANS['D3-96'])
+        const threeTex = gpuTex(target.texture)
+        out.timing['ours D3-96 + r187 writer copy'] = await burst(() => {
+          const e = device.createCommandEncoder()
+          pf.encode(e)
+          for (let lod = 0; lod <= MAXLOD; lod++) {
+            const s = SIZE >> lod
+            e.copyTextureToTexture({ texture: pf.out, mipLevel: lod }, { texture: threeTex, mipLevel: lod }, [s, s, 6])
+          }
+          device.queue.submit([e.finish()])
+        })
+      }
+      out.timing = [out.timing]
+      window.__result = out
+    </script>
+  </body>
+</html>

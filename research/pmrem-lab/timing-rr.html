@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <body>
+    <script type="module">
+      // Round-robin timing: every plan gets a burst per round, so thermal drift
+      // and other GPU work on the machine hit all plans equally. Reports the
+      // minimum and median burst per plan.
+      import { initDevice, Lab } from './lab.js'
+
+      const device = await initDevice()
+      const lab = new Lab(device)
+      const integ3 = [{ integ: 16 }, { integ: 16 }, { integ: 16 }]
+      const PLANS = {
+        'D2: fis 64/128 + integ16 x3': [{}, { fis: 64 }, { fis: 128 }, ...integ3],
+        'D3-96: fis 96/256 + integ16 x3': [{}, { fis: 96 }, { fis: 256 }, ...integ3],
+        'D3-96, table': [{}, { fis: 96, table: true }, { fis: 256, table: true }, ...integ3],
+        'three-dev-like: 256 + integ16': [{}, { fis: 256 }, { fis: 256 }, ...integ3],
+        'three-dev-like, mirrored': [{}, { fis: 256, mirror: true }, { fis: 256, mirror: true }, ...integ3],
+        'three-dev-like, mirrored, table': [
+          {},
+          { fis: 256, mirror: true, table: true },
+          { fis: 256, mirror: true, table: true },
+          ...integ3,
+        ],
+      }
+      const data = new Uint16Array(await (await fetch('./captures/golden.bin')).arrayBuffer())
+      const src = lab.makeSourceFromData(256, data)
+      const pfs = Object.fromEntries(Object.entries(PLANS).map(([k, p]) => [k, lab.prefilter(src, 256, 256, p)]))
+      for (const pf of Object.values(pfs)) for (let i = 0; i < 10; i++) lab.run(pf)
+      await device.queue.onSubmittedWorkDone()
+      const samples = Object.fromEntries(Object.keys(PLANS).map((k) => [k, []]))
+      const N = 30
+      for (let round = 0; round < 15; round++) {
+        for (const [k, pf] of Object.entries(pfs)) {
+          const t0 = performance.now()
+          for (let i = 0; i < N; i++) lab.run(pf)
+          await device.queue.onSubmittedWorkDone()
+          samples[k].push((performance.now() - t0) / N)
+        }
+      }
+      window.__result = Object.entries(samples).map(([plan, v]) => {
+        v.sort((a, b) => a - b)
+        return {
+          plan,
+          minMs: +v[0].toFixed(3),
+          medianMs: +v[Math.floor(v.length / 2)].toFixed(3),
+          maxMs: +v[v.length - 1].toFixed(3),
+        }
+      })
+    </script>
+  </body>
+</html>

@@ -31,3 +31,7 @@ resources/egsr2020.pdf
 
 # Slang + UnrealEngineSkyAtmosphere checkout used by scripts/build-sebh-wgsl.mjs
 examples/vanilla/.cache/
+
+# PMREM lab: fetched three sources (see research/pmrem-lab/README.md)
+research/pmrem-lab/three/
+research/pmrem-lab/captures/

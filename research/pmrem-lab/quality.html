@@ -1,0 +1,551 @@
+<!doctype html>
+<html>
+  <body>
+    <script type="module">
+      // Phase 1 timing prototype: raw WebGPU compute prefilter for a sky cube.
+      // Source cube (rgba16f, full mip chain) -> output cube with LOD_MIN=3 levels
+      // (the r187 layout: mips 0..log2(size)-3, roughness = 1 - sqrt(1 - lod/maxLod)).
+      const adapter = await navigator.gpu.requestAdapter()
+      const device = await adapter.requestDevice()
+      const FMT = 'rgba16float'
+
+      const COMMON = /* wgsl */ `
+fn faceDir(face: u32, px: vec2<f32>, size: f32) -> vec3<f32> {
+  let uv = (px + 0.5) / size * 2.0 - 1.0;
+  let u = uv.x; let v = uv.y;
+  switch face {
+    case 0u: { return normalize(vec3( 1.0, -v, -u)); }
+    case 1u: { return normalize(vec3(-1.0, -v,  u)); }
+    case 2u: { return normalize(vec3( u,  1.0,  v)); }
+    case 3u: { return normalize(vec3( u, -1.0, -v)); }
+    case 4u: { return normalize(vec3( u, -v,  1.0)); }
+    default: { return normalize(vec3(-u, -v, -1.0)); }
+  }
+}`
+
+      const SKY = /* wgsl */ `${COMMON}
+struct SkyP { size: u32, variant: u32, glow: f32, pad: f32, sun: vec4<f32> }
+@group(0) @binding(0) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(1) var<uniform> P: SkyP;
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= P.size || id.y >= P.size) { return; }
+  let d = faceDir(id.z, vec2<f32>(id.xy), f32(P.size));
+  if (P.variant == 1u) { textureStore(dst, id.xy, id.z, vec4(1.0)); return; } // furnace
+  let sun = normalize(P.sun.xyz);
+  let sky = mix(vec3(1.0, 0.85, 0.7), vec3(0.15, 0.35, 0.9), smoothstep(0.0, 0.6, d.y));
+  let glow = pow(max(dot(d, sun), 0.0), 64.0) * P.glow + pow(max(dot(d, sun), 0.0), 4.0) * P.glow * 0.02;
+  let c = mix(vec3(0.08, 0.07, 0.06), sky + glow, smoothstep(-0.02, 0.02, d.y));
+  textureStore(dst, id.xy, id.z, vec4(c, 1.0));
+}`
+
+      const DOWN = /* wgsl */ `
+@group(0) @binding(0) var src: texture_2d_array<f32>;
+@group(0) @binding(1) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(2) var<uniform> size: u32; // dst size
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= size || id.y >= size) { return; }
+  let p = vec2<i32>(id.xy) * 2;
+  let f = i32(id.z);
+  let c = textureLoad(src, p, f, 0) + textureLoad(src, p + vec2(1, 0), f, 0)
+        + textureLoad(src, p + vec2(0, 1), f, 0) + textureLoad(src, p + vec2(1, 1), f, 0);
+  textureStore(dst, id.xy, id.z, c * 0.25);
+}`
+
+      const FILTER = /* wgsl */ `${COMMON}
+struct Level { outSize: u32, samples: u32, roughness: f32, lodBias: f32 }
+@group(0) @binding(0) var src: texture_cube<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(3) var<uniform> L: Level;
+fn hammersley(i: u32, n: u32) -> vec2<f32> {
+  return vec2(f32(i) / f32(n), f32(reverseBits(i)) * 2.3283064365386963e-10);
+}
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= L.outSize || id.y >= L.outSize) { return; }
+  let N = faceDir(id.z, vec2<f32>(id.xy), f32(L.outSize));
+  if (L.roughness <= 0.0) {
+    textureStore(dst, id.xy, id.z, textureSampleLevel(src, samp, N, 0.0));
+    return;
+  }
+  let alpha = L.roughness * L.roughness;
+  let a2 = alpha * alpha;
+  let up = select(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), abs(N.z) < 0.999);
+  let T = normalize(cross(up, N));
+  let B = cross(N, T);
+  var col = vec3(0.0);
+  var w = 0.0;
+  for (var i = 0u; i < L.samples; i++) {
+    let xi = hammersley(i, L.samples);
+    let invQ = 1.0 / ((1.0 - xi.x) + a2 * xi.x);
+    let NdotL = ((1.0 - xi.x) - a2 * xi.x) * invQ;
+    if (NdotL > 0.0) {
+      let phi = xi.y * 6.283185307;
+      let sinT = alpha * 2.0 * sqrt(xi.x * (1.0 - xi.x)) * invQ;
+      let Ld = N * NdotL + (T * cos(phi) + B * sin(phi)) * sinT;
+      let lod = max(log2(a2 * invQ) + L.lodBias, 0.0);
+      col += textureSampleLevel(src, samp, Ld, lod).rgb * NdotL;
+      w += NdotL;
+    }
+  }
+  textureStore(dst, id.xy, id.z, vec4(col / w, 1.0));
+}`
+
+      const mod = (code) => device.createShaderModule({ code })
+      const pipe = (code) =>
+        device.createComputePipeline({ layout: 'auto', compute: { module: mod(code), entryPoint: 'main' } })
+      const skyPipe = pipe(SKY)
+      const downPipe = pipe(DOWN)
+      const filterPipe = pipe(FILTER)
+      const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' })
+      const ubuf = (arr) => {
+        const b = device.createBuffer({
+          size: Math.max(16, arr.byteLength),
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        })
+        device.queue.writeBuffer(b, 0, arr)
+        return b
+      }
+
+      // Reference: narrow lobes by brute importance sampling at mip 0 (no bias);
+      // wide lobes by exhaustive integration over a 64^2 source mip.
+      const REF = /* wgsl */ `${COMMON}
+struct R { outSize: u32, samples: u32, roughness: f32, mode: u32, face: u32, intMip: f32, intSize: u32, pad: u32 }
+@group(0) @binding(0) var src: texture_cube<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(3) var<uniform> P: R;
+fn hammersley(i: u32, n: u32) -> vec2<f32> { return vec2(f32(i) / f32(n), f32(reverseBits(i)) * 2.3283064365386963e-10); }
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= P.outSize || id.y >= P.outSize) { return; }
+  let N = faceDir(P.face, vec2<f32>(id.xy), f32(P.outSize));
+  let alpha = P.roughness * P.roughness; let a2 = alpha * alpha;
+  var col = vec3(0.0); var w = 0.0;
+  if (P.mode == 0u) {
+    let up = select(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), abs(N.z) < 0.999);
+    let T = normalize(cross(up, N)); let B = cross(N, T);
+    for (var i = 0u; i < P.samples; i++) {
+      let xi = hammersley(i, P.samples);
+      let invQ = 1.0 / ((1.0 - xi.x) + a2 * xi.x);
+      let NdotL = ((1.0 - xi.x) - a2 * xi.x) * invQ;
+      if (NdotL > 0.0) {
+        let phi = xi.y * 6.283185307;
+        let sinT = alpha * 2.0 * sqrt(xi.x * (1.0 - xi.x)) * invQ;
+        let Ld = N * NdotL + (T * cos(phi) + B * sin(phi)) * sinT;
+        col += textureSampleLevel(src, samp, Ld, 0.0).rgb * NdotL; w += NdotL;
+      }
+    }
+  } else {
+    let s = f32(P.intSize);
+    for (var f = 0u; f < 6u; f++) { for (var y = 0u; y < P.intSize; y++) { for (var x = 0u; x < P.intSize; x++) {
+      let uv = (vec2(f32(x), f32(y)) + 0.5) / s * 2.0 - 1.0;
+      let dOmega = 1.0 / pow(1.0 + dot(uv, uv), 1.5);
+      let Ld = faceDir(f, vec2(f32(x), f32(y)), s);
+      let NdotL = dot(N, Ld);
+      if (NdotL > 0.0) {
+        let NdotH2 = (1.0 + NdotL) * 0.5;
+        let dd = NdotH2 * (a2 - 1.0) + 1.0;
+        let wt = a2 / (dd * dd) * NdotL * dOmega;
+        col += textureSampleLevel(src, samp, Ld, P.intMip).rgb * wt; w += wt;
+      }
+    }}}
+  }
+  textureStore(dst, id.xy, vec2<u32>(id.z, 0u).y + P.face, vec4(col / w, 1.0));
+}`
+
+      const INTEG = /* wgsl */ `${COMMON}
+struct I { outSize: u32, srcSize: u32, roughness: f32, srcMip: f32 }
+@group(0) @binding(0) var src: texture_2d_array<f32>;
+@group(0) @binding(1) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(2) var<uniform> P: I;
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= P.outSize || id.y >= P.outSize) { return; }
+  let N = faceDir(id.z, vec2<f32>(id.xy), f32(P.outSize));
+  let alpha = P.roughness * P.roughness; let a2 = alpha * alpha;
+  let s = f32(P.srcSize);
+  var col = vec3(0.0); var w = 0.0;
+  for (var f = 0u; f < 6u; f++) { for (var y = 0u; y < P.srcSize; y++) { for (var x = 0u; x < P.srcSize; x++) {
+    let uv = (vec2(f32(x), f32(y)) + 0.5) / s * 2.0 - 1.0;
+    let dOmega = 1.0 / pow(1.0 + dot(uv, uv), 1.5);
+    let Ld = faceDir(f, vec2(f32(x), f32(y)), s);
+    let NdotL = dot(N, Ld);
+    if (NdotL > 0.0) {
+      let NdotH2 = (1.0 + NdotL) * 0.5;
+      let dd = NdotH2 * (a2 - 1.0) + 1.0;
+      let wt = a2 / (dd * dd) * NdotL * dOmega;
+      col += textureLoad(src, vec2<i32>(i32(x), i32(y)), i32(f), 0).rgb * wt; w += wt;
+    }
+  }}}
+  textureStore(dst, id.xy, id.z, vec4(col / w, 1.0));
+}`
+      const integPipe = pipe(INTEG)
+
+      // Optimized integration: per-source-texel direction + solid angle precomputed
+      // once into a storage buffer (static geometry), radiance read with textureLoad.
+      const INTEG2 = /* wgsl */ `${COMMON}
+struct I { outSize: u32, srcSize: u32, roughness: f32, srcMip: f32 }
+@group(0) @binding(0) var src: texture_2d_array<f32>;
+@group(0) @binding(1) var dst: texture_storage_2d_array<${FMT}, write>;
+@group(0) @binding(2) var<uniform> P: I;
+@group(0) @binding(3) var<storage, read> dirs: array<vec4<f32>>;
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= P.outSize || id.y >= P.outSize) { return; }
+  let N = faceDir(id.z, vec2<f32>(id.xy), f32(P.outSize));
+  let alpha = P.roughness * P.roughness; let a2 = alpha * alpha;
+  let n = P.srcSize; let per = n * n;
+  var col = vec3(0.0); var w = 0.0;
+  for (var k = 0u; k < 6u * per; k++) {
+    let d = dirs[k];
+    let NdotL = dot(N, d.xyz);
+    if (NdotL > 0.0) {
+      let dd = (1.0 + NdotL) * 0.5 * (a2 - 1.0) + 1.0;
+      let wt = NdotL * d.w / (dd * dd);
+      let f = k / per; let r = k - f * per;
+      col += textureLoad(src, vec2<i32>(i32(r % n), i32(r / n)), i32(f), 0).rgb * wt; w += wt;
+    }
+  }
+  textureStore(dst, id.xy, id.z, vec4(col / w, 1.0));
+}`
+      const integ2Pipe = pipe(INTEG2)
+      const dirBufs = {}
+      function dirsFor(n) {
+        if (dirBufs[n]) return dirBufs[n]
+        const a = new Float32Array(6 * n * n * 4)
+        let o = 0
+        const fd = (face, u, v) => {
+          switch (face) {
+            case 0:
+              return [1, -v, -u]
+            case 1:
+              return [-1, -v, u]
+            case 2:
+              return [u, 1, v]
+            case 3:
+              return [u, -1, -v]
+            case 4:
+              return [u, -v, 1]
+            default:
+              return [-u, -v, -1]
+          }
+        }
+        for (let f = 0; f < 6; f++)
+          for (let y = 0; y < n; y++)
+            for (let x = 0; x < n; x++) {
+              const u = ((x + 0.5) / n) * 2 - 1,
+                v = ((y + 0.5) / n) * 2 - 1
+              const d = fd(f, u, v),
+                len = Math.hypot(...d)
+              a[o++] = d[0] / len
+              a[o++] = d[1] / len
+              a[o++] = d[2] / len
+              a[o++] = 1 / Math.pow(1 + u * u + v * v, 1.5)
+            }
+        const b = device.createBuffer({ size: a.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+        device.queue.writeBuffer(b, 0, a)
+        return (dirBufs[n] = b)
+      }
+      const skyPipe2 = skyPipe,
+        refPipe = pipe(REF)
+      const view2d = (t, mip) => t.createView({ dimension: '2d-array', baseMipLevel: mip, mipLevelCount: 1 })
+      const SRC = 256,
+        OUT = 256,
+        MAXLOD = Math.log2(OUT) - 3
+      const roughOf = (lod) => 1 - Math.sqrt(1 - lod / MAXLOD)
+
+      function makeSource(variant, sun, glow) {
+        const mips = Math.log2(SRC) + 1
+        const src = device.createTexture({
+          size: [SRC, SRC, 6],
+          format: FMT,
+          mipLevelCount: mips,
+          usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+        })
+        const u = new ArrayBuffer(32)
+        new Uint32Array(u, 0, 2).set([SRC, variant])
+        new Float32Array(u, 8, 6).set([glow, 0, ...sun, 0])
+        const e = device.createCommandEncoder()
+        const p = e.beginComputePass()
+        p.setPipeline(skyPipe)
+        p.setBindGroup(
+          0,
+          device.createBindGroup({
+            layout: skyPipe.getBindGroupLayout(0),
+            entries: [
+              { binding: 0, resource: view2d(src, 0) },
+              { binding: 1, resource: { buffer: ubuf(new Uint8Array(u)) } },
+            ],
+          }),
+        )
+        p.dispatchWorkgroups(SRC / 8, SRC / 8, 6)
+        p.setPipeline(downPipe)
+        for (let m = 1; m < mips; m++) {
+          const s = SRC >> m
+          p.setBindGroup(
+            0,
+            device.createBindGroup({
+              layout: downPipe.getBindGroupLayout(0),
+              entries: [
+                { binding: 0, resource: view2d(src, m - 1) },
+                { binding: 1, resource: view2d(src, m) },
+                { binding: 2, resource: { buffer: ubuf(new Uint32Array([s])) } },
+              ],
+            }),
+          )
+          p.dispatchWorkgroups(Math.ceil(s / 8), Math.ceil(s / 8), 6)
+        }
+        p.end()
+        device.queue.submit([e.finish()])
+        return src
+      }
+      const newOut = () =>
+        device.createTexture({
+          size: [OUT, OUT, 6],
+          format: FMT,
+          mipLevelCount: MAXLOD + 1,
+          usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC,
+        })
+
+      function runOurs(src, samples) {
+        const out = newOut(),
+          cube = src.createView({ dimension: 'cube' })
+        const e = device.createCommandEncoder()
+        const p = e.beginComputePass()
+        p.setPipeline(filterPipe)
+        for (let lod = 0; lod <= MAXLOD; lod++) {
+          const s = OUT >> lod,
+            r = roughOf(lod)
+          const lodBias = r > 0 ? Math.log2(SRC) + 0.5 * Math.log2(6 / (samples * Math.pow(r, 4))) + 0.5 : 0
+          const u = new ArrayBuffer(16)
+          new Uint32Array(u, 0, 2).set([s, samples])
+          new Float32Array(u, 8, 2).set([r, lodBias])
+          p.setBindGroup(
+            0,
+            device.createBindGroup({
+              layout: filterPipe.getBindGroupLayout(0),
+              entries: [
+                { binding: 0, resource: cube },
+                { binding: 1, resource: sampler },
+                { binding: 2, resource: view2d(out, lod) },
+                { binding: 3, resource: { buffer: ubuf(new Uint8Array(u)) } },
+              ],
+            }),
+          )
+          p.dispatchWorkgroups(Math.ceil(s / 8), Math.ceil(s / 8), 6)
+        }
+        p.end()
+        device.queue.submit([e.finish()])
+        return out
+      }
+
+      async function runRef(src) {
+        const out = newOut(),
+          cube = src.createView({ dimension: 'cube' })
+        for (let lod = 1; lod <= MAXLOD; lod++) {
+          const s = OUT >> lod,
+            r = roughOf(lod)
+          const mode = r < 0.4 ? 0 : 1
+          for (let face = 0; face < 6; face++) {
+            const u = new ArrayBuffer(32)
+            new Uint32Array(u, 0, 2).set([s, 16384])
+            new Float32Array(u, 8, 1).set([r])
+            new Uint32Array(u, 12, 2).set([mode, face])
+            new Float32Array(u, 20, 1).set([Math.log2(SRC / 64)])
+            new Uint32Array(u, 24, 1).set([64])
+            const e = device.createCommandEncoder()
+            const p = e.beginComputePass()
+            p.setPipeline(refPipe)
+            p.setBindGroup(
+              0,
+              device.createBindGroup({
+                layout: refPipe.getBindGroupLayout(0),
+                entries: [
+                  { binding: 0, resource: cube },
+                  { binding: 1, resource: sampler },
+                  { binding: 2, resource: view2d(out, lod) },
+                  { binding: 3, resource: { buffer: ubuf(new Uint8Array(u)) } },
+                ],
+              }),
+            )
+            p.dispatchWorkgroups(Math.ceil(s / 8), Math.ceil(s / 8), 1)
+            p.end()
+            device.queue.submit([e.finish()])
+            await device.queue.onSubmittedWorkDone()
+          }
+        }
+        return out
+      }
+
+      // plan: per level either { fis: samples } or { integ: srcSize }
+      function runPlan(src, plan) {
+        const out = newOut(),
+          cube = src.createView({ dimension: 'cube' })
+        const e = device.createCommandEncoder()
+        const p = e.beginComputePass()
+        for (let lod = 0; lod <= MAXLOD; lod++) {
+          const s = OUT >> lod,
+            r = roughOf(lod),
+            step = plan[lod]
+          if (step.integ) {
+            const mip = Math.log2(SRC / step.integ)
+            const u = new ArrayBuffer(16)
+            new Uint32Array(u, 0, 2).set([s, step.integ])
+            new Float32Array(u, 8, 2).set([r, mip])
+            p.setPipeline(integ2Pipe)
+            p.setBindGroup(
+              0,
+              device.createBindGroup({
+                layout: integ2Pipe.getBindGroupLayout(0),
+                entries: [
+                  { binding: 0, resource: view2d(src, mip) },
+                  { binding: 1, resource: view2d(out, lod) },
+                  { binding: 2, resource: { buffer: ubuf(new Uint8Array(u)) } },
+                  { binding: 3, resource: { buffer: dirsFor(step.integ) } },
+                ],
+              }),
+            )
+          } else {
+            const n = step.fis ?? 1
+            const lodBias = r > 0 ? Math.log2(SRC) + 0.5 * Math.log2(6 / (n * Math.pow(r, 4))) + 0.5 : 0
+            const u = new ArrayBuffer(16)
+            new Uint32Array(u, 0, 2).set([s, n])
+            new Float32Array(u, 8, 2).set([r, lodBias])
+            p.setPipeline(filterPipe)
+            p.setBindGroup(
+              0,
+              device.createBindGroup({
+                layout: filterPipe.getBindGroupLayout(0),
+                entries: [
+                  { binding: 0, resource: cube },
+                  { binding: 1, resource: sampler },
+                  { binding: 2, resource: view2d(out, lod) },
+                  { binding: 3, resource: { buffer: ubuf(new Uint8Array(u)) } },
+                ],
+              }),
+            )
+          }
+          p.dispatchWorkgroups(Math.ceil(s / 8), Math.ceil(s / 8), 6)
+        }
+        p.end()
+        device.queue.submit([e.finish()])
+        return out
+      }
+      async function timePlan(src, plan, n = 40) {
+        for (let i = 0; i < 3; i++) runPlan(src, plan).destroy()
+        await device.queue.onSubmittedWorkDone()
+        const outs = []
+        const t0 = performance.now()
+        for (let i = 0; i < n; i++) outs.push(runPlan(src, plan))
+        await device.queue.onSubmittedWorkDone()
+        const ms = (performance.now() - t0) / n
+        outs.forEach((o) => o.destroy())
+        return ms
+      }
+      const PLANS = {
+        'D: 64/128/256 + integ16': [{}, { fis: 64 }, { fis: 128 }, { fis: 256 }, { integ: 16 }, { integ: 16 }],
+        'E: 32/128/256 + integ16': [{}, { fis: 32 }, { fis: 128 }, { fis: 256 }, { integ: 16 }, { integ: 16 }],
+        'fis64 all': [{}, { fis: 64 }, { fis: 64 }, { fis: 64 }, { fis: 64 }, { fis: 64 }],
+        'A: 64/128 + integ32': [{}, { fis: 64 }, { fis: 128 }, { integ: 32 }, { integ: 32 }, { integ: 32 }],
+        'B: 32/64 + integ32/16': [{}, { fis: 32 }, { fis: 64 }, { integ: 32 }, { integ: 16 }, { integ: 16 }],
+        'C: 64/128/256 + integ32': [{}, { fis: 64 }, { fis: 128 }, { fis: 256 }, { integ: 32 }, { integ: 32 }],
+        'three-dev-like: 256 + integ16': [{}, { fis: 256 }, { fis: 256 }, { integ: 16 }, { integ: 16 }, { integ: 16 }],
+      }
+      const h2f = (h) => {
+        const s = h & 0x8000 ? -1 : 1,
+          e = (h >> 10) & 0x1f,
+          m = h & 0x3ff
+        return e === 0
+          ? s * Math.pow(2, -14) * (m / 1024)
+          : e === 31
+            ? m
+              ? NaN
+              : s * Infinity
+            : s * Math.pow(2, e - 15) * (1 + m / 1024)
+      }
+      async function readLevel(tex, lod) {
+        const s = OUT >> lod,
+          bpr = Math.ceil((s * 8) / 256) * 256
+        const buf = device.createBuffer({ size: bpr * s * 6, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
+        const e = device.createCommandEncoder()
+        e.copyTextureToBuffer({ texture: tex, mipLevel: lod }, { buffer: buf, bytesPerRow: bpr, rowsPerImage: s }, [
+          s,
+          s,
+          6,
+        ])
+        device.queue.submit([e.finish()])
+        await buf.mapAsync(GPUMapMode.READ)
+        const u16 = new Uint16Array(buf.getMappedRange().slice(0))
+        buf.unmap()
+        buf.destroy()
+        const lum = new Float32Array(s * s * 6)
+        let k = 0
+        for (let f = 0; f < 6; f++)
+          for (let y = 0; y < s; y++)
+            for (let x = 0; x < s; x++) {
+              const o = (f * s * bpr + y * bpr) / 2 + x * 4
+              lum[k++] = 0.2126 * h2f(u16[o]) + 0.7152 * h2f(u16[o + 1]) + 0.0722 * h2f(u16[o + 2])
+            }
+        return lum
+      }
+      function errStats(a, ref) {
+        const rel = new Float32Array(a.length)
+        let sum = 0,
+          maxRatio = 0,
+          refMax = 0,
+          aMax = 0
+        for (let i = 0; i < a.length; i++) {
+          rel[i] = Math.abs(a[i] - ref[i]) / Math.max(ref[i], 1e-4)
+          sum += rel[i]
+          refMax = Math.max(refMax, ref[i])
+          aMax = Math.max(aMax, a[i])
+        }
+        rel.sort()
+        return {
+          mean: +((100 * sum) / a.length).toFixed(2),
+          p99: +(100 * rel[Math.floor(rel.length * 0.99)]).toFixed(2),
+          maxOverRef: +(aMax / refMax).toFixed(3),
+        }
+      }
+
+      const cases = [
+        { name: 'noon', variant: 0, sun: [0.3, 0.9, 0.3], glow: 20 },
+        { name: 'sunset', variant: 0, sun: [0.95, 0.03, 0.3], glow: 60 },
+      ]
+      const rows = []
+      for (const c of cases) {
+        const src = makeSource(c.variant, c.sun, c.glow)
+        await device.queue.onSubmittedWorkDone()
+        const ref = await runRef(src)
+        const refLv = []
+        for (let lod = 1; lod <= MAXLOD; lod++) refLv[lod] = await readLevel(ref, lod)
+        for (const [pname, plan] of Object.entries(PLANS)) {
+          const ours = runPlan(src, plan)
+          await device.queue.onSubmittedWorkDone()
+          const row = { case: c.name, plan: pname }
+          for (let lod = 1; lod <= MAXLOD; lod++) {
+            const st = errStats(await readLevel(ours, lod), refLv[lod])
+            row[`L${lod}`] = `${st.mean}% p99 ${st.p99}%`
+          }
+          if (c.name === 'noon') row.ms = +(await timePlan(src, plan)).toFixed(3)
+          rows.push(row)
+          ours.destroy()
+        }
+        if (c.variant === 1) {
+          const lv = await readLevel(ref, MAXLOD)
+          rows.push({
+            case: 'furnace ref sanity',
+            samples: '-',
+            note: `ref L${MAXLOD} mean ${(lv.reduce((a, b) => a + b, 0) / lv.length).toFixed(4)}`,
+          })
+        }
+        ref.destroy()
+        src.destroy()
+      }
+      window.__result = rows
+    </script>
+  </body>
+</html>

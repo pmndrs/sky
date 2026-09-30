@@ -1,0 +1,73 @@
+<!doctype html>
+<html>
+  <body>
+    <script type="module">
+      // Q6 proxy: sphere-grid renders lit by each plan's cube vs the reference cube,
+      // on every real-sky capture. Differences in tonemapped 8-bit units.
+      import { initDevice, Lab, imageDiff } from './lab.js'
+
+      const device = await initDevice()
+      const lab = new Lab(device)
+      const SRC = 256
+      const OUT = 256
+      const MAXLOD = Math.log2(OUT) - 3
+      const PLANS = {
+        'D2: fis 64/128 + integ16 x3': [{}, { fis: 64 }, { fis: 128 }, { integ: 16 }, { integ: 16 }, { integ: 16 }],
+        'D3: fis 128/256 + integ16 x3': [{}, { fis: 128 }, { fis: 256 }, { integ: 16 }, { integ: 16 }, { integ: 16 }],
+        'D3-96: fis 96/256 + integ16 x3': [{}, { fis: 96 }, { fis: 256 }, { integ: 16 }, { integ: 16 }, { integ: 16 }],
+        'D3-lite: fis 128/256 + integ16/16/8': [
+          {},
+          { fis: 128 },
+          { fis: 256 },
+          { integ: 16 },
+          { integ: 16 },
+          { integ: 8 },
+        ],
+        'three-dev-like: 256 + integ16': [{}, { fis: 256 }, { fis: 256 }, { integ: 16 }, { integ: 16 }, { integ: 16 }],
+      }
+      const CAPTURES = ['golden', 'sunset', 'twilight', 'nautical']
+      const rows = []
+      window.__images = {}
+      for (const cap of CAPTURES) {
+        const data = new Uint16Array(await (await fetch(`./captures/${cap}.bin`)).arrayBuffer())
+        const src = lab.makeSourceFromData(SRC, data)
+        const warm = lab.prefilter(src, SRC, OUT, [{}, { fis: 16 }, { fis: 16 }, { fis: 16 }, { fis: 16 }, { fis: 16 }])
+        lab.run(warm)
+        await device.queue.onSubmittedWorkDone()
+        const ref = await lab.reference(src, SRC, OUT)
+        // exposure from the roughest level's mean: mid-grey for an average sphere
+        const rough = await lab.readLevel(ref, MAXLOD, OUT)
+        const exposure = 0.5 / Math.max(rough.reduce((a, b) => a + b, 0) / rough.length, 1e-6)
+        const refImg = await lab.renderSpheres(ref, MAXLOD, exposure)
+        for (const [name, plan] of Object.entries(PLANS)) {
+          const pf = lab.prefilter(src, SRC, OUT, plan)
+          lab.run(pf)
+          await device.queue.onSubmittedWorkDone()
+          const img = await lab.renderSpheres(pf.out, MAXLOD, exposure)
+          const dd = imageDiff(img, refImg)
+          const worstCol = dd.perCol.reduce((b, c, i) => (c.p99 > dd.perCol[b].p99 ? i : b), 0)
+          const row = {
+            case: cap,
+            plan: name,
+            mean: dd.mean,
+            p99: dd.p99,
+            max: dd.max,
+            worstRoughness: (worstCol / 10).toFixed(1),
+            worstColP99: dd.perCol[worstCol].p99,
+          }
+          if (cap === 'golden') {
+            const t = await lab.time(pf, 40, 9)
+            row.ms = +t.ms.toFixed(3)
+            row.medianMs = +t.medianMs.toFixed(3)
+          }
+          rows.push(row)
+          pf.out.destroy()
+        }
+        ref.destroy()
+        warm.out.destroy()
+        src.destroy()
+      }
+      window.__result = rows
+    </script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <body>
+    <script type="module">
+      // Per-step cost of a plan: source mip chain, then each output level.
+      import { initDevice, Lab } from './lab.js'
+
+      const device = await initDevice()
+      const lab = new Lab(device)
+      const PLAN = [{}, { fis: 128 }, { fis: 256 }, { integ: 16 }, { integ: 16 }, { integ: 16 }] // D3
+      const src = lab.makeSource(256, { sun: [0.3, 0.9, 0.3], glow: 20 })
+      const pf = lab.prefilter(src, 256, 256, PLAN)
+      const only = (idx) => ({ encode: (e) => pf.encode(e, idx) })
+      const mip = Array.from({ length: pf.mipSteps }, (_, i) => i)
+      const rows = [{ step: 'whole plan', ...(await lab.time(pf)) }]
+      rows.push({ step: 'source mips', ...(await lab.time(only(mip))) })
+      const labels = ['L0 copy', 'L1 fis128', 'L2 fis256', 'L3 integ16 tiled', 'L4 integ16', 'L5 integ16']
+      for (let l = 0; l <= pf.maxLod; l++) rows.push({ step: labels[l], ...(await lab.time(only([pf.mipSteps + l]))) })
+      window.__result = rows.map((r) => ({ step: r.step, ms: +r.ms.toFixed(3), medianMs: +r.medianMs.toFixed(3) }))
+    </script>
+  </body>
+</html>

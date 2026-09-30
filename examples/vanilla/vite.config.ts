@@ -8,6 +8,19 @@ import { readdirSync } from 'node:fs'
 // into internals import `@sky/<path>` (extensionless → Vite resolves the .ts).
 const repoSrc = resolve(__dirname, '../../src')
 
+// THREE_SRC=<three.js checkout> runs the demos against three from source
+// (e.g. an unreleased dev build): `three`, `three/webgpu`, `three/tsl` and
+// `three/addons/*` resolve into it instead of node_modules.
+const threeSrc = process.env.THREE_SRC ? resolve(process.env.THREE_SRC) : null
+const threeAliases = threeSrc
+  ? [
+      { find: /^three\/webgpu$/, replacement: `${threeSrc}/src/Three.WebGPU.js` },
+      { find: /^three\/tsl$/, replacement: `${threeSrc}/src/Three.TSL.js` },
+      { find: /^three\/addons\//, replacement: `${threeSrc}/examples/jsm/` },
+      { find: /^three$/, replacement: `${threeSrc}/src/Three.WebGPU.js` },
+    ]
+  : []
+
 // Auto-discover every .html demo (top level + parity/) as a build entry so
 // `vite build` type-resolves them all — a no-browser smoke test of imports.
 function htmlEntries() {
@@ -31,11 +44,14 @@ function htmlEntries() {
 
 export default defineConfig({
   base: process.env.BASE_PATH || '/',
+  // A separate pre-bundle cache, so a THREE_SRC server and a normal one don't share deps.
+  cacheDir: threeSrc ? 'node_modules/.vite-three-src' : undefined,
   server: { port: 5173, open: false },
   resolve: {
     alias: [
       { find: '@pmndrs/sky', replacement: resolve(repoSrc, 'index.ts') },
       { find: /^@sky\//, replacement: `${repoSrc}/` },
+      ...threeAliases,
     ],
   },
   build: {

@@ -23,9 +23,10 @@ import { SkyViewLUT } from './luts/SkyViewLUT'
 import { AerialPerspectiveLUT } from './luts/AerialPerspectiveLUT'
 import { uniform } from 'three/tsl'
 import { SKY_RENDER_ORDER, SkyAtmosphereMesh } from './SkyAtmosphereMesh'
-import { PmremScheduler } from './PmremScheduler'
+import { SkyPmrem } from './pmrem/SkyPmrem'
+
 import type { Look } from '../looks'
-import type { PmremSchedulerOptions } from './PmremScheduler'
+import type { SkyPmremOptions } from './pmrem/SkyPmrem'
 
 import type { AtmosphereParams } from '../core/AtmosphereParams'
 import type { LutResolutions } from '../core/resolutions'
@@ -38,8 +39,8 @@ interface SkyAtmosphereBakerOptions {
   apKmPerSlice?: number
   apResolution?: any
   mirrorBelowHorizon?: boolean
-  /** IBL refresh throttling / time-slicing. See `PmremSchedulerOptions`. */
-  pmrem?: PmremSchedulerOptions
+  /** IBL prefilter: our per-frame compute path or three's throttled generator. See `SkyPmremOptions`. */
+  pmrem?: SkyPmremOptions
 }
 
 /**
@@ -93,8 +94,8 @@ export class SkyAtmosphereBaker {
   cubeCamera: CubeCamera
   _mirrorBelowHorizon: boolean
   pmremGenerator: PMREMGenerator
-  /** Throttled, time-sliced IBL refresh; owns the persistent PMREM target. */
-  pmrem: PmremScheduler
+  /** IBL prefilter (compute every change, or three's generator throttled); owns the persistent PMREM target. */
+  pmrem: SkyPmrem
   sunDirty: boolean
   atmosDirty: boolean
   cubeDirty: boolean
@@ -237,9 +238,10 @@ export class SkyAtmosphereBaker {
     // --- PMREM ---
     this.pmremGenerator = new PMREMGenerator(renderer)
     this.pmremGenerator.compileCubemapShader()
-    // The scheduler allocates the persistent target on the first bake and
-    // reuses it, so `environmentTexture` keeps a stable identity (see update()).
-    this.pmrem = new PmremScheduler(renderer, this.pmremGenerator, this.cubeRenderTarget.texture, pmrem)
+    // three's generator allocates the persistent target on the first bake and
+    // it is reused from then on, so `environmentTexture` keeps a stable
+    // identity (see update()).
+    this.pmrem = new SkyPmrem(renderer, this.pmremGenerator, this.cubeRenderTarget.texture, pmrem)
 
     // --- dirty flags (all true on construction → first update() does a full bake) ---
     this.sunDirty = true
@@ -699,11 +701,11 @@ export class SkyAtmosphereBaker {
       this.sky.showMoonDisc.value = prevShowMoonDisc
       this.sky.mirrorBelowHorizon.value = prevMirror
 
-      // 3. PMREM — scheduled rather than run inline. A full r185 PMREM is
-      // ~7 ms of GGX importance sampling (512 samples/texel, latency-bound),
-      // most of a sun-change re-bake. The scheduler throttles refreshes while
-      // the sky keeps changing and spreads each one over several frames; the
-      // first bake is synchronous. It keeps one persistent target so
+      // 3. PMREM. On WebGPU with a cube-mip PMREM (three r187+), SkyPmrem
+      // re-filters it in one compute pass (~0.9 ms) on every change. Otherwise
+      // three's generator runs throttled and time-sliced (PmremScheduler),
+      // since a whole r185 bake is ~6 ms. Either way the first bake is
+      // synchronous and there is one persistent target so
       // `environmentTexture` never changes identity — a new texture object
       // every tick invalidates the TSL pipeline cache for every material that
       // references the environment node (see Changelog 0.1.3).

@@ -52,7 +52,7 @@
        * onSubmittedWorkDone. (WebGPU timestamp totals are unreliable on Apple
        * GPUs for frames with many small passes such as PMREM.)
        *
-       * URL: ?mode=stars+mw&dpr=2&sun=-16&inspector=0
+       * URL: ?mode=stars+mw&dpr=2&sun=-16&inspector=0&pmrem=three
        */
       import * as THREE from 'three/webgpu'
       import { Inspector } from 'three/addons/inspector/Inspector.js'
@@ -89,6 +89,8 @@
         dayOfYear: 176,
         latitude: 48.9,
         enableAerialPerspective: false,
+        // ?pmrem=three forces three's throttled generator (A/B against our compute path)
+        pmrem: q.get('pmrem') ? { generator: q.get('pmrem') } : undefined,
       })
       const scene = new THREE.Scene()
       sky.attach(scene)
@@ -195,6 +197,8 @@
 
       window.__bench = {
         MODES,
+        sky,
+        renderer,
         applyMode,
         setSun,
         setDpr(v) {

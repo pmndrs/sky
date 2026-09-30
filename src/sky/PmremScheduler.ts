@@ -1,13 +1,10 @@
-import {
-  CubeUVReflectionMapping,
-  HalfFloatType,
-  LinearFilter,
-  LinearSRGBColorSpace,
-  RGBAFormat,
-  RenderTarget,
-} from 'three/webgpu'
+import { HalfFloatType, LinearFilter, LinearSRGBColorSpace, RGBAFormat, RenderTarget } from 'three/webgpu'
 
 import type { PMREMGenerator, Texture } from 'three/webgpu'
+
+// three's CubeUVReflectionMapping. A literal because r187 removed the export
+// (the atlas is gone), and a missing named import stops the module loading.
+const CubeUVReflectionMapping = 306
 
 export interface PmremSchedulerOptions {
   /**
@@ -59,6 +56,7 @@ export class PmremScheduler {
   /** Next level to filter in the active sliced refresh; 0 = none active. */
   private _nextLevel = 0
   private _canSlice: boolean
+  private _warned = false
 
   constructor(renderer: any, generator: PMREMGenerator, source: Texture, options: PmremSchedulerOptions = {}) {
     this._renderer = renderer
@@ -72,9 +70,6 @@ export class PmremScheduler {
       typeof g._init === 'function' &&
       typeof g._textureToCubeUV === 'function' &&
       typeof g._applyGGXFilter === 'function'
-    if (!this._canSlice) {
-      console.warn('PmremScheduler: PMREMGenerator internals changed; falling back to whole-frame bakes.')
-    }
   }
 
   get texture(): Texture | null {
@@ -114,6 +109,11 @@ export class PmremScheduler {
 
     this._pending = false
     this._lastStart = now
+    if (!this._canSlice && this.levelsPerFrame < Infinity && !this._warned) {
+      // Only when slicing was asked for: SkyPmrem owns a scheduler it may never slice with.
+      this._warned = true
+      console.warn('PmremScheduler: PMREMGenerator internals changed; falling back to whole-frame bakes.')
+    }
     if (!this._canSlice || !(this.levelsPerFrame < this._levelCount())) {
       this._bakeWhole()
     } else {

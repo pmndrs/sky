@@ -14,7 +14,7 @@ import { presets, resolvePreset } from './presets'
 import { resolveLook, resolveLookTrack, sampleLookTrack } from './looks'
 
 import type { Look, LookInput, LookKeyframe, LookTrack } from './looks'
-import type { PmremSchedulerOptions } from './sky/PmremScheduler'
+import type { SkyPmremOptions } from './sky/pmrem/SkyPmrem'
 import { applyHaze, policyToHazeMode } from './applyHaze'
 import { createHazeShadowState, disposeHazeShadowState, updateHazeShadowState } from './sky/hazeShadows'
 import type { HazeShadowOptions, HazeShadowState } from './sky/hazeShadows'
@@ -47,8 +47,12 @@ interface SkyOptions {
   enableAerialPerspective?: boolean
   apKmPerSlice?: number
   mirrorBelowHorizon?: boolean
-  /** IBL refresh throttling / time-slicing (`{ minInterval, levelsPerFrame }`). */
-  pmrem?: PmremSchedulerOptions
+  /**
+   * IBL prefilter. `{ generator: 'sky' }` (default) re-filters every sky
+   * change with WebGPU compute where the installed three allows it; otherwise
+   * three's generator runs throttled (`{ minInterval, levelsPerFrame }`).
+   */
+  pmrem?: SkyPmremOptions
 }
 
 /**

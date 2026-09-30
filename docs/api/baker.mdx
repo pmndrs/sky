@@ -77,32 +77,67 @@ just a camera-height comparison.
 
 ## Environment (PMREM) refresh
 
-"PMREM" in the table above means the IBL refresh is **scheduled**, not run
-inline. three r185's `PMREMGenerator` prefilters with GGX importance sampling
-at a fixed 512 samples per texel over about ten roughness levels. That is
-~7 ms on an Apple M-series GPU and it is latency-bound, so a smaller cube
-barely helps. Sky lighting changes slowly, so the baker's `PmremScheduler`:
+"PMREM" in the table above is the IBL refresh: the cube prefiltered into one
+level per roughness, which is what `environmentTexture` holds. The baker has
+two ways to do it, chosen by `pmrem.generator`.
+
+### `generator: 'sky'` (default): every change, in the same frame
+
+On the WebGPU backend the baker re-filters the IBL with its own compute
+prefilter (`SkyPmrem`) on every sky change, in one compute pass instead of
+three's six render passes per level. A moving sun or a scrubbed time-of-day
+slider updates reflections in the same frame as the background.
+
+- **three r187 and later:** three's own algorithm (GGX filtered importance
+  sampling on the sharp levels, exhaustive integration on the rough ones), so
+  the output matches three's generator. About 0.9 ms instead of about 4.5 ms
+  (256 cube, Apple M-series).
+- **three r185/r186:** the PMREM is a CubeUV atlas. Each atlas level is
+  filtered at the roughness three's material sampler reads it at. About 1 ms
+  instead of 6.4 ms (r185) or 3.3 ms (r186). It is also much closer to the
+  true GGX reflection than three's generator, whose levels don't match its
+  own sampler, so mid and high roughness reflections look slightly different
+  from `generator: 'three'`: softer horizons, and the ground's falloff kept
+  on very rough surfaces.
+
+```js
+new Sky(renderer) // generator: 'sky', quality: 'three'
+new Sky(renderer, { pmrem: { quality: 'fast' } }) // fewer samples on the sharpest level
+```
+
+Measured with the sun moving every frame (headless Chromium, Apple M-series):
+`sky.update()` costs 1.0–1.1 ms mean and at most 2.2 ms, and the IBL always
+matches the current sky.
+
+On the WebGL backend (no compute) the baker uses three's generator as below.
+
+### `generator: 'three'`: throttled and time-sliced
+
+three's `PMREMGenerator` through `PmremScheduler`. A whole r185 bake is
+about 6 ms and latency-bound, so a smaller cube barely helps. The scheduler:
 
 - **throttles**: while the sky keeps changing, a refresh starts at most every
   `minInterval` ms (default 250). When changes stop, the final state is
   refreshed on the next frame, so the IBL never stays stale;
-- **time-slices**: each refresh filters `levelsPerFrame` roughness levels per
-  frame (default 1) into a scratch target and copies into the persistent
-  target when complete. The result is identical to a whole bake, and
-  `environmentTexture` never changes identity;
+- **time-slices** (r185/r186): each refresh filters `levelsPerFrame`
+  roughness levels per frame (default 1) into a scratch target and copies
+  into the persistent target when complete. The result is identical to a
+  whole bake;
 - bakes the **first** environment synchronously, so frame one has IBL.
 
 ```js
-new Sky(renderer, { pmrem: { minInterval: 250, levelsPerFrame: 1 } }) // defaults
-new Sky(renderer, { pmrem: { minInterval: 0, levelsPerFrame: Infinity } }) // old behaviour
+new Sky(renderer, { pmrem: { generator: 'three', minInterval: 250, levelsPerFrame: 1 } })
+new Sky(renderer, { pmrem: { generator: 'three', minInterval: 0, levelsPerFrame: Infinity } }) // whole bake per change
 sky.flushEnvironment() // finish any pending refresh now (screenshots, hard cuts)
 ```
 
-Measured with the sun moving every frame (headless Chromium, Apple M-series):
-the old whole bake cost 7.7 ms mean / 17 ms max per update; the defaults cost
-1.0 ms mean / 3.1 ms max. The cube background itself (`texture`) still
-re-bakes on every change; only the IBL lags, by at most `minInterval` plus
+Measured with the sun moving every frame on r185: a whole bake per change
+cost 7.7 ms mean / 17 ms max per update; the defaults cost 1.0 ms mean /
+3.1 ms max, but the IBL lags the background by up to `minInterval` plus
 about ten frames.
+
+Either way, `environmentTexture` keeps the same texture object from the first
+bake until `dispose()`.
 
 ## Sun and camera
 

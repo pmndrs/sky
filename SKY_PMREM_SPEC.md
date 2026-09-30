@@ -467,6 +467,12 @@ the real `Sky` in `16-stars-bench.html`, sun moving every frame:
   prefilters, and copies the result into three's target: per mip on r187, one
   atlas copy on r185/r186. All bind groups are built once; the GPU textures
   are looked up each bake in case three recreated them.
+- **Why copy instead of writing three's target directly:** writing directly
+  needs `STORAGE_BINDING` on the texture materials sample. The upstream branch
+  (Phase 4b) does that, and three's `webgpu_cubemap_dynamic` example measured
+  about 0.2 ms per frame slower for every material sampling a PMREM (Apple M5
+  Pro). The copy costs about 0.05 ms per bake and keeps three's target as a
+  plain sampled texture.
 - **Found on the way:** the library could not load on r187 at all.
   `PmremScheduler` imported `CubeUVReflectionMapping`, which r187 removed
   along with the atlas. It is now a literal (306). Every other three import

@@ -277,15 +277,17 @@ noon" of the live-sky demos). Demos that use the baked cube as
 `createHazeOutputNode` now tests the raw depth (a uniform tolerance, so the
 f32 survives codegen), OR-ed with the old tests. Verify with `?debug=is-sky`.
 
-The tolerance is not free (2026-09-29). The first version used 4 ulps, and
-geometry near the far plane shares those depth values: with near 1 m and far
-200 km everything past 191 km was taken for sky, got no haze and showed its
-raw colour — a one-pixel black line along the horizon of a ground plane that
-runs past `far`, flickering as the camera moves. The test is now exact
-(`>= 1.0`) until `baker.createSkyMesh()` hands out a live sky mesh, and
-1.25 ulps after that (`baker.skyDepthEpsilon`, `LIVE_SKY_DEPTH_EPSILON`;
-1.5 would tie and round to 2 ulps in f32). `is-sky` cannot show this bug: the
-misclassified pixels look like sky there. Look for the unhazed surface colour.
+No tolerance works, so the sky mesh writes exactly 1.0 (2026-09-30,
+`material.depthNode = float(1.0)` in `SkyAtmosphereMesh`) and the test is
+exact (`>= 1.0`). History, so nobody re-adds an epsilon: 4 ulps swallowed
+geometry past 191 km at near 1 m / far 200 km (unhazed one-pixel black line
+along the horizon, flickering with camera motion); 1.25 ulps (2026-09-29)
+then let **whole sky-mesh triangles** fall 2+ ulps below 1.0 at some view
+orientations, so mid-drag they were hazed — triangles and hard seams across
+the live sky, gone the moment the camera stops. The rounding varies per
+triangle and per frame, so a static `?debug=is-sky` looks clean; capture it
+every few frames _during_ a camera drag. `baker.skyDepthEpsilon` stays (0) for
+a custom far-plane sky that cannot write 1.0.
 
 ### Never inverse-project a far-plane point for a ray direction (2026-09-26)
 
@@ -321,7 +323,7 @@ show a bright horizon band — that is the technique, not a bug.
 
 ### Reading debug values through the compare page: know what the tone curve wraps
 
-`20-bruneton-compare.html` tone-maps whatever the haze node returns, so the
+`20-reference-compare.html` tone-maps whatever the haze node returns, so the
 library's `?debug=` modes (`w`, `ap-alpha`, `ap-rgb`, `is-sky`, `beyond`) come
 out **through the Bruneton curve**, while the page-local `?dbg=` modes (`depth`,
 `depthenc`, `viewz`, `viewzkm`, `issky`) return **before** it. Decoding a
@@ -407,6 +409,42 @@ page ran at 120 fps. Use the burst method in `examples/vanilla/16-stars-bench.ht
 divide). And the number that matters for time-of-day animation: a sun-change
 re-bake is ~9 ms, ~95% of it PMREM — not the LUTs, not the cube faces.
 
+### His code runs here now — check against it before arguing about brightness (2026-09-28)
+
+`examples/vanilla/20-reference-compare.html` runs both references next to ours
+in up to three panels (two draggable seams, any source in any panel, solo, or
+a diff of any two): Bruneton's demo.js verbatim, and Hillaire's HLSL compiled
+to WGSL by Slang (`scripts/build-sebh-wgsl.mjs`, output committed under
+`sebh/generated/`, host `sebh/SebhReference.js` on its own `GPUDevice`),
+including **his path tracer** as ground truth (a method on his panel; cheap,
+~0.3 ms per sample at 640×360). One camera and sun (Bruneton's frame and
+orbit views; a free camera for looking up, swapped into his `model_from_view`
+at the GL call — demo.js stays verbatim), one set of units (his spectral
+radiance), one curve (his) — or `display: shipped` for each author's own.
+`pnpm --filter @pmndrs/sky-example-vanilla ref:verify` writes the three-way
+report and gates on Hillaire's Transmittance and Multi-scattering LUTs matching
+ours texel for texel (1.000 / 0.999); if those fail, the harness is broken, not
+the sky. `scripts/probe-reference.mjs` is the step-driven prober. Findings:
+`research/sebh-reference-2026-09-28.md`.
+
+Traps hit while building it:
+
+- **His Sky-View LUT goes NaN on Metal.** `sqrt(1 − lightViewCosAngle²)` in
+  `SkyViewLutPS` is unclamped, and the last column rounds to |cos| > 1, so
+  bilinear filtering smears NaN across the anti-sun sky. The build patches
+  it (listed in `manifest.json`). Our port always had the clamp.
+- **His transmittance pass declares the LUT it writes as an input.** D3D
+  leaves a null SRV there; WebGPU rejects the usage conflict. Bind a zero
+  texture.
+- **His "forward" camera offset includes the vertical component**, so a steep
+  pitch puts the camera underground: his shaders return one flat colour
+  and ours clamp. That looked like a 2× mismatch.
+- **`readRenderTargetPixelsAsync` returns rows padded to 256 bytes.**
+  `sebh/compare.js#readRenderTarget` handles the stride.
+- **Compare his path tracer at 4096 spp.** It converges there (within 1% of
+  8192); his comment that its RNG "goes super wrong after a while" didn't
+  show up at these counts.
+
 ### The benign `<!DOCTYPE` JSON parse error
 
 Every page logs `Uncaught (in promise) SyntaxError: Unexpected token '<'`
@@ -467,7 +505,9 @@ blocked on r3f-canary/three-webgpu build interop).
 - Bruneton's precomputed-scattering demo is vendored verbatim under
   `examples/vanilla/public/bruneton/` (his `demo.js` + dumped shaders; the
   16 MB `.dat` tables are gitignored, `scripts/fetch-bruneton.mjs` downloads
-  them). `20-bruneton-compare.html` renders it next to ours with one camera,
-  one sun and one tone curve; `scripts/verify-bruneton.mjs` writes a
-  per-pixel ours/his radiance report. Use it before trusting any brightness
-  or colour change. Findings live in `research/bruneton-audit-2026-09-26.md`.
+  them). `20-reference-compare.html` renders it, Hillaire's own code and ours
+  with one camera, one sun and one tone curve; `scripts/verify-reference.mjs`
+  writes a per-pixel three-way radiance report. Use it before trusting any
+  brightness or colour change. Findings live in
+  `research/bruneton-audit-2026-09-26.md` and
+  `research/sebh-reference-2026-09-28.md`.

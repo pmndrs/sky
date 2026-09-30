@@ -1,0 +1,874 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>20 — Bruneton · Hillaire · @pmndrs/sky</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #stage,
+      .source {
+        position: absolute;
+        inset: 0;
+      }
+      .source canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #overlay {
+        position: absolute;
+        inset: 0;
+        cursor: grab;
+        touch-action: none;
+      }
+      #overlay.dragging {
+        cursor: grabbing;
+      }
+      #overlay.seam-hover {
+        cursor: col-resize;
+      }
+      .seam {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        margin-left: -1px;
+        background: rgba(255, 255, 255, 0.85);
+        pointer-events: none;
+      }
+      .label {
+        position: absolute;
+        top: 8px;
+        padding: 4px 8px;
+        background: rgba(0, 0, 0, 0.55);
+        font-size: 12px;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 5;
+        white-space: nowrap;
+      }
+      #info {
+        position: absolute;
+        left: 8px;
+        bottom: 8px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.65);
+        font:
+          11px/1.45 ui-monospace,
+          Menlo,
+          monospace;
+        white-space: pre;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #probe {
+        position: absolute;
+        width: 13px;
+        height: 13px;
+        margin: -7px 0 0 -7px;
+        border: 1px solid #fff;
+        border-radius: 50%;
+        box-shadow: 0 0 0 1px #000;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #help {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <!-- Bruneton's demo.js owns #glcanvas (and toggles #help); it takes this wrapper as its root element. -->
+      <div class="source" id="src-bruneton">
+        <canvas id="glcanvas" width="400" height="300"></canvas>
+        <ul id="help"></ul>
+      </div>
+      <div class="source" id="src-sebh"><canvas id="sebhcanvas"></canvas></div>
+      <div class="source" id="src-ours"></div>
+      <div class="seam" id="seam0"></div>
+      <div class="seam" id="seam1"></div>
+      <div id="overlay"></div>
+      <div id="probe"></div>
+      <div class="label" id="label0"></div>
+      <div class="label" id="label1"></div>
+      <div class="label" id="label2"></div>
+      <div id="info">loading…</div>
+    </div>
+
+    <!-- Eric Bruneton's demo.js, unmodified (BSD-3). Defines the globals `Demo` and `Utils`.
+         See public/bruneton/README.md for provenance. Classic script on purpose: it is not a module. -->
+    <script src="./bruneton/demo.js"></script>
+
+    <script type="module">
+      /*
+       * Three renderers, one camera, one sun, one set of units:
+       *   bruneton — Bruneton 2017, his demo.js and precomputed tables (WebGL2)
+       *   sebh     — Hillaire 2020, his HLSL compiled to WGSL, incl. his path tracer
+       *   ours     — @pmndrs/sky
+       * The camera and sun follow Bruneton's demo (Z-up, km, origin on the ground
+       * under his sphere); his orbit views 1–9 drive all three exactly as his
+       * demo draws them, and a free camera covers what an orbit cannot (looking
+       * up, altitude sweeps).
+       */
+      import * as THREE from 'three/webgpu'
+      import GUI from 'three/addons/libs/lil-gui.module.min.js'
+
+      import { presets } from '@pmndrs/sky'
+      import { EARTH } from '@sky/core/AtmosphereParams'
+      import { SebhReference, SEBH_EARTH } from './sebh/SebhReference.js'
+      import { readRenderTarget, flipY, ratioStats, meanAbsDeviation, windowMean, heatmaps } from './sebh/compare.js'
+      import {
+        createBrunetonSide,
+        SOLAR_IRRADIANCE,
+        BRUNETON_GROUND_ALBEDO,
+        BRUNETON_FOV_Y_DEG,
+      } from './reference/bruneton-side.js'
+      import { createOursSide } from './reference/ours-side.js'
+
+      const params = new URLSearchParams(location.search)
+      const DPR = +(params.get('dpr') || window.devicePixelRatio || 1)
+      const SOURCES = ['bruneton', 'sebh', 'ours']
+      const NAMES = { bruneton: 'Bruneton 2017', sebh: 'Hillaire 2020 (native)', ours: '@pmndrs/sky' }
+
+      // ------------------------------------------------------------------
+      // Shared state (Bruneton's frame). Orbit fields are exactly his Demo's.
+      // ------------------------------------------------------------------
+      const state = {
+        cameraMode: 'orbit', // orbit | free
+        viewDistanceMeters: 9000,
+        viewZenith: 1.47,
+        viewAzimuth: -0.1,
+        // free camera: `heightM` above the ground, looking along azimuth `yaw`,
+        // `pitch` up; placed FREE_OFFSET_KM out along its own view azimuth so
+        // his sphere (on the origin) is always behind it
+        heightM: 500,
+        pitch: 0,
+        yaw: 0,
+        sunZenith: 1.3,
+        sunAzimuth: 2.9,
+        exposure: 10,
+        // Hillaire's side and ours; Bruneton's is baked into his tables.
+        groundAlbedo: BRUNETON_GROUND_ALBEDO,
+      }
+      const deg = Math.PI / 180
+      const FREE_OFFSET_KM = 50
+      // Bruneton's views (keys 1–9): [viewDistanceMeters, viewZenith, viewAzimuth, sunZenith, sunAzimuth, exposure].
+      // Free views: height, pitch, yaw relative to the sun, sun elevation — for
+      // the sky itself, which his orbit (always looking at his sphere) cannot aim at.
+      const VIEWS = {
+        1: { orbit: [9000, 1.47, 0, 1.3, 3, 10] },
+        2: { orbit: [9000, 1.47, 0, 1.564, -3, 10] },
+        3: { orbit: [7000, 1.57, 0, 1.54, -2.96, 10] },
+        4: { orbit: [7000, 1.57, 0, 1.328, -3.044, 10] },
+        5: { orbit: [9000, 1.39, 0, 1.2, 0.7, 10] },
+        6: { orbit: [9000, 1.5, 0, 1.628, 1.05, 200] },
+        7: { orbit: [7000, 1.43, 0, 1.57, 1.34, 40] },
+        8: { orbit: [2.7e6, 0.81, 0, 1.57, 2, 10] },
+        9: { orbit: [1.2e7, 0.0, 0, 0.93, -2, 10] },
+        sky: { label: 'sky facing a 25.8° sun', free: { heightM: 500, pitch: 12, yawFromSun: 0, sunEl: 25.78 } },
+        away: { label: 'sky, back to the sun', free: { heightM: 500, pitch: 12, yawFromSun: 180, sunEl: 25.78 } },
+        zenith: { label: 'zenith, sun 45°', free: { heightM: 500, pitch: 80, yawFromSun: 90, sunEl: 45 } },
+        sunset: { label: 'sunset, sun 2°', free: { heightM: 500, pitch: 8, yawFromSun: 0, sunEl: 2 } },
+        twilight: { label: 'twilight, sun −4°', free: { heightM: 500, pitch: 8, yawFromSun: 0, sunEl: -4 } },
+        stratosphere: { label: '30 km, sun 25.8°', free: { heightM: 30000, pitch: -3, yawFromSun: 40, sunEl: 25.78 } },
+      }
+      const setView = (key) => {
+        const v = VIEWS[key]
+        if (!v) return
+        if (v.orbit) {
+          state.cameraMode = 'orbit'
+          ;[
+            state.viewDistanceMeters,
+            state.viewZenith,
+            state.viewAzimuth,
+            state.sunZenith,
+            state.sunAzimuth,
+            state.exposure,
+          ] = v.orbit
+        } else {
+          const f = v.free
+          state.cameraMode = 'free'
+          state.heightM = f.heightM
+          state.pitch = f.pitch
+          state.sunZenith = (90 - f.sunEl) * deg
+          state.yaw = state.sunAzimuth / deg + f.yawFromSun
+          state.exposure = 10
+        }
+      }
+
+      const legacyMode = params.get('mode') // 20-bruneton-compare / 21-sebh-compare links: bruneton | ours | split | diff
+      const ui = {
+        layout:
+          params.get('layout') ||
+          (legacyMode === 'diff' ? 'diff' : legacyMode && legacyMode !== 'split' ? 'solo' : 'three'),
+        slots: (params.get('slots') || 'bruneton,sebh,ours').split(','),
+        seams: [1 / 3, 2 / 3],
+        solo: params.get('solo') || (SOURCES.includes(legacyMode) ? legacyMode : 'bruneton'),
+        diffA: (params.get('diff') || 'bruneton,ours').split(',')[0],
+        diffB: (params.get('diff') || 'bruneton,ours').split(',')[1],
+        diffGain: 4,
+        view: params.get('view') || '1',
+        // his side: lut (his real-time path) | raymarch | pathtrace (ground truth)
+        sebhMethod: params.get('method') || 'lut',
+        ptSamplesPerFrame: 8,
+        pathMaxDepth: 12,
+        // shared: Bruneton's units and curve on all three; shipped: each author's own
+        display: 'shared',
+      }
+      setView(ui.view)
+
+      // ------------------------------------------------------------------
+      // The three renderers
+      // ------------------------------------------------------------------
+      const bruneton = createBrunetonSide(document.getElementById('src-bruneton'), document.getElementById('glcanvas'))
+      const sebh = await SebhReference.create({ canvas: document.getElementById('sebhcanvas') })
+
+      const renderer = new THREE.WebGPURenderer({ antialias: false })
+      renderer.setPixelRatio(DPR)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      // Display curves are applied in the output node; keep the renderer out of it.
+      renderer.toneMapping = THREE.NoToneMapping
+      renderer.outputColorSpace = THREE.LinearSRGBColorSpace
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      document.getElementById('src-ours').appendChild(renderer.domElement)
+      await renderer.init()
+      const oursSide = createOursSide(renderer, {
+        debug: params.get('debug'),
+        dbg: params.get('dbg'),
+        bypassHaze: !!params.get('bypass'),
+        far: +(params.get('far') || 4e7),
+      })
+      const { ours, sky } = oursSide
+
+      // ------------------------------------------------------------------
+      // Camera basis in Bruneton's frame (km): his orbit matrix verbatim, or a
+      // free camera with the same conventions (right, up, back = −forward).
+      // ------------------------------------------------------------------
+      const cameraBasis = () => {
+        if (state.cameraMode === 'orbit') {
+          const cz = Math.cos(state.viewZenith)
+          const sz = Math.sin(state.viewZenith)
+          const ca = Math.cos(state.viewAzimuth)
+          const sa = Math.sin(state.viewAzimuth)
+          const d = state.viewDistanceMeters / 1000
+          const back = [sz * ca, sz * sa, cz]
+          return {
+            right: [-sa, ca, 0],
+            up: [-cz * ca, -cz * sa, sz],
+            back,
+            position: back.map((v) => v * d),
+            distanceM: state.viewDistanceMeters,
+          }
+        }
+        const p = state.pitch * deg
+        const y = state.yaw * deg
+        const f = [Math.cos(p) * Math.cos(y), Math.cos(p) * Math.sin(y), Math.sin(p)]
+        const right = [Math.sin(y), -Math.cos(y), 0]
+        const up = [
+          right[1] * f[2] - right[2] * f[1],
+          right[2] * f[0] - right[0] * f[2],
+          right[0] * f[1] - right[1] * f[0],
+        ]
+        // z solved so the altitude above the curved ground is exactly heightM
+        const R = EARTH.bottomRadius
+        const z = Math.sqrt((R + state.heightM / 1000) ** 2 - FREE_OFFSET_KM ** 2) - R
+        const position = [FREE_OFFSET_KM * Math.cos(y), FREE_OFFSET_KM * Math.sin(y), z]
+        return { right, up, back: f.map((v) => -v), position, distanceM: state.heightM }
+      }
+      const sunDirection = () => [
+        Math.cos(state.sunAzimuth) * Math.sin(state.sunZenith),
+        Math.sin(state.sunAzimuth) * Math.sin(state.sunZenith),
+        Math.cos(state.sunZenith),
+      ]
+      // Hillaire's frame is Z-up too, but left-handed (LookAtLH): mirroring y
+      // maps Bruneton's right-handed screen onto his, same pixel ↔ same direction.
+      const toSebh = ([x, y, z]) => [x, -y, z]
+
+      // Is pixel (x, y) (normalised) sky, i.e. does its ray miss his sphere
+      // (1 km radius, resting on the origin) and the planet? Hillaire's panel
+      // has neither, so three-way numbers only mean something on sky pixels.
+      const isSky = (nx, ny) => {
+        const b = cameraBasis()
+        const t = Math.tan((BRUNETON_FOV_Y_DEG * deg) / 2)
+        const aspect = window.innerWidth / window.innerHeight
+        const sx = (2 * nx - 1) * t * aspect
+        const sy = (1 - 2 * ny) * t
+        const dir = [0, 1, 2].map((i) => b.right[i] * sx + b.up[i] * sy - b.back[i])
+        const len = Math.hypot(...dir)
+        const hit = (c, r) => {
+          const o = b.position.map((v, i) => v - c[i])
+          const bb = o.reduce((s, v, i) => s + v * dir[i], 0) / len
+          const cc = o.reduce((s, v) => s + v * v, 0) - r * r
+          const disc = bb * bb - cc
+          return disc >= 0 && -bb + Math.sqrt(disc) > 0
+        }
+        return !hit([0, 0, 1], 1) && !hit([0, 0, -EARTH.bottomRadius], EARTH.bottomRadius)
+      }
+
+      // ------------------------------------------------------------------
+      // Units and display. Shared: everything in Bruneton's spectral radiance
+      // (Hillaire's gSunIlluminance = his solar irradiance, ours likewise) and
+      // his curve. Shipped: each as its author ships it.
+      // ------------------------------------------------------------------
+      const applyDisplay = () => {
+        if (ui.display === 'shared') {
+          Object.assign(ours, { units: 'bruneton', tone: 'bruneton', sunTint: 'neutral' })
+        } else {
+          Object.assign(ours, oursSide.tuningPresets['demo today (LS 40, ACES 0.5)'])
+        }
+        oursSide.applyAll()
+        gui?.controllersRecursive().forEach((c) => c.updateDisplay())
+      }
+      const sebhIlluminance = () => (ui.display === 'shared' ? SOLAR_IRRADIANCE : 1)
+
+      const applyState = () => {
+        const b = cameraBasis()
+        bruneton.sync(state, state.cameraMode === 'free' ? b : null)
+
+        sebh.setCamera({
+          position: toSebh(b.position),
+          viewDir: toSebh(b.back.map((v) => -v)),
+          up: toSebh(b.up),
+          fovYDeg: BRUNETON_FOV_Y_DEG,
+        })
+        sebh.setSun(toSebh(sunDirection()))
+        sebh.sunIlluminance = sebhIlluminance()
+        sebh.showSunDisc = ours.sunDisc
+        sebh.pathMaxDepth = ui.pathMaxDepth
+        sebh.setAtmosphere({ groundAlbedo: [state.groundAlbedo, state.groundAlbedo, state.groundAlbedo] })
+
+        if (ours.groundAlbedo !== state.groundAlbedo) {
+          ours.groundAlbedo = state.groundAlbedo
+          sky.setGroundAlbedo(state.groundAlbedo)
+        }
+        const near = params.get('near') ? +params.get('near') : Math.min(1e4, Math.max(0.5, b.distanceM * 1e-4))
+        oursSide.sync(state, b, near)
+      }
+
+      // ------------------------------------------------------------------
+      // Layout: three panels / two / solo / diff (diff is drawn by Hillaire's
+      // device, which copies the other canvases in)
+      // ------------------------------------------------------------------
+      const visibleSlots = () =>
+        ui.layout === 'three'
+          ? ui.slots.slice(0, 3)
+          : ui.layout === 'two'
+            ? ui.slots.slice(0, 2)
+            : ui.layout === 'solo'
+              ? [ui.solo]
+              : ['sebh']
+      const applyLayout = () => {
+        const w = window.innerWidth
+        const slots = visibleSlots()
+        const edges = slots.length === 3 ? [0, ...ui.seams, 1] : slots.length === 2 ? [0, ui.seams[0], 1] : [0, 1]
+        for (const s of SOURCES) {
+          const el = document.getElementById(`src-${s}`)
+          const i = slots.indexOf(s)
+          el.style.clipPath =
+            i < 0
+              ? 'inset(0 0 0 100%)'
+              : `inset(0 ${Math.round((1 - edges[i + 1]) * w)}px 0 ${Math.round(edges[i] * w)}px)`
+        }
+        for (let k = 0; k < 2; k++) {
+          const seam = document.getElementById(`seam${k}`)
+          const show = k < slots.length - 1
+          seam.style.display = show ? 'block' : 'none'
+          if (show) seam.style.left = `${edges[k + 1] * 100}%`
+        }
+        for (let k = 0; k < 3; k++) {
+          const label = document.getElementById(`label${k}`)
+          label.style.display = k < slots.length ? '' : 'none'
+          if (k >= slots.length) continue
+          label.style.left = `calc(${edges[k] * 100}% + 8px)`
+          label.textContent =
+            ui.layout === 'diff'
+              ? `|${NAMES[ui.diffA]} − ${NAMES[ui.diffB]}| × ${ui.diffGain} (display values)`
+              : sourceLabel(slots[k])
+        }
+      }
+      const sourceLabel = (s) => {
+        if (s !== 'sebh') return NAMES[s]
+        const m = { lut: 'LUTs', raymarch: 'raymarch', pathtrace: `path traced, ${sebh.pathTracedSamples} spp` }
+        return `${NAMES.sebh} — ${m[ui.sebhMethod]}`
+      }
+
+      const resize = () => {
+        const w = window.innerWidth
+        const h = window.innerHeight
+        const pw = Math.round(w * DPR)
+        const ph = Math.round(h * DPR)
+        bruneton.resize(pw, ph)
+        sebh.resize(pw, ph)
+        oursSide.resize(w, h)
+        applyLayout()
+      }
+      window.addEventListener('resize', resize)
+      resize()
+
+      // ------------------------------------------------------------------
+      // Frame loop. Bruneton's demo renders in its own requestAnimationFrame
+      // loop from the state pushed here; ours and Hillaire's render below.
+      // Readbacks queue here so ours can be re-rendered linear in-frame.
+      // ------------------------------------------------------------------
+      let frame = 0
+      let pendingReads = []
+      let frameWaiters = []
+      const drawFrame = () => {
+        applyState()
+        oursSide.render()
+        const pt = ui.sebhMethod === 'pathtrace'
+        for (let i = 0; i < (pt ? ui.ptSamplesPerFrame : 1); i++) sebh.render(ui.sebhMethod)
+        const src = (s) => (s === 'sebh' ? 'sebh' : s === 'bruneton' ? bruneton.canvas : renderer.domElement)
+        sebh.present({
+          curve: ui.display === 'shared' ? 'bruneton' : 'sebh',
+          exposure: state.exposure,
+          diff: ui.layout === 'diff' ? { a: src(ui.diffA), b: src(ui.diffB), gain: ui.diffGain } : null,
+        })
+        if (pendingReads.length) {
+          const reads = pendingReads
+          pendingReads = []
+          const rt = oursSide.renderLinear()
+          const oursImg = readRenderTarget(renderer, rt, sebh.width, sebh.height)
+          const sebhImg = sebh.readFrame(ui.sebhMethod)
+          Promise.all([sebhImg, oursImg]).then(
+            ([s, o]) => reads.forEach((r) => r(s, o)),
+            (e) => reads.forEach((r) => r(null, null, e)),
+          )
+        }
+      }
+      // three's render target rows vs his texture rows: settled once from content.
+      let oursFlip = null
+      const readFrames = () =>
+        new Promise((resolve, reject) =>
+          pendingReads.push((s, o, e) => {
+            if (e) return reject(e)
+            if (oursFlip === null) oursFlip = meanAbsDeviation(s, flipY(o)) < meanAbsDeviation(s, o)
+            if (oursFlip) o = flipY(o)
+            // Both into Bruneton's units.
+            const ill = [].concat(sebhIlluminance())
+            const sScale = SOLAR_IRRADIANCE.map((v, i) => v / (ill[i] ?? ill[0]))
+            const oScale = oursSide.toBrunetonUnits()
+            for (let i = 0; i < s.data.length; i += 4) {
+              for (let c = 0; c < 3; c++) {
+                s.data[i + c] *= sScale[c]
+                o.data[i + c] *= oScale[c]
+              }
+            }
+            resolve({ sebh: s, ours: o })
+          }),
+        )
+
+      /**
+       * Three-way probe at normalised points, (2r+1)² window means, linear
+       * radiance in Bruneton's units. Bruneton's side is his 8-bit output with
+       * his curve inverted (Infinity where saturated); the other two are float.
+       */
+      const probe = async (points, r = 2) => {
+        const { sebh: s, ours: o } = await readFrames()
+        return points.map((p) => {
+          const px = Math.floor(p.x * s.width)
+          const py = Math.floor(p.y * s.height)
+          const b = bruneton.probe(px, py, r, state.exposure)
+          const sv = windowMean(s, px, py, r)
+          const ov = windowMean(o, px, py, r)
+          const div = (a, bb) => a.map((v, i) => v / bb[i])
+          return {
+            ...p,
+            sky: isSky(p.x, p.y),
+            bruneton: b.linear,
+            brunetonRgb8: b.rgb8,
+            sebh: sv,
+            ours: ov,
+            oursOverBruneton: div(ov, b.linear),
+            oursOverSebh: div(ov, sv),
+            sebhOverBruneton: div(sv, b.linear),
+          }
+        })
+      }
+
+      // Sky-match: open-sky grid, mean ratios per channel. The number to tune by.
+      const GRID = []
+      for (const y of [0.06, 0.15, 0.24]) for (const x of [0.08, 0.26, 0.5, 0.74, 0.92]) GRID.push({ x, y })
+      const skyMatch = async () => {
+        const pts = (
+          await probe(
+            GRID.filter((g) => isSky(g.x, g.y)),
+            1,
+          )
+        ).filter((p) => p.bruneton.every((v) => Number.isFinite(v) && v > 1e-4))
+        const mean = (key) => [0, 1, 2].map((c) => pts.reduce((s, p) => s + p[key][c], 0) / Math.max(pts.length, 1))
+        return {
+          n: pts.length,
+          oursOverBruneton: mean('oursOverBruneton'),
+          oursOverSebh: mean('oursOverSebh'),
+          sebhOverBruneton: mean('sebhOverBruneton'),
+        }
+      }
+
+      // Hillaire vs ours, texel for texel (Bruneton's tables use a different
+      // parameterisation). Exact in free-camera mode, where the camera sits
+      // on the vertical of the origin; his LUTs must be current (method 'lut').
+      const lutFlip = {}
+      const lutParity = async ({ images = false } = {}) => {
+        const b = sky.baker
+        const pairs = {
+          transmittance: [sebh.transmittance, b.transmittanceLUT.renderTarget],
+          multiScattering: [sebh.multiScat, b.multiScatterLUT.renderTarget],
+          skyView: [sebh.skyView, b.skyViewLUT.renderTarget],
+        }
+        const out = { flipped: {}, stats: {}, images: {} }
+        for (const [name, [hisTex, ourRt]] of Object.entries(pairs)) {
+          const his = await sebh.readTexture(hisTex)
+          let mine = await readRenderTarget(renderer, ourRt)
+          if (mine.width !== his.width || mine.height !== his.height) {
+            out.stats[name] = {
+              error: `size mismatch: his ${his.width}×${his.height}, ours ${mine.width}×${mine.height}`,
+            }
+            continue
+          }
+          if (lutFlip[name] === undefined)
+            lutFlip[name] = meanAbsDeviation(his, flipY(mine)) < meanAbsDeviation(his, mine)
+          if (lutFlip[name]) mine = flipY(mine)
+          out.flipped[name] = lutFlip[name]
+          if (name === 'skyView') {
+            // his Sky-View LUT carries gSunIlluminance; ours is per unit illuminance
+            const ill = [].concat(sebh.sunIlluminance)
+            for (let i = 0; i < his.data.length; i++) if (i % 4 !== 3) his.data[i] /= ill[(i % 4) % ill.length]
+            const H = his.height
+            out.stats[name] = {
+              all: ratioStats(his, mine),
+              aboveHorizon: ratioStats(his, mine, { where: (x, y) => y < H / 2 }),
+              belowHorizon: ratioStats(his, mine, { where: (x, y) => y >= H / 2 }),
+              horizonBand: ratioStats(his, mine, { where: (x, y) => y >= H / 2 - 6 && y < H / 2 }),
+              zenithRows: ratioStats(his, mine, { where: (x, y) => y < 8 }),
+              towardSun: ratioStats(his, mine, { where: (x, y) => x < 24 && y < H / 2 }),
+              awayFromSun: ratioStats(his, mine, { where: (x, y) => x >= his.width - 24 && y < H / 2 }),
+            }
+          } else {
+            out.stats[name] = { all: ratioStats(his, mine) }
+          }
+          if (images) out.images[name] = heatmaps(his, mine)
+        }
+        return out
+      }
+
+      // ------------------------------------------------------------------
+      // Controls — his scheme on one overlay driving all three: drag = view
+      // (orbit: zenith/azimuth; free: pitch/yaw), ctrl/⌘/alt + drag = sun,
+      // wheel = distance or height, 1–9 his views, shift+click = probe, drag a
+      // seam to resize the panels.
+      // ------------------------------------------------------------------
+      const overlay = document.getElementById('overlay')
+      const probeEl = document.getElementById('probe')
+      const probePoint = { x: 0.5, y: 0.35 }
+      if (params.get('probe')) [probePoint.x, probePoint.y] = params.get('probe').split(',').map(Number)
+      let drag = null
+      let prev = { x: 0, y: 0 }
+      const nearSeam = (x) => {
+        const n = visibleSlots().length - 1
+        for (let k = 0; k < n; k++) if (Math.abs(x - ui.seams[k] * window.innerWidth) < 8) return k
+        return -1
+      }
+      overlay.addEventListener('contextmenu', (e) => e.preventDefault())
+      overlay.addEventListener('pointerdown', (e) => {
+        overlay.setPointerCapture(e.pointerId)
+        prev = { x: e.clientX, y: e.clientY }
+        if (e.shiftKey) {
+          probePoint.x = e.clientX / window.innerWidth
+          probePoint.y = e.clientY / window.innerHeight
+          drag = null
+          return
+        }
+        const k = nearSeam(e.clientX)
+        drag = k >= 0 ? `seam${k}` : e.ctrlKey || e.metaKey || e.altKey ? 'sun' : 'camera'
+        overlay.classList.add('dragging')
+      })
+      overlay.addEventListener('pointermove', (e) => {
+        overlay.classList.toggle('seam-hover', !drag && nearSeam(e.clientX) >= 0)
+        if (!drag) return
+        const kScale = 500
+        const dx = prev.x - e.clientX
+        const dy = prev.y - e.clientY
+        if (drag === 'sun') {
+          state.sunZenith = Math.max(0, Math.min(Math.PI, state.sunZenith - dy / kScale))
+          state.sunAzimuth += dx / kScale
+        } else if (drag === 'camera' && state.cameraMode === 'orbit') {
+          state.viewZenith = Math.max(0, Math.min(Math.PI / 2, state.viewZenith + dy / kScale))
+          state.viewAzimuth += dx / kScale
+        } else if (drag === 'camera') {
+          state.pitch = Math.max(-89, Math.min(89, state.pitch - dy * 0.15))
+          state.yaw += dx * 0.15
+        } else {
+          const k = +drag.slice(4)
+          const x = e.clientX / window.innerWidth
+          const lo = k === 0 ? 0.02 : ui.seams[0] + 0.02
+          const hi = k === 0 && visibleSlots().length === 3 ? ui.seams[1] - 0.02 : 0.98
+          ui.seams[k] = Math.max(lo, Math.min(hi, x))
+          applyLayout()
+        }
+        prev = { x: e.clientX, y: e.clientY }
+      })
+      overlay.addEventListener('pointerup', () => {
+        drag = null
+        overlay.classList.remove('dragging')
+      })
+      overlay.addEventListener(
+        'wheel',
+        (e) => {
+          e.preventDefault()
+          const k = e.deltaY > 0 ? 1.05 : 1 / 1.05
+          if (state.cameraMode === 'orbit') state.viewDistanceMeters *= k
+          else state.heightM = Math.max(2, Math.min(2e7, state.heightM * k))
+        },
+        { passive: false },
+      )
+      window.addEventListener('keydown', (e) => {
+        if (e.target !== document.body) return
+        if (VIEWS[e.key]) {
+          setView(e.key)
+          ui.view = e.key
+        } else if (e.key === '+' || e.key === '=') state.exposure *= 1.1
+        else if (e.key === '-') state.exposure /= 1.1
+      })
+
+      // ------------------------------------------------------------------
+      // GUI
+      // ------------------------------------------------------------------
+      const gui = new GUI({ title: 'Bruneton · Hillaire · ours' })
+      const fLayout = gui.addFolder('Panels')
+      fLayout.add(ui, 'layout', ['three', 'two', 'solo', 'diff']).onChange(applyLayout).listen()
+      const slotNames = ['left', 'middle', 'right']
+      const slotProxy = {}
+      slotNames.forEach((n, k) =>
+        Object.defineProperty(slotProxy, n, {
+          get: () => ui.slots[k],
+          set: (v) => {
+            // swap, so each source stays in exactly one panel
+            const j = ui.slots.indexOf(v)
+            ;[ui.slots[j], ui.slots[k]] = [ui.slots[k], v]
+            applyLayout()
+          },
+        }),
+      )
+      for (const n of slotNames) fLayout.add(slotProxy, n, SOURCES).listen()
+      fLayout.add(ui, 'solo', SOURCES).onChange(applyLayout).listen()
+      fLayout.add(ui, 'diffA', SOURCES).name('diff A').onChange(applyLayout).listen()
+      fLayout.add(ui, 'diffB', SOURCES).name('diff B').onChange(applyLayout).listen()
+      fLayout.add(ui, 'diffGain', 1, 32, 1).name('diff gain').onChange(applyLayout).listen()
+
+      const fView = gui.addFolder('View (all three)')
+      fView
+        .add(ui, 'view', Object.keys(VIEWS))
+        .name('view (1–9 his)')
+        .onChange((v) => setView(v))
+        .listen()
+      fView.add(state, 'cameraMode', ['orbit', 'free']).name('camera').listen()
+      fView.add(state, 'exposure', 0.1, 400, 0.1).listen()
+      fView.add(state, 'viewDistanceMeters', 100, 2e7, 100).name('orbit distance (m)').listen()
+      fView
+        .add(state, 'viewZenith', 0, Math.PI / 2, 0.001)
+        .name('orbit zenith (rad)')
+        .listen()
+      fView.add(state, 'viewAzimuth', -Math.PI, Math.PI, 0.001).name('orbit azimuth (rad)').listen()
+      fView.add(state, 'heightM', 2, 1e6, 1).name('free height (m)').listen()
+      fView.add(state, 'pitch', -89, 89, 0.1).name('free pitch (°)').listen()
+      fView.add(state, 'yaw', -360, 360, 0.1).name('free yaw (°)').listen()
+      fView.add(state, 'sunZenith', 0, Math.PI, 0.001).name('sun zenith (rad)').listen()
+      fView.add(state, 'sunAzimuth', -Math.PI, Math.PI, 0.001).name('sun azimuth (rad)').listen()
+
+      const fSebh = gui.addFolder('Hillaire (native)')
+      fSebh
+        .add(ui, 'sebhMethod', sebh.canPathTrace ? ['lut', 'raymarch', 'pathtrace'] : ['lut', 'raymarch'])
+        .name('method')
+        .onChange(applyLayout)
+        .listen()
+      if (sebh.canPathTrace) {
+        fSebh.add(ui, 'ptSamplesPerFrame', 1, 64, 1).name('path samples / frame')
+        fSebh.add(ui, 'pathMaxDepth', 1, 32, 1).name('path max depth')
+      }
+
+      const fDisplay = gui.addFolder('Display & atmosphere')
+      fDisplay
+        .add(ui, 'display', ['shared', 'shipped'])
+        .name('display (shared = his units + curve)')
+        .onChange(applyDisplay)
+        .listen()
+      fDisplay.add(state, 'groundAlbedo', 0, 1, 0.01).name('ground albedo (Hillaire + ours)').listen()
+
+      const fPresets = gui.addFolder('Ours — tuning presets')
+      for (const name of Object.keys(oursSide.tuningPresets)) {
+        fPresets.add(
+          { [name]: () => (oursSide.applyPreset(name), gui.controllersRecursive().forEach((c) => c.updateDisplay())) },
+          name,
+        )
+      }
+      fPresets.close()
+      const fOurs = gui.addFolder('Ours — brightness & tone')
+      fOurs.add(ours, 'units', ['bruneton', 'demo']).name('sky units').onChange(oursSide.applyUnits)
+      fOurs.add(ours, 'luminanceScale', 1, 100, 0.5).name('luminanceScale (demo)').onChange(oursSide.applyUnits)
+      fOurs
+        .add(ours, 'sunTint', ['neutral', 'bruneton', 'custom'])
+        .name('sun tint (demo)')
+        .onChange(oursSide.applyUnits)
+      fOurs.add(ours, 'tintR', 0.5, 1.5, 0.001).onChange(oursSide.applyUnits)
+      fOurs.add(ours, 'tintG', 0.5, 1.5, 0.001).onChange(oursSide.applyUnits)
+      fOurs.add(ours, 'tintB', 0.5, 1.5, 0.001).onChange(oursSide.applyUnits)
+      fOurs.add(ours, 'tone', ['bruneton', 'aces', 'agx', 'neutral']).name('tone curve').onChange(oursSide.applyTone)
+      fOurs
+        .add(ours, 'toneExposure', 0.05, 2, 0.01)
+        .name('tone exposure (aces/agx/neutral)')
+        .onChange(oursSide.applyTone)
+      fOurs.add(ours, 'sunLightScale', 0, 2, 0.01).name('sun light × (E·T)')
+      fOurs.add(ours, 'hazeStrength', 0, 2, 0.01).onChange((v) => sky.setHazeStrength(v))
+      fOurs
+        .add(ours, 'skyLight', ['environment', 'hemisphere (his)'])
+        .name('sky light on objects')
+        .onChange(oursSide.applySkyLight)
+      fOurs.close()
+      const fAtmo = gui.addFolder('Ours — atmosphere & scene')
+      fAtmo.add(ours, 'atmospherePreset', Object.keys(presets)).onChange(oursSide.applyAtmosphere)
+      fAtmo.add(ours, 'multiScatteringFactor', 0, 2, 0.01).onChange((v) => sky.setMultiScatteringFactor(v))
+      fAtmo.add(ours, 'turbidity', 0, 4, 0.01).onChange((v) => sky.setTurbidity(v))
+      fAtmo.add(ours, 'sunDisc').name('sun disc (ours + Hillaire)').onChange(oursSide.applyObjects)
+      fAtmo.add(ours, 'sunLight').onChange(oursSide.applyObjects)
+      fAtmo.add(ours, 'showSphere').onChange(oursSide.applyObjects)
+      fAtmo.add(ours, 'showGround').onChange(oursSide.applyObjects)
+      fAtmo.close()
+
+      // ------------------------------------------------------------------
+      // HUD
+      // ------------------------------------------------------------------
+      const info = document.getElementById('info')
+      let fps = 0
+      let fpsT = performance.now()
+      let fpsN = 0
+      let lastProbe = null
+      let lastMatch = null
+      let reading = false
+      const f3 = (v) => (Number.isFinite(v) ? v.toFixed(3) : v === Infinity ? 'sat' : 'n/a')
+      const fe = (a) =>
+        a.map((v) => (Number.isFinite(v) ? v.toExponential(2) : v === Infinity ? 'sat' : 'n/a')).join(' ')
+      const r3 = (a) => a.map(f3).join(' ')
+      const updateHud = () => {
+        const p = lastProbe
+        const m = lastMatch
+        const sunEl = 90 - state.sunZenith / deg
+        info.textContent =
+          `${scripted ? 'scripted' : `${fps.toFixed(0)} fps`} · ${state.cameraMode} camera · sun ${sunEl.toFixed(1)}° · exposure ${state.exposure.toFixed(2)} · display ${ui.display}` +
+          (bruneton.ready() ? '' : ' · bruneton: loading tables…') +
+          `\nprobe (${(probePoint.x * 100).toFixed(0)}%, ${(probePoint.y * 100).toFixed(0)}%) — linear, Bruneton units · shift+click to move` +
+          (p
+            ? `${p.sky ? '' : ' · on geometry: Hillaire has none here'}` +
+              `\n  Bruneton ${fe(p.bruneton)}\n  Hillaire ${fe(p.sebh)}\n  ours     ${fe(p.ours)}` +
+              `\n  ours/Bruneton ${r3(p.oursOverBruneton)}   ours/Hillaire ${r3(p.oursOverSebh)}   Hillaire/Bruneton ${r3(p.sebhOverBruneton)}`
+            : '') +
+          (m
+            ? `\nsky match (${m.n} open-sky points)  ours/B ${r3(m.oursOverBruneton)}  ours/H ${r3(m.oursOverSebh)}  H/B ${r3(m.sebhOverBruneton)}`
+            : '') +
+          (sebh.errors.length ? `\nHillaire WebGPU errors: ${sebh.errors.length} (see console)` : '')
+        probeEl.style.left = `${probePoint.x * 100}%`
+        probeEl.style.top = `${probePoint.y * 100}%`
+      }
+
+      applyDisplay()
+      renderer.setAnimationLoop(() => {
+        drawFrame()
+        frame++
+        fpsN++
+        const now = performance.now()
+        if (now - fpsT > 500) {
+          fps = (fpsN * 1000) / (now - fpsT)
+          fpsN = 0
+          fpsT = now
+        }
+        if (ui.sebhMethod === 'pathtrace' && frame % 10 === 0) applyLayout() // spp in the label
+        if (!scripted && !reading && frame % 20 === 0 && bruneton.ready()) {
+          reading = true
+          Promise.all([probe([probePoint], 1), frame % 60 === 0 ? skyMatch() : Promise.resolve(lastMatch)])
+            .then(([[p], m]) => {
+              lastProbe = p
+              lastMatch = m
+            })
+            .finally(() => (reading = false))
+        }
+        updateHud()
+        const waiters = frameWaiters
+        frameWaiters = []
+        waiters.forEach((w) => w())
+        if (!window.__ready && frame > 5 && bruneton.ready()) window.__ready = true
+      })
+
+      // ------------------------------------------------------------------
+      // Scripted access (scripts/verify-reference.mjs, probe-reference.mjs).
+      // ------------------------------------------------------------------
+      let scripted = false
+      const nextFrame = () => new Promise((r) => frameWaiters.push(r))
+      window.__cmp = {
+        THREE,
+        state,
+        ui,
+        VIEWS,
+        EARTH,
+        SEBH_EARTH,
+        bruneton,
+        sebh,
+        oursSide,
+        ours,
+        sky,
+        renderer,
+        /** Stop the HUD's own readbacks so scripted ones see a quiet page. */
+        scripted: (v = true) => {
+          scripted = v
+          // the HUD's numbers would be stale while a script drives the page
+          lastProbe = lastMatch = null
+        },
+        setView: (key) => {
+          setView(String(key))
+          ui.view = String(key)
+        },
+        setLayout: (layout, opts = {}) => {
+          Object.assign(ui, { layout }, opts)
+          applyLayout()
+        },
+        setDisplay: (d) => {
+          ui.display = d
+          applyDisplay()
+        },
+        /** Wait `n` frames of the shared loop (Bruneton's demo renders on the same rAF). */
+        frames: async (n = 1) => {
+          // A viewport change fires 'resize' asynchronously; never render or read across it.
+          if (
+            Math.round(window.innerWidth * DPR) !== sebh.width ||
+            Math.round(window.innerHeight * DPR) !== sebh.height
+          )
+            resize()
+          for (let i = 0; i < n; i++) await nextFrame()
+          await sebh.device.queue.onSubmittedWorkDone()
+        },
+        isSky,
+        probe,
+        skyMatch,
+        lutParity,
+        get errors() {
+          return sebh.errors
+        },
+      }
+    </script>
+  </body>
+</html>

@@ -428,6 +428,14 @@ export class SkyAtmosphereMesh extends Mesh {
     // reliable. Geometry still wins the depth test (it's closer than far)
     // so this doesn't occlude anything.
     material.depthWrite = true
+    // …and write exactly 1.0. `z = w` alone lands a rasterizer-rounding
+    // distance below 1.0 that varies per triangle and with the view: usually
+    // one ulp, sometimes more, so any fixed tolerance in the haze pass's sky
+    // test either lets whole sky triangles through as "geometry" while the
+    // camera moves (they get hazed: flickering triangles across the sky) or
+    // swallows real geometry near the far plane. An explicit fragment depth
+    // makes the test exact. Costs early-Z on this one draw.
+    material.depthNode = float(1.0)
     material.vertexNode = vertexNode
     material.colorNode = colorNode
   }

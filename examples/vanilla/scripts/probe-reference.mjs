@@ -1,15 +1,16 @@
 /**
- * Step-driven prober for 20-bruneton-compare.html — the tool every number in
- * research/bruneton-audit-2026-09-26.md came from.
+ * Step-driven prober for 20-reference-compare.html (formerly probe-bruneton.mjs,
+ * the tool every number in research/bruneton-audit-2026-09-26.md came from).
  *
  * STEPS is a JSON array; each step may `js` (evaluated in the page, with
  * `window.__cmp` exposed), `wait` N frames (default 40), `shot` a screenshot
  * (to scripts/.verify-out/<name>.png) and `probe` a list of `[x, y, name]`
- * normalised screen points. Each probe prints both canvases' rgb8, the linear
- * radiance recovered by inverting his tone curve, and the ratio ours/his.
+ * normalised screen points. Each probe prints linear radiance in Bruneton's
+ * units for all three renderers (his by inverting his curve on 8 bits) and the
+ * ratios ours/Bruneton, ours/Hillaire and Hillaire/Bruneton.
  *
  *   STEPS='[{"js":"window.__cmp.setView(3)","wait":50,"probe":[[0.5,0.08,"sky-T"]]}]' \
- *   URL=http://localhost:5183/20-bruneton-compare.html?mode=ours node scripts/probe-bruneton.mjs
+ *   URL=http://localhost:5173/20-reference-compare.html?layout=solo&solo=ours node scripts/probe-reference.mjs
  *
  * LOGLEN caps console lines (default 400 chars). See the page's `?dbg=` /
  * `?debug=` / `?bypass=` / `?near=` / `?far=` params for what to point it at.
@@ -18,7 +19,7 @@ import { chromium } from 'playwright'
 import fs from 'node:fs'
 const OUT = new URL('./.verify-out/', import.meta.url).pathname
 import('node:fs').then((m) => m.mkdirSync(OUT, { recursive: true }))
-const url = process.env.URL || 'http://localhost:5183/20-bruneton-compare.html?mode=split&view=1'
+const url = process.env.URL || 'http://localhost:5173/20-reference-compare.html?view=1'
 const steps = JSON.parse(process.env.STEPS || '[]') // [{js, shot, probe:[[x,y,name]...]}]
 const GPU_ARGS = ['--enable-unsafe-webgpu', '--enable-features=WebGPU', '--ignore-gpu-blocklist', '--use-angle=metal']
 const browser = await chromium.launch({ headless: true, args: GPU_ARGS })
@@ -49,18 +50,20 @@ for (const s of steps) {
   await settle(s.wait ?? 40)
   if (s.shot) fs.writeFileSync(OUT + s.shot + '.png', await page.screenshot({ type: 'png' }))
   if (s.probe) {
-    const r = await page.evaluate(async (pts) => {
-      const out = []
-      for (const [x, y, name] of pts) {
-        const p = await window.__cmp.probeAsync(x, y)
-        out.push({ name, his: p.his, mine: p.mine, hisLin: p.hisLin, mineLin: p.mineLin, ratio: p.ratio })
-      }
-      return out
-    }, s.probe)
+    const r = await page.evaluate(
+      ({ pts, radius }) =>
+        window.__cmp.probe(
+          pts.map(([x, y, name]) => ({ x, y, name })),
+          radius,
+        ),
+      { pts: s.probe, radius: +(s.radius ?? 1) },
+    )
+    const fe = (a) => a.map((v) => (Number.isFinite(v) ? v.toExponential(3) : f3(v))).join(' ')
     console.log(`--- ${s.label || s.js || ''}`)
     for (const p of r)
       console.log(
-        `${p.name.padEnd(14)} his ${p.his.join(',').padEnd(12)} ours ${p.mine.join(',').padEnd(12)} hisLin ${p.hisLin.map(f3).join(' ')}  oursLin ${p.mineLin.map(f3).join(' ')}  ratio ${p.ratio.map(f3).join(' ')}`,
+        `${p.name.padEnd(14)}${p.sky ? '' : ' [geometry]'} B ${fe(p.bruneton)}  H ${fe(p.sebh)}  O ${fe(p.ours)}` +
+          `  O/B ${p.oursOverBruneton.map(f3).join(' ')}  O/H ${p.oursOverSebh.map(f3).join(' ')}  H/B ${p.sebhOverBruneton.map(f3).join(' ')}`,
       )
   }
 }

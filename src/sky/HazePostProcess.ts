@@ -30,13 +30,6 @@ import {
 import { applyLook } from '../backends/tsl/look.tsl'
 import { createHazeDepthNodes } from './hazeScenePassDepth'
 
-/**
- * Depth tolerance that catches a live sky mesh: its `z = w` depth lands one
- * ulp below 1.0. 1.25 ulps rounds to exactly that value in f32 (1.5 would tie
- * and round to two).
- */
-export const LIVE_SKY_DEPTH_EPSILON = 1.25 * 2 ** -24
-
 interface CreateHazeOutputNodeArgs {
   scenePass: any
   /**
@@ -81,8 +74,8 @@ interface CreateHazeOutputNodeArgs {
    *  (`baker.sky.sunColor`), so haze is lit by the same sun as the sky. */
   sunColor?: any
   /** Uniform: how far below 1.0 a depth value still counts as sky
-   *  (`baker.skyDepthEpsilon`). 0 for a background, one ulp for a live sky
-   *  mesh. Defaults to the live-sky-mesh value. */
+   *  (`baker.skyDepthEpsilon`). 0 by default: backgrounds leave the cleared
+   *  1.0 and the live sky mesh writes exactly 1.0. */
   skyDepthEpsilon?: any
   /** Per-channel grade applied to AP inscatter after the look
    *  (`baker.sky.skyLuminanceFactor`), so haze matches the graded sky. */
@@ -262,10 +255,9 @@ export function createHazeOutputNode({
   // whose distance-along-ray exceeds this needs the raymarch fallback.
   const coverageKm = kmPerSlice * resZ
 
-  // Sky-depth tolerance below 1.0 (see the sky-pixel test). A uniform rather
-  // than a literal so the exact f32 survives shader generation. Direct callers
-  // that pass nothing get the live-sky-mesh value, which is safe either way.
-  const skyDepthEpsilon = skyDepthEpsilonNode ?? uniform(LIVE_SKY_DEPTH_EPSILON)
+  // Sky-depth tolerance below 1.0 (see the sky-pixel test); 0 unless a caller
+  // has a far-plane sky that cannot write exactly 1.0.
+  const skyDepthEpsilon = skyDepthEpsilonNode ?? uniform(0)
 
   return Fn(() => {
     const u = uv()
@@ -340,19 +332,14 @@ export function createHazeOutputNode({
 
     // Sky-pixel detection.
     //
-    // Primary test: the raw depth-buffer value. The sky mesh draws with the
-    // `z = w` trick, so its depth is 1.0 up to float rounding — measured at
-    // one ulp below 1.0 (≈ 1 - 2^-24) on the default depth target, see
-    // `examples/vanilla/20-bruneton-compare.html?dbg=depth`. A background
-    // (cube or colour) leaves the cleared depth, exactly 1.0.
-    //
-    // The tolerance has a price: geometry close to the far plane lands on the
-    // same depth values and is taken for sky, so it gets no haze and shows its
-    // raw colour (a black line along the horizon of a ground plane that runs
-    // past `far`, flickering as the camera moves). With near 1 m and far
-    // 200 km, 4 ulps swallowed everything past 191 km. So the test is exact
-    // (`>= 1.0`) unless the baker has handed out a live sky mesh, and then it
-    // is a single ulp (`SkyAtmosphereBaker.skyDepthEpsilon`).
+    // Primary test: the raw depth-buffer value, exactly 1.0. A background
+    // (cube or colour) leaves the cleared depth; the live sky mesh writes 1.0
+    // explicitly (`SkyAtmosphereMesh`, `depthNode`). Its `z = w` depth alone
+    // lands one or more ulps below 1.0 depending on the triangle and the view,
+    // and no tolerance works: 4 ulps swallowed geometry past 191 km at
+    // near 1 m / far 200 km (unhazed black line along the horizon), 1.25 ulps
+    // let whole sky triangles through as geometry mid-drag (hazed triangles
+    // across the sky).
     //
     // The two older tests are kept (OR-ed in) for callers that relied on
     // them, but both silently failed for any far plane beyond a few km: with

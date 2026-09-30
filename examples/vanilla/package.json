@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "sebh:build": "node scripts/build-sebh-wgsl.mjs",
-    "ref:verify": "node scripts/verify-reference.mjs"
+    "ref:verify": "node scripts/verify-reference.mjs",
+    "bench:sky-draw": "node scripts/bench-sky-draw.mjs"
   },
   "dependencies": {
     "@pmndrs/sky": "workspace:*",

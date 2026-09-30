@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>17 — Live sky draw-order bench</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #hud {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre;
+        z-index: 10;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">starting…</div>
+    <script type="module">
+      /*
+       * What the live sky mesh costs when geometry hides it, per draw setup:
+       *
+       *   after        drawn after opaques, depth test on, no depth write (the
+       *                library default): hidden sky pixels fail early-Z / HSR
+       *                and are never shaded
+       *   first        drawn first, `z = w` depth written (before 2026-09-30)
+       *   first-depth  drawn first, fragment depth written as exactly 1.0
+       *                (2026-09-30 stopgap) — disables early-Z and Apple HSR
+       *
+       * Scenes: `open` (ground + mountains, mostly sky), `indoor` (camera in a
+       * closed room, sky fully hidden), and the same two at 300 km, where the
+       * sky raymarches per pixel instead of sampling the Sky-View LUT.
+       *
+       * Numbers: `__bench.burst()`, wall-clock over back-to-back frames
+       * drained with onSubmittedWorkDone (see 16-stars-bench).
+       *
+       * URL: ?variant=after&scene=indoor&dpr=2
+       */
+      import * as THREE from 'three/webgpu'
+      import { float } from 'three/tsl'
+
+      import { Sky } from '@pmndrs/sky'
+
+      const VARIANTS = ['after', 'first', 'first-depth']
+      const SCENES = ['open', 'indoor', 'space', 'space-indoor']
+      const q = new URLSearchParams(location.search)
+      const cfg = {
+        variant: VARIANTS.includes(q.get('variant')) ? q.get('variant') : 'after',
+        scene: SCENES.includes(q.get('scene')) ? q.get('scene') : 'open',
+        dpr: Number(q.get('dpr') ?? window.devicePixelRatio),
+      }
+      const hud = document.getElementById('hud')
+
+      const renderer = new THREE.WebGPURenderer({ antialias: false })
+      renderer.setPixelRatio(cfg.dpr)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      document.body.appendChild(renderer.domElement)
+      await renderer.init()
+
+      const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 20_000_000)
+
+      const sky = new Sky(renderer, {
+        sunDirection: { elevation: 25, azimuth: 30 },
+        enableAerialPerspective: false,
+      })
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+      scene.background = null
+      const liveSky = sky.baker.createSkyMesh()
+      scene.add(liveSky)
+      const shipped = { renderOrder: liveSky.renderOrder, depthWrite: liveSky.material.depthWrite }
+
+      const stone = new THREE.MeshStandardMaterial({ color: 0x6a5f53, roughness: 0.9 })
+      const ground = new THREE.Mesh(new THREE.CircleGeometry(200_000, 64).rotateX(-Math.PI / 2), stone)
+      const mountains = new THREE.Group()
+      const cone = new THREE.ConeGeometry(1, 1, 12)
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2
+        const dist = 6000 + (i % 5) * 4000
+        const h = 500 + ((i * 37) % 7) * 180
+        const m = new THREE.Mesh(cone, stone)
+        m.scale.set(1400, h, 1400)
+        m.position.set(Math.sin(a) * dist, h / 2, Math.cos(a) * dist)
+        mountains.add(m)
+      }
+      // A closed 10 m room (inward-facing box) around the camera.
+      const room = new THREE.Mesh(
+        new THREE.BoxGeometry(10, 10, 10),
+        new THREE.MeshStandardMaterial({ color: 0x8a8378, side: THREE.BackSide }),
+      )
+      scene.add(ground, mountains, room, new THREE.HemisphereLight(0xffffff, 0x444444, 1))
+
+      function applyScene(name) {
+        cfg.scene = name
+        const space = name.startsWith('space')
+        const alt = space ? 300_000 : 2
+        // Ground: ~14° up. Space: 17° down, onto the limb (the horizon dips
+        // 17.2° at 300 km), so every sky ray crosses the atmosphere.
+        const pitch = space ? -0.3 : 0.25
+        camera.position.set(0, alt, 0)
+        camera.lookAt(0, alt + Math.tan(pitch) * 10, 10)
+        room.position.copy(camera.position)
+        room.visible = name.endsWith('indoor')
+        ground.visible = mountains.visible = !name.startsWith('space')
+      }
+
+      function applyVariant(name) {
+        cfg.variant = name
+        const m = liveSky.material
+        liveSky.renderOrder = name === 'after' ? shipped.renderOrder : -1
+        m.depthWrite = name === 'after' ? shipped.depthWrite : true
+        m.depthNode = name === 'first-depth' ? float(1.0) : null
+        m.needsUpdate = true
+      }
+
+      applyScene(cfg.scene)
+      applyVariant(cfg.variant)
+
+      let last = performance.now()
+      let avg = 16
+      function loop() {
+        const now = performance.now()
+        avg = avg * 0.95 + (now - last) * 0.05
+        last = now
+        sky.update(camera)
+        renderer.render(scene, camera)
+        const { width, height } = renderer.domElement
+        hud.textContent =
+          `variant ${cfg.variant}   scene ${cfg.scene}\n` +
+          `target ${width}×${height} (${((width * height) / 1e6).toFixed(2)} Mpx)\n` +
+          `frame  ${avg.toFixed(2)} ms (vsync-capped — use __bench.burst())`
+      }
+      renderer.setAnimationLoop(loop)
+
+      const drain = () => renderer.backend.device.queue.onSubmittedWorkDone()
+      window.__bench = {
+        VARIANTS,
+        SCENES,
+        applyScene,
+        applyVariant,
+        size: () => [renderer.domElement.width, renderer.domElement.height],
+        /** Median ms/frame per scene × variant; rounds interleave the variants. */
+        burst: async ({ scenes = SCENES, variants = VARIANTS, n = 120, rounds = 5 } = {}) => {
+          renderer.setAnimationLoop(null)
+          try {
+            const out = {}
+            for (const s of scenes) {
+              applyScene(s)
+              const times = Object.fromEntries(variants.map((v) => [v, []]))
+              for (let r = 0; r < rounds; r++) {
+                for (const v of variants) {
+                  applyVariant(v)
+                  for (let i = 0; i < 3; i++) {
+                    sky.update(camera)
+                    renderer.render(scene, camera)
+                  }
+                  await drain()
+                  const t0 = performance.now()
+                  for (let i = 0; i < n; i++) {
+                    sky.update(camera)
+                    renderer.render(scene, camera)
+                  }
+                  await drain()
+                  times[v].push((performance.now() - t0) / n)
+                }
+              }
+              out[s] = Object.fromEntries(
+                variants.map((v) => {
+                  const t = [...times[v]].sort((a, b) => a - b)
+                  return [v, { median: +t[Math.floor(t.length / 2)].toFixed(3), min: +t[0].toFixed(3) }]
+                }),
+              )
+            }
+            return out
+          } finally {
+            renderer.setAnimationLoop(loop)
+          }
+        },
+      }
+      window.__benchReady = true
+    </script>
+  </body>
+</html>

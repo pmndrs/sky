@@ -277,17 +277,29 @@ noon" of the live-sky demos). Demos that use the baked cube as
 `createHazeOutputNode` now tests the raw depth (a uniform tolerance, so the
 f32 survives codegen), OR-ed with the old tests. Verify with `?debug=is-sky`.
 
-No tolerance works, so the sky mesh writes exactly 1.0 (2026-09-30,
-`material.depthNode = float(1.0)` in `SkyAtmosphereMesh`) and the test is
-exact (`>= 1.0`). History, so nobody re-adds an epsilon: 4 ulps swallowed
-geometry past 191 km at near 1 m / far 200 km (unhazed one-pixel black line
-along the horizon, flickering with camera motion); 1.25 ulps (2026-09-29)
-then let **whole sky-mesh triangles** fall 2+ ulps below 1.0 at some view
-orientations, so mid-drag they were hazed — triangles and hard seams across
-the live sky, gone the moment the camera stops. The rounding varies per
+No tolerance works, so the sky mesh does not write depth at all and the test
+is exact (`>= 1.0`): it is drawn like a game-engine sky, **after** the opaque
+geometry (`SKY_RENDER_ORDER`), depth-tested, `depthWrite = false`, so its
+pixels keep the cleared 1.0. History, so nobody re-adds an epsilon: 4 ulps
+swallowed geometry past 191 km at near 1 m / far 200 km (unhazed one-pixel
+black line along the horizon, flickering with camera motion); 1.25 ulps
+(2026-09-29) then let **whole sky-mesh triangles** fall 2+ ulps below 1.0 at
+some view orientations, so mid-drag they were hazed — triangles and hard seams
+across the live sky, gone the moment the camera stops. The rounding varies per
 triangle and per frame, so a static `?debug=is-sky` looks clean; capture it
 every few frames _during_ a camera drag. `baker.skyDepthEpsilon` stays (0) for
-a custom far-plane sky that cannot write 1.0.
+a custom sky that writes a far-plane depth of its own.
+
+Don't "fix" it by writing depth 1.0 from the fragment (`depthNode`): that was
+the 2026-09-30 stopgap, and a shader depth write disables early-Z and Apple's
+hidden-surface removal for the whole draw, so a sky hidden behind geometry is
+shaded anyway. `scripts/bench-sky-draw.mjs` (`17-sky-draw-bench.html`) at
+3200×1800 on an M-series Mac: camera in a closed room at 300 km, where the sky
+raymarches, 3.1–5.2 ms/frame with the depth write vs 0.5–0.75 drawn after
+opaques; indoors at ground level 0.8 vs 0.5. Drawing it _first_ without a
+depth write measures the same as _after_ there, because Apple's HSR ignores
+draw order; on desktop (immediate-mode) GPUs only the after-opaques order lets
+early-Z skip the hidden sky.
 
 ### Never inverse-project a far-plane point for a ray direction (2026-09-26)
 

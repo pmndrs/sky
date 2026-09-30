@@ -75,6 +75,13 @@ function _makeBlackPlaceholder(name: string): DataTexture {
 }
 
 /**
+ * `renderOrder` for a live sky mesh: after the opaque geometry, like a
+ * game-engine sky, so hidden sky pixels fail the depth test before shading.
+ * `createSkyMesh` sets it; use it for a `SkyAtmosphereMesh` you add yourself.
+ */
+export const SKY_RENDER_ORDER = 1_000_000
+
+/**
  * Phase 1b visible sky — Hillaire LUT-sampled box mesh.
  *
  * Matches the shape of the legacy Preetham `SkyMesh` exactly: `BoxGeometry(1,1,1)`
@@ -418,24 +425,22 @@ export class SkyAtmosphereMesh extends Mesh {
     const colorNode = this._buildColorNode()
 
     material.side = BackSide
-    // `depthWrite = true` so sky pixels stamp the far-plane value into the
-    // scene depth buffer (the `z = w` vertex trick gives them NDC.z = 1).
-    // The post-process haze pass uses scene depth to discriminate sky vs
-    // geometry; with depthWrite off, sky pixels read the cleared depth
-    // value which `getViewZNode` / `getLinearDepthNode` then interpret as
-    // "at the camera" rather than "at the far plane" — breaking every
-    // depth-based sky test. Writing real far-plane depth makes both tests
-    // reliable. Geometry still wins the depth test (it's closer than far)
-    // so this doesn't occlude anything.
-    material.depthWrite = true
-    // …and write exactly 1.0. `z = w` alone lands a rasterizer-rounding
-    // distance below 1.0 that varies per triangle and with the view: usually
-    // one ulp, sometimes more, so any fixed tolerance in the haze pass's sky
-    // test either lets whole sky triangles through as "geometry" while the
-    // camera moves (they get hazed: flickering triangles across the sky) or
-    // swallows real geometry near the far plane. An explicit fragment depth
-    // makes the test exact. Costs early-Z on this one draw.
-    material.depthNode = float(1.0)
+    // Drawn like a game-engine sky: after the opaque geometry (the renderOrder
+    // `createSkyMesh` sets), depth-tested, never depth-written. The `z = w`
+    // vertex trick puts every sky fragment at the far plane, so it only lands
+    // where nothing nearer was drawn, and pixels hidden behind geometry fail
+    // early-Z (Apple/mobile: HSR) before the shader runs. Indoors the sky
+    // costs next to nothing, which matters above topRadius where it raymarches
+    // per pixel.
+    //
+    // Not writing depth also leaves the sky's pixels at the cleared 1.0, which
+    // is what the haze pass's exact `depth >= 1.0` sky test needs. `z = w`
+    // itself lands one or more ulps below 1.0 depending on the triangle and
+    // the view, so a written sky depth broke that test (hazed triangles across
+    // the sky mid-drag); writing exactly 1.0 from the fragment (`depthNode`,
+    // the 2026-09-30 stopgap) fixed it but disabled early-Z and HSR for the
+    // whole draw. `examples/vanilla/17-sky-draw-bench.html` measures the three.
+    material.depthWrite = false
     material.vertexNode = vertexNode
     material.colorNode = colorNode
   }

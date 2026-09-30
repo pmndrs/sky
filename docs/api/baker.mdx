@@ -144,8 +144,11 @@ Returns a `THREE.Mesh` sharing the baker's internal geometry + material
 (and therefore uniforms) — add it to your own scene for a _live_ sky that
 updates every `setCamera` call instead of only on cube re-bake. Useful at
 planet scale where altitude changes fast enough that the cube-bake cadence
-alone looks stepped. `renderOrder = -1`, `frustumCulled = false`,
-`depthWrite` off on the shared material.
+alone looks stepped. `frustumCulled = false`; it is drawn like a game-engine
+sky, after the opaque geometry (`renderOrder = SKY_RENDER_ORDER`), depth-tested
+at the far plane with `depthWrite` off, so sky hidden behind geometry is never
+shaded. Transparent objects still draw over it. If you add your own
+`SkyAtmosphereMesh`, give it the same `renderOrder`.
 
 The cube bake still runs on sun-dirty for IBL — `environmentTexture`
 remains the recommended `scene.environment` regardless of whether you also

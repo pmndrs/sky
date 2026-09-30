@@ -1,7 +1,7 @@
 // Public API for `tsl-sky` (vanilla).
 //
 // The 90% surface — most users only need these:
-export { Sky } from './Sky'
+export { Sky, SUN_COLORS } from './Sky'
 export type { SkyState, LookTrackOverrides } from './Sky'
 export { SkySun } from './sky/SkySun'
 export { SkyMoon } from './sky/SkyMoon'

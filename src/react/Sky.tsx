@@ -42,6 +42,8 @@ export interface SkyProps {
   lookTrack?: string | any[] | null
   /** Unreal `SkyLuminanceFactor`: per-channel grade after the look. Hex string, Color, Vector3 or [r,g,b]. */
   skyLuminanceFactor?: any
+  /** Colour of the sun as a light: tints sky, haze, sun disc and `createSun` lights. `'neutral'`, `'bruneton'`, hex string, Color, Vector3 or [r,g,b]. */
+  sunColor?: any
   /** Unreal `AerialPerspectiveViewDistanceScale`: haze per metre. 1 = physical. */
   apDistanceScale?: number
   /** Unreal `MultiScatteringFactor`: gain on multiple scattering. 1 = physical. Rebakes LUTs. */
@@ -91,7 +93,7 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  *   `timeOfDay`, `latitude`, `dayOfYear`, `sunDirection`, `north`,
  *   `exposure`, `sunDisc`, `turbidity`, `groundAlbedo`, `atmosphere`,
  *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `mirrorBelowHorizon`,
- *   `look`, `lookTrack`, `skyLuminanceFactor`, `apDistanceScale`,
+ *   `look`, `lookTrack`, `skyLuminanceFactor`, `sunColor`, `apDistanceScale`,
  *   `multiScatteringFactor`
  *
  * Aerial-perspective haze post-process: render an `<AutoHaze />` child
@@ -196,6 +198,7 @@ function SkyController({
   look: lookProp,
   lookTrack: lookTrackProp,
   skyLuminanceFactor: skyLuminanceFactorProp,
+  sunColor: sunColorProp,
   apDistanceScale,
   multiScatteringFactor,
 }: SkyProps & { sky: VanillaSky }) {
@@ -212,6 +215,7 @@ function SkyController({
   const look = useStableValue(lookProp)
   const lookTrack = useStableValue(lookTrackProp)
   const skyLuminanceFactor = useStableValue(skyLuminanceFactorProp)
+  const sunColor = useStableValue(sunColorProp)
   const hazeAltitudeBlend = useStableValue(hazeAltitudeBlendProp)
 
   useEffect(() => {
@@ -276,6 +280,10 @@ function SkyController({
   useEffect(() => {
     if (skyLuminanceFactor != null) sky.setSkyLuminanceFactor(skyLuminanceFactor)
   }, [sky, skyLuminanceFactor])
+
+  useEffect(() => {
+    if (sunColor != null) sky.setSunColor(sunColor)
+  }, [sky, sunColor])
 
   useEffect(() => {
     if (typeof apDistanceScale === 'number') sky.setAerialPerspectiveDistanceScale(apDistanceScale)

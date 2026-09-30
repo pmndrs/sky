@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>20 — Bruneton vs @pmndrs/sky</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #stage {
+        position: absolute;
+        inset: 0;
+      }
+      #bruneton,
+      #ours {
+        position: absolute;
+        inset: 0;
+      }
+      #bruneton canvas,
+      #ours canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        display: block;
+      }
+      #overlay {
+        position: absolute;
+        inset: 0;
+        cursor: grab;
+        touch-action: none;
+      }
+      #overlay.dragging {
+        cursor: grabbing;
+      }
+      #overlay.split-hover {
+        cursor: col-resize;
+      }
+      #divider {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        margin-left: -1px;
+        background: rgba(255, 255, 255, 0.85);
+        pointer-events: none;
+      }
+      .label {
+        position: absolute;
+        top: 8px;
+        padding: 4px 8px;
+        background: rgba(0, 0, 0, 0.55);
+        font-size: 12px;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #info {
+        position: absolute;
+        left: 8px;
+        bottom: 8px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.65);
+        font:
+          11px/1.45 ui-monospace,
+          Menlo,
+          monospace;
+        white-space: pre;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #probe {
+        position: absolute;
+        width: 13px;
+        height: 13px;
+        margin: -7px 0 0 -7px;
+        border: 1px solid #fff;
+        border-radius: 50%;
+        box-shadow: 0 0 0 1px #000;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #help {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <!-- Bruneton's demo.js owns #glcanvas (and toggles #help); it takes this wrapper as its root element. -->
+      <div id="bruneton">
+        <canvas id="glcanvas" width="400" height="300"></canvas>
+        <ul id="help"></ul>
+      </div>
+      <div id="ours"></div>
+      <div id="divider"></div>
+      <div id="overlay"></div>
+      <div id="probe"></div>
+      <div class="label" id="labelL" style="left: 8px">
+        Bruneton 2017 — his demo.js + precomputed tables, verbatim (WebGL2)
+      </div>
+      <div class="label" id="labelR" style="right: 8px">@pmndrs/sky — Hillaire 2020 port (WebGPU)</div>
+      <div id="info">loading…</div>
+    </div>
+
+    <!-- Eric Bruneton's demo.js, unmodified (BSD-3). Defines the globals `Demo` and `Utils`.
+         See public/bruneton/README.md for provenance. Classic script on purpose: it is not a module. -->
+    <script src="./bruneton/demo.js"></script>
+
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import {
+        pass,
+        uniform,
+        float,
+        vec3,
+        vec4,
+        exp,
+        pow,
+        mix,
+        abs,
+        texture,
+        uv,
+        renderOutput,
+        Fn,
+        pmremTexture,
+        normalWorld,
+        positionWorld,
+        materialColor,
+      } from 'three/tsl'
+      import GUI from 'three/addons/libs/lil-gui.module.min.js'
+
+      import { Sky, presets } from '@pmndrs/sky'
+
+      // ------------------------------------------------------------------
+      // Constants baked into Bruneton's precomputed model (atmosphere_shader.txt)
+      // ------------------------------------------------------------------
+      const BRUNETON_LOCAL = './bruneton/'
+      const BRUNETON_REMOTE = 'https://ebruneton.github.io/precomputed_atmospheric_scattering/'
+      // ATMOSPHERE.solar_irradiance — W/m²/nm at 680 / 550 / 440 nm. His sky is in
+      // spectral radiance units; ours is "per unit sun illuminance" (ILLUMINANCE_IS_ONE),
+      // so multiplying ours by this vector puts both in the same units.
+      const SOLAR_IRRADIANCE = [1.474, 1.8504, 1.91198]
+      const SUN_ANGULAR_RADIUS = 0.004675
+      // GetSolarRadiance() = solar_irradiance / (π r²) — what his sun disc adds.
+      const SOLAR_RADIANCE_G = SOLAR_IRRADIANCE[1] / (Math.PI * SUN_ANGULAR_RADIUS * SUN_ANGULAR_RADIUS)
+      const BRUNETON_GROUND_ALBEDO = 0.1
+      const KM = 1000
+
+      // His predefined views (keys 1–9): [viewDistanceMeters, viewZenith, viewAzimuth, sunZenith, sunAzimuth, exposure]
+      const VIEWS = {
+        1: [9000, 1.47, 0, 1.3, 3, 10],
+        2: [9000, 1.47, 0, 1.564, -3, 10],
+        3: [7000, 1.57, 0, 1.54, -2.96, 10],
+        4: [7000, 1.57, 0, 1.328, -3.044, 10],
+        5: [9000, 1.39, 0, 1.2, 0.7, 10],
+        6: [9000, 1.5, 0, 1.628, 1.05, 200],
+        7: [7000, 1.43, 0, 1.57, 1.34, 40],
+        8: [2.7e6, 0.81, 0, 1.57, 2, 10],
+        9: [1.2e7, 0.0, 0, 0.93, -2, 10],
+      }
+
+      const params = new URLSearchParams(location.search)
+
+      // Shared camera / sun / exposure state — the exact fields his Demo class reads
+      // every frame. One control scheme (his) drives both renderers.
+      const state = {
+        viewDistanceMeters: 9000,
+        viewZenith: 1.47,
+        viewAzimuth: -0.1,
+        sunZenith: 1.3,
+        sunAzimuth: 2.9,
+        exposure: 10,
+      }
+      const setView = (n) => {
+        const v = VIEWS[n]
+        if (!v) return
+        ;[
+          state.viewDistanceMeters,
+          state.viewZenith,
+          state.viewAzimuth,
+          state.sunZenith,
+          state.sunAzimuth,
+          state.exposure,
+        ] = v
+      }
+      if (params.get('view')) setView(params.get('view'))
+
+      const ui = {
+        mode: params.get('mode') || 'split', // bruneton | ours | split | diff
+        viewPreset: params.get('view') || '1',
+        split: 0.5,
+        diffGain: 4,
+      }
+
+      // Our-side knobs. `units` decides what our sky is multiplied by before the
+      // shared tone curve: 'bruneton' puts it in his spectral-radiance units so the
+      // comparison is physical; 'demo' reproduces what the other examples do
+      // (luminanceScale 40, ACES at 0.5) so the blow-out can be seen for what it is.
+      const ours = {
+        atmospherePreset: 'earth',
+        units: 'bruneton',
+        luminanceScale: 40,
+        // Sun spectrum applied to the sky (demo units only): 'neutral' is what the
+        // library ships; 'bruneton' is his (1.474, 1.85, 1.91) normalised to green.
+        sunTint: 'neutral', // neutral | bruneton | custom
+        tintR: 1.0,
+        tintG: 1.0,
+        tintB: 1.0,
+        tone: 'bruneton', // bruneton | aces | agx | neutral
+        toneExposure: 0.5,
+        // Multiplier on the physically consistent DirectionalLight (E_sun · T).
+        // The demos use a fixed intensity 4, which is ~1/7 of this at noon.
+        sunLightScale: 1.0,
+        hazeStrength: 1.0,
+        // Sky light on the sphere and ground: 'environment' is the library's way
+        // (irradiance from the baked sky, which includes light from below the
+        // horizon); 'hemisphere (his)' is his GetSunAndSkyIrradiance model — see
+        // wireSkyIrradiance.
+        skyLight: 'environment',
+        groundAlbedo: BRUNETON_GROUND_ALBEDO,
+        multiScatteringFactor: 1.0,
+        turbidity: 1.0,
+        sunDisc: true,
+        sunLight: true,
+        showSphere: true,
+        showGround: true,
+      }
+      const TONE_MODES = { bruneton: 0, aces: 1, agx: 2, neutral: 3 }
+
+      // ------------------------------------------------------------------
+      // Bruneton side — his demo.js verbatim. Only the two static loaders on his
+      // `Utils` class are replaced, so resources resolve from public/bruneton/ (or
+      // his site, if the 16 MB .dat files were never fetched locally).
+      // ------------------------------------------------------------------
+      const fetchWithFallback = async (name, kind) => {
+        for (const base of [BRUNETON_LOCAL, BRUNETON_REMOTE]) {
+          try {
+            const r = await fetch(base + name)
+            if (!r.ok) continue
+            if ((r.headers.get('content-type') || '').includes('text/html')) continue
+            return kind === 'text' ? await r.text() : await r.arrayBuffer()
+          } catch {
+            /* try the next base */
+          }
+        }
+        throw new Error(`bruneton: could not load ${name} (run scripts/fetch-bruneton.mjs)`)
+      }
+      Utils.loadShaderSource = (name, cb) => {
+        fetchWithFallback(name, 'text').then((s) => cb(s.trim()))
+      }
+      Utils.loadTextureData = (name, cb) => {
+        fetchWithFallback(name, 'buffer').then((buf) => {
+          // Same little-endian float32 unpack as his original loader.
+          const data = new DataView(buf)
+          const arr = new Float32Array(buf.byteLength / 4)
+          for (let i = 0; i < arr.length; i++) arr[i] = data.getFloat32(i * 4, true)
+          cb(arr)
+        })
+      }
+
+      const bWrap = document.getElementById('bruneton')
+      const bCanvas = document.getElementById('glcanvas')
+      // Create the context first so we can keep the drawing buffer around for
+      // readback / the diff view; his `getContext('webgl2')` then returns this one.
+      bCanvas.getContext('webgl2', { preserveDrawingBuffer: true, antialias: false, alpha: false })
+      const bdemo = new Demo(bWrap)
+      const brunetonReady = () =>
+        !!(bdemo.program && bdemo.transmittanceTexture && bdemo.scatteringTexture && bdemo.irradianceTexture)
+
+      // ------------------------------------------------------------------
+      // Our side
+      // ------------------------------------------------------------------
+      const renderer = new THREE.WebGPURenderer({ antialias: false })
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      // The tone curve is applied explicitly in the output node below so both
+      // sides go through the identical mapping; keep the renderer out of it.
+      renderer.toneMapping = THREE.NoToneMapping
+      renderer.toneMappingExposure = ours.acesExposure
+      renderer.outputColorSpace = THREE.LinearSRGBColorSpace
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      document.getElementById('ours').appendChild(renderer.domElement)
+      await renderer.init()
+
+      // Z-up (Bruneton) → Y-up (three): (x, y, z) ↦ (x, z, −y). A proper rotation,
+      // applied identically to camera, up vector and sun so nothing is mirrored.
+      const zupToYup = (x, y, z) => new THREE.Vector3(x, z, -y)
+      const sunElevationDeg = () => 90 - THREE.MathUtils.radToDeg(state.sunZenith)
+      // Baker azimuth θ such that setFromSphericalCoords reproduces zupToYup(sun):
+      // x = sinφ sinθ = cosA sinZ, z = sinφ cosθ = −sinA sinZ ⇒ θ = atan2(cosA, −sinA).
+      const sunAzimuthDeg = () =>
+        THREE.MathUtils.radToDeg(Math.atan2(Math.cos(state.sunAzimuth), -Math.sin(state.sunAzimuth)))
+
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        sunDirection: { elevation: sunElevationDeg(), azimuth: sunAzimuthDeg(), raw: true },
+        exposure: 1,
+        sunDisc: true,
+        groundAlbedo: BRUNETON_GROUND_ALBEDO,
+        enableAerialPerspective: true,
+      })
+      const bottomRadiusM = sky.baker.atmosphereParams.bottomRadius * KM
+      const planetCenter = new THREE.Vector3(0, -bottomRadiusM, 0)
+
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+      // Live per-pixel sky instead of the baked cube background — no cube
+      // resolution in the way of the comparison. IBL still comes from the cube.
+      scene.background = null
+      const skyMesh = sky.baker.createSkyMesh()
+      scene.add(skyMesh)
+
+      const camera = new THREE.PerspectiveCamera(
+        50,
+        window.innerWidth / window.innerHeight,
+        1,
+        +(params.get('far') || 4e7),
+      )
+
+      // Pure Lambert, like his `albedo / π · (sun_irradiance + sky_irradiance)`:
+      // MeshLambertMaterial for the direct sun (no specular lobe at all —
+      // MeshStandard/MeshPhysical keep a grazing-angle F90 = 1 term even with
+      // specularIntensity 0, which reads as a grey sheen on the near-black ground),
+      // plus the sky irradiance as an emissive term sampled from the sky's PMREM at
+      // roughness 1 (what three's own diffuse IBL does: albedo × pmrem(normal)).
+      // `reflectivity: 0` keeps Lambert's reflection-style env mapping out.
+      const lambert = (r, g, b) =>
+        new THREE.MeshLambertMaterial({
+          color: new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace),
+          reflectivity: 0,
+          side: THREE.DoubleSide,
+        })
+      // 'hemisphere (his)': sky irradiance of a horizontal surface scaled by
+      // (1 + n·up) / 2, so nothing arrives from below, and on the ground his
+      // closed-form occlusion of the sky by the sphere (GetSkyVisibility).
+      const lambertMaterials = []
+      const hisSkyLightU = uniform(0)
+      const planetCenterU = uniform(new THREE.Vector3())
+      const sphereCenterU = uniform(new THREE.Vector3(0, 1 * KM, 0))
+      const wireSkyIrradiance = () => {
+        const env = sky.baker.environmentTexture
+        if (!env) return
+        for (const m of lambertMaterials) {
+          if (m.userData.envWired === env) continue
+          const envLight = pmremTexture(env, normalWorld, float(1.0))
+          const up = positionWorld.sub(planetCenterU).normalize()
+          const hemisphere = pmremTexture(env, vec3(0, 1, 0), float(1.0)).mul(normalWorld.dot(up).add(1).mul(0.5))
+          let hisLight = hemisphere
+          if (m.userData.skyOccluder) {
+            const p = positionWorld.sub(sphereCenterU)
+            const d = p.length()
+            hisLight = hemisphere.mul(
+              p.y
+                .div(d)
+                .mul(float(KM * KM).div(d.mul(d)))
+                .add(1),
+            )
+          }
+          m.emissiveNode = materialColor.mul(mix(envLight, hisLight, hisSkyLightU))
+          m.userData.envWired = env
+          m.needsUpdate = true
+        }
+      }
+
+      // His scene: a 1 km sphere (albedo 0.8) resting on the ground at the origin…
+      const sphere = new THREE.Mesh(new THREE.SphereGeometry(1 * KM, 96, 64), lambert(0.8, 0.8, 0.8))
+      lambertMaterials.push(sphere.material)
+      sphere.position.set(0, 1 * KM, 0)
+      sphere.castShadow = true
+      sphere.receiveShadow = true
+      scene.add(sphere)
+
+      // …and the planet (albedo (0, 0, 0.04)). A local spherical cap with geometric
+      // ring spacing puts the true horizon exactly where the sky LUT expects it;
+      // a coarse whole-planet sphere underneath covers the space views (8, 9).
+      const buildCap = (R, dMin, dMax, rings, segs) => {
+        const positions = [0, 0, 0]
+        const normals = [0, 1, 0]
+        const indices = []
+        for (let i = 0; i < rings; i++) {
+          const d = dMin * Math.pow(dMax / dMin, i / (rings - 1))
+          const th = d / R
+          const st = Math.sin(th)
+          const ct = Math.cos(th)
+          for (let j = 0; j < segs; j++) {
+            const ph = (j / segs) * Math.PI * 2
+            positions.push(R * st * Math.cos(ph), R * ct - R, R * st * Math.sin(ph))
+            normals.push(st * Math.cos(ph), ct, st * Math.sin(ph))
+          }
+        }
+        const base = (i) => 1 + i * segs
+        for (let j = 0; j < segs; j++) indices.push(0, base(0) + ((j + 1) % segs), base(0) + j)
+        for (let i = 0; i < rings - 1; i++) {
+          for (let j = 0; j < segs; j++) {
+            const a = base(i) + j
+            const b = base(i) + ((j + 1) % segs)
+            const c = base(i + 1) + j
+            const d = base(i + 1) + ((j + 1) % segs)
+            indices.push(a, d, c, a, b, d)
+          }
+        }
+        const g = new THREE.BufferGeometry()
+        g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+        g.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+        g.setIndex(indices)
+        return g
+      }
+      const groundMat = lambert(0, 0, 0.04)
+      groundMat.userData.skyOccluder = true
+      planetCenterU.value.copy(planetCenter)
+      lambertMaterials.push(groundMat)
+      const groundCap = new THREE.Mesh(buildCap(bottomRadiusM, 5, 1500 * KM, 200, 128), groundMat)
+      groundCap.receiveShadow = true
+      groundCap.frustumCulled = false
+      scene.add(groundCap)
+      const groundSphere = new THREE.Mesh(new THREE.SphereGeometry(bottomRadiusM, 256, 128), groundMat)
+      groundSphere.position.copy(planetCenter)
+      scene.add(groundSphere)
+
+      // Direct sun. Colour/intensity are set per frame to E_sun · T(sun) in the
+      // active units, which is what his GetSunAndSkyIrradiance returns.
+      const sun = sky.createSun({ intensity: 1, castShadow: true, shadowMapSize: 2048, distance: 50 * KM })
+      const shadowCam = sun.light.shadow.camera
+      shadowCam.left = shadowCam.bottom = -2.5 * KM
+      shadowCam.right = shadowCam.top = 2.5 * KM
+      shadowCam.near = 1
+      shadowCam.far = 100 * KM
+      shadowCam.updateProjectionMatrix()
+      sun.light.shadow.bias = -0.0005
+      sun.light.shadow.normalBias = 4
+      sun.attach(scene)
+
+      // CPU twin of the Transmittance LUT integration (40 steps, 0.3 offset) —
+      // sun-ray transmittance from the surface, for the DirectionalLight tint.
+      const transmittanceToSun = (altKm, cosZenith, p) => {
+        const r0 = p.bottomRadius + altKm
+        const b = 2 * r0 * cosZenith
+        const discTop = b * b - 4 * (r0 * r0 - p.topRadius * p.topRadius)
+        if (discTop < 0) return [0, 0, 0]
+        const discGround = b * b - 4 * (r0 * r0 - p.bottomRadius * p.bottomRadius)
+        if (discGround >= 0 && (-b - Math.sqrt(discGround)) / 2 > 0) return [0, 0, 0]
+        const tTop = (-b + Math.sqrt(discTop)) / 2
+        const sinZ = Math.sqrt(Math.max(0, 1 - cosZenith * cosZenith))
+        const od = [0, 0, 0]
+        let tPrev = 0
+        for (let i = 0; i < 40; i++) {
+          const t = (tTop * (i + 0.3)) / 40
+          const dt = t - tPrev
+          tPrev = t
+          const h = Math.hypot(t * sinZ, r0 + t * cosZenith) - p.bottomRadius
+          const dm = Math.exp(p.mieDensityExpScale * h)
+          const dr = Math.exp(p.rayleighDensityExpScale * h)
+          const o =
+            h < p.absorptionDensity0LayerWidth
+              ? p.absorptionDensity0LinearTerm * h + p.absorptionDensity0ConstantTerm
+              : p.absorptionDensity1LinearTerm * h + p.absorptionDensity1ConstantTerm
+          const dz = Math.min(1, Math.max(0, o))
+          for (let k = 0; k < 3; k++) {
+            const key = 'xyz'[k]
+            od[k] +=
+              (p.mieExtinction[key] * dm + p.rayleighScattering[key] * dr + p.absorptionExtinction[key] * dz) * dt
+          }
+        }
+        return od.map((v) => Math.exp(-v))
+      }
+
+      // ---- post: haze, then the shared tone curve, then (optionally) a diff against his canvas ----
+      const scenePass = pass(scene, camera)
+      const post = new THREE.RenderPipeline(renderer)
+      post.outputColorTransform = false
+      const hazed = sky.applyHaze(scenePass.getTextureNode(), {
+        scenePass,
+        policy: 'auto',
+        strength: 1.0,
+        // ?debug=is-sky | w | ap-rgb | ap-alpha | beyond | lin-depth | view-z (see HazePostProcess)
+        debugMode: params.get('debug'),
+      })
+
+      const toneU = uniform(0) // TONE_MODES; 1–3 use renderer.toneMappingExposure
+      const exposureU = uniform(state.exposure)
+      const diffU = uniform(0)
+      const diffGainU = uniform(ui.diffGain)
+      let hisTex = new THREE.CanvasTexture(bCanvas)
+      hisTex.colorSpace = THREE.NoColorSpace
+      const hisTexNode = texture(hisTex)
+
+      // Page-local depth debug (independent of the library's ?debug modes):
+      // ?dbg=depth | viewz | issky — raw values, tone curve bypassed.
+      const dbg = params.get('dbg')
+      const cameraFarU = sky._cameraFar
+      const nearU = uniform(camera.near)
+      const farU = uniform(camera.far)
+      post.outputNode = Fn(() => {
+        if (dbg === 'depth') return vec4(vec3(scenePass.getTextureNode('depth').sample(uv()).x), 1.0)
+        if (dbg === 'viewz') return vec4(vec3(abs(scenePass.getViewZNode()).div(cameraFarU)), 1.0)
+        // |viewZ| in units of 100 km (6 km → 0.06); tone curve still applies.
+        if (dbg === 'viewzkm') return vec4(vec3(abs(scenePass.getViewZNode()).div(1e5)), 1.0)
+        // (1 - depth) encoded as fract(×1e2), fract(×1e4), fract(×1e6) in r, g, b (tone curve bypassed)
+        if (dbg === 'depthenc') {
+          const od = float(1.0).sub(scenePass.getTextureNode('depth').x)
+          return vec4(od.mul(1e2).fract(), od.mul(1e4).fract(), od.mul(1e6).fract(), 1.0)
+        }
+        // (1 - depth) × 1e3: sphere at 6 km with near 0.7 → 0.117
+        if (dbg === 'depth1m') return vec4(vec3(float(1.0).sub(scenePass.getTextureNode('depth').x).mul(1e3)), 1.0)
+        // viewZ recomputed here from the raw depth with page-owned near/far uniforms
+        if (dbg === 'viewzmine') {
+          const dep = scenePass.getTextureNode('depth').x
+          const vz = nearU.mul(farU).div(farU.sub(nearU).mul(dep).sub(farU))
+          return vec4(vec3(abs(vz).div(1e5)), 1.0)
+        }
+        if (dbg === 'issky')
+          return vec4(
+            vec3(scenePass.getViewZNode().lessThan(cameraFarU.mul(-0.999)).select(float(1.0), float(0.0))),
+            1.0,
+          )
+        // ?bypass=1 skips the haze node entirely (a `select`, not a `mix`, so a
+        // NaN in the unused branch cannot leak through).
+        const lin = params.get('bypass') ? scenePass.getTextureNode().rgb : hazed.rgb
+        // His demo: color = pow(1 - exp(-radiance / white_point * exposure), 1/2.2), white_point = 1.
+        const bruneton = pow(float(1.0).sub(exp(lin.mul(exposureU).negate())), float(1.0 / 2.2))
+        const aces = renderOutput(vec4(lin, 1.0), THREE.ACESFilmicToneMapping, THREE.SRGBColorSpace).rgb
+        const agx = renderOutput(vec4(lin, 1.0), THREE.AgXToneMapping, THREE.SRGBColorSpace).rgb
+        const neutral = renderOutput(vec4(lin, 1.0), THREE.NeutralToneMapping, THREE.SRGBColorSpace).rgb
+        const out = toneU
+          .lessThan(0.5)
+          .select(bruneton, toneU.lessThan(1.5).select(aces, toneU.lessThan(2.5).select(agx, neutral)))
+        const his = hisTexNode.sample(uv()).rgb
+        const diff = abs(out.sub(his)).mul(diffGainU)
+        return vec4(mix(out, diff, diffU), 1.0)
+      })()
+
+      // ------------------------------------------------------------------
+      // Our-side knob application
+      // ------------------------------------------------------------------
+      let sunScale = SOLAR_IRRADIANCE
+      const BRUNETON_TINT = SOLAR_IRRADIANCE.map((v) => v / SOLAR_IRRADIANCE[1])
+      const currentTint = () =>
+        ours.sunTint === 'bruneton'
+          ? BRUNETON_TINT
+          : ours.sunTint === 'custom'
+            ? [ours.tintR, ours.tintG, ours.tintB]
+            : [1, 1, 1]
+      const applyUnits = () => {
+        if (ours.units === 'bruneton') {
+          sky.setExposure(1)
+          sky.setSunColor('neutral')
+          sky.setSkyLuminanceFactor(SOLAR_IRRADIANCE)
+          sky.mesh.sunDiscIntensity.value = SOLAR_RADIANCE_G
+          sunScale = SOLAR_IRRADIANCE
+        } else {
+          const L = ours.luminanceScale
+          const tint = currentTint()
+          sky.setExposure(L)
+          sky.setSunColor(tint)
+          sky.setSkyLuminanceFactor([1, 1, 1])
+          sky.mesh.sunDiscIntensity.value = 20 // SkyAtmosphereMesh default
+          sunScale = tint.map((t) => L * t)
+        }
+      }
+      const applyTone = () => {
+        toneU.value = TONE_MODES[ours.tone] ?? 0
+        renderer.toneMappingExposure = ours.toneExposure
+      }
+      // One-click starting points for the tuning question "what should the demos ship?"
+      const applyPreset = (preset) => {
+        Object.assign(ours, preset)
+        applyUnits()
+        applyTone()
+        sky.setHazeStrength(ours.hazeStrength)
+        gui.controllersRecursive().forEach((c) => c.updateDisplay())
+      }
+      const tuningPresets = {
+        'bruneton units + his curve': () => applyPreset({ units: 'bruneton', tone: 'bruneton', sunTint: 'neutral' }),
+        'demo today (LS 40, ACES 0.5)': () =>
+          applyPreset({ units: 'demo', luminanceScale: 40, tone: 'aces', toneExposure: 0.5, sunTint: 'neutral' }),
+        'proposed (LS 40, ACES 0.3)': () =>
+          applyPreset({ units: 'demo', luminanceScale: 40, tone: 'aces', toneExposure: 0.3, sunTint: 'neutral' }),
+        'proposed + bruneton tint': () =>
+          applyPreset({ units: 'demo', luminanceScale: 40, tone: 'aces', toneExposure: 0.3, sunTint: 'bruneton' }),
+        'AgX 0.3 + bruneton tint': () =>
+          applyPreset({ units: 'demo', luminanceScale: 40, tone: 'agx', toneExposure: 0.3, sunTint: 'bruneton' }),
+      }
+      const applyAtmosphere = () => {
+        sky.setPreset(ours.atmospherePreset)
+        sky.setGroundAlbedo(ours.groundAlbedo)
+        sky.setMultiScatteringFactor(ours.multiScatteringFactor)
+        sky.setTurbidity(ours.turbidity)
+      }
+      const applyMode = () => {
+        const oursEl = document.getElementById('ours')
+        const divider = document.getElementById('divider')
+        const w = window.innerWidth
+        diffU.value = ui.mode === 'diff' ? 1 : 0
+        if (ui.mode === 'split') {
+          const x = Math.round(ui.split * w)
+          oursEl.style.clipPath = `inset(0 0 0 ${x}px)`
+          divider.style.display = 'block'
+          divider.style.left = `${x}px`
+        } else {
+          oursEl.style.clipPath = ui.mode === 'bruneton' ? 'inset(0 0 0 100%)' : 'none'
+          divider.style.display = 'none'
+        }
+        document.getElementById('labelL').style.display = ui.mode === 'ours' || ui.mode === 'diff' ? 'none' : ''
+        document.getElementById('labelR').style.display = ui.mode === 'bruneton' ? 'none' : ''
+        document.getElementById('labelR').textContent =
+          ui.mode === 'diff' ? `|ours − his| × ${ui.diffGain}` : '@pmndrs/sky — Hillaire 2020 port (WebGPU)'
+      }
+      applyUnits()
+      applyTone()
+      applyMode()
+
+      // ------------------------------------------------------------------
+      // Controls — his scheme, on one overlay that drives both renderers:
+      // drag = view, ctrl/⌘/alt + drag = sun, wheel = distance, 1–9 views, +/- exposure.
+      // In split mode, dragging near the divider moves the split instead.
+      // ------------------------------------------------------------------
+      const overlay = document.getElementById('overlay')
+      const probeEl = document.getElementById('probe')
+      const probe = { x: 0.5, y: 0.35 } // normalised; default sits in open sky above the sphere
+      if (params.get('probe')) [probe.x, probe.y] = params.get('probe').split(',').map(Number)
+      let drag = null
+      let prev = { x: 0, y: 0 }
+      const nearDivider = (x) => ui.mode === 'split' && Math.abs(x - ui.split * window.innerWidth) < 8
+      overlay.addEventListener('contextmenu', (e) => e.preventDefault())
+      overlay.addEventListener('pointerdown', (e) => {
+        overlay.setPointerCapture(e.pointerId)
+        prev = { x: e.clientX, y: e.clientY }
+        drag = nearDivider(e.clientX) ? 'split' : e.ctrlKey || e.metaKey || e.altKey ? 'sun' : 'camera'
+        overlay.classList.add('dragging')
+        if (e.shiftKey) {
+          probe.x = e.clientX / window.innerWidth
+          probe.y = e.clientY / window.innerHeight
+          drag = null
+        }
+      })
+      overlay.addEventListener('pointermove', (e) => {
+        overlay.classList.toggle('split-hover', !drag && nearDivider(e.clientX))
+        if (!drag) return
+        const kScale = 500
+        const dx = prev.x - e.clientX
+        const dy = prev.y - e.clientY
+        if (drag === 'sun') {
+          state.sunZenith = Math.max(0, Math.min(Math.PI, state.sunZenith - dy / kScale))
+          state.sunAzimuth += dx / kScale
+        } else if (drag === 'camera') {
+          state.viewZenith = Math.max(0, Math.min(Math.PI / 2, state.viewZenith + dy / kScale))
+          state.viewAzimuth += dx / kScale
+        } else if (drag === 'split') {
+          ui.split = Math.max(0.02, Math.min(0.98, e.clientX / window.innerWidth))
+          applyMode()
+        }
+        prev = { x: e.clientX, y: e.clientY }
+      })
+      overlay.addEventListener('pointerup', () => {
+        drag = null
+        overlay.classList.remove('dragging')
+      })
+      overlay.addEventListener(
+        'wheel',
+        (e) => {
+          e.preventDefault()
+          state.viewDistanceMeters *= e.deltaY > 0 ? 1.05 : 1 / 1.05
+        },
+        { passive: false },
+      )
+      window.addEventListener('keydown', (e) => {
+        if (e.target !== document.body) return
+        if (VIEWS[e.key]) {
+          setView(e.key)
+          ui.viewPreset = e.key
+        } else if (e.key === '+' || e.key === '=') state.exposure *= 1.1
+        else if (e.key === '-') state.exposure /= 1.1
+      })
+
+      // ------------------------------------------------------------------
+      // GUI
+      // ------------------------------------------------------------------
+      const gui = new GUI({ title: 'Bruneton vs @pmndrs/sky' })
+      const fView = gui.addFolder('View (both sides)')
+      fView.add(ui, 'mode', ['split', 'bruneton', 'ours', 'diff']).onChange(applyMode)
+      fView.add(ui, 'viewPreset', Object.keys(VIEWS)).name('his view (1–9)').onChange(setView)
+      fView.add(state, 'exposure', 0.1, 400, 0.1).listen()
+      fView.add(state, 'viewDistanceMeters', 100, 2e7, 100).name('view distance (m)').listen()
+      fView
+        .add(state, 'viewZenith', 0, Math.PI / 2, 0.001)
+        .name('view zenith (rad)')
+        .listen()
+      fView.add(state, 'viewAzimuth', -Math.PI, Math.PI, 0.001).name('view azimuth (rad)').listen()
+      fView.add(state, 'sunZenith', 0, Math.PI, 0.001).name('sun zenith (rad)').listen()
+      fView.add(state, 'sunAzimuth', -Math.PI, Math.PI, 0.001).name('sun azimuth (rad)').listen()
+      fView.add(ui, 'diffGain', 1, 32, 1).onChange((v) => {
+        diffGainU.value = v
+        applyMode()
+      })
+
+      const fPresets = gui.addFolder('Tuning presets')
+      for (const name of Object.keys(tuningPresets)) fPresets.add(tuningPresets, name)
+
+      const fOurs = gui.addFolder('Ours — brightness & tone')
+      fOurs.add(ours, 'units', ['bruneton', 'demo']).name('sky units').onChange(applyUnits)
+      fOurs.add(ours, 'luminanceScale', 1, 100, 0.5).name('luminanceScale (demo)').onChange(applyUnits)
+      fOurs.add(ours, 'sunTint', ['neutral', 'bruneton', 'custom']).name('sun tint (demo)').onChange(applyUnits)
+      fOurs.add(ours, 'tintR', 0.5, 1.5, 0.001).onChange(applyUnits)
+      fOurs.add(ours, 'tintG', 0.5, 1.5, 0.001).onChange(applyUnits)
+      fOurs.add(ours, 'tintB', 0.5, 1.5, 0.001).onChange(applyUnits)
+      fOurs.add(ours, 'tone', Object.keys(TONE_MODES)).name('tone curve').onChange(applyTone)
+      fOurs.add(ours, 'toneExposure', 0.05, 2, 0.01).name('tone exposure (aces/agx/neutral)').onChange(applyTone)
+      fOurs.add(ours, 'sunLightScale', 0, 2, 0.01).name('sun light × (E·T)')
+      fOurs.add(ours, 'hazeStrength', 0, 2, 0.01).onChange((v) => sky.setHazeStrength(v))
+      const applySkyLight = () => (hisSkyLightU.value = ours.skyLight === 'environment' ? 0 : 1)
+      fOurs
+        .add(ours, 'skyLight', ['environment', 'hemisphere (his)'])
+        .name('sky light on objects')
+        .onChange(applySkyLight)
+
+      const fAtmo = gui.addFolder('Ours — atmosphere & scene')
+      fAtmo.add(ours, 'atmospherePreset', Object.keys(presets)).onChange(applyAtmosphere)
+      fAtmo.add(ours, 'groundAlbedo', 0, 1, 0.01).onChange((v) => sky.setGroundAlbedo(v))
+      fAtmo.add(ours, 'multiScatteringFactor', 0, 2, 0.01).onChange((v) => sky.setMultiScatteringFactor(v))
+      fAtmo.add(ours, 'turbidity', 0, 4, 0.01).onChange((v) => sky.setTurbidity(v))
+      fAtmo.add(ours, 'sunDisc').onChange((v) => sky.setSunDisc(v))
+      fAtmo.add(ours, 'sunLight').onChange((v) => (sun.light.visible = v))
+      fAtmo.add(ours, 'showSphere').onChange((v) => (sphere.visible = v))
+      fAtmo.add(ours, 'showGround').onChange((v) => (groundCap.visible = groundSphere.visible = v))
+      fAtmo.close()
+
+      // ------------------------------------------------------------------
+      // Readback: one pixel from each canvas at the probe, plus the linear
+      // radiance recovered by inverting his tone curve (only meaningful while
+      // both sides use it and the pixel is not saturated).
+      // ------------------------------------------------------------------
+      const rcanvas = document.createElement('canvas')
+      rcanvas.width = rcanvas.height = 1
+      const rctx = rcanvas.getContext('2d', { willReadFrequently: true })
+      const readPixel = (src, px, py) => {
+        rctx.clearRect(0, 0, 1, 1)
+        rctx.drawImage(src, px, py, 1, 1, 0, 0, 1, 1)
+        const d = rctx.getImageData(0, 0, 1, 1).data
+        return [d[0], d[1], d[2]]
+      }
+      const invertTone = (rgb8) =>
+        rgb8.map((v) => {
+          const c = v / 255
+          return c >= 1 ? Infinity : -Math.log(1 - Math.pow(c, 2.2)) / state.exposure
+        })
+      const fmt = (a, d = 4) => a.map((v) => (Number.isFinite(v) ? v.toFixed(d) : 'sat')).join(' ')
+      // Sky-match score: a fixed grid of open-sky points (top third, away from the
+      // sphere), mean of ours/his per channel in 8-bit and — when both sides use
+      // his curve — in linear radiance. Points where his pixel is saturated (the
+      // sun disc) are skipped. This is the number to drive tuning by.
+      const GRID = []
+      for (const y of [0.06, 0.15, 0.24]) for (const x of [0.08, 0.26, 0.5, 0.74, 0.92]) GRID.push([x, y])
+      let lastGrid = null
+      const sampleGrid = () => {
+        const dpr = window.devicePixelRatio
+        const acc8 = [0, 0, 0]
+        const accLin = [0, 0, 0]
+        let n = 0
+        let nLin = 0
+        for (const [x, y] of GRID) {
+          const px = Math.floor(x * window.innerWidth * dpr)
+          const py = Math.floor(y * window.innerHeight * dpr)
+          const his = readPixel(bCanvas, px, py)
+          const mine = readPixel(renderer.domElement, px, py)
+          if (his.some((v) => v >= 250) || his.every((v) => v < 3)) continue
+          for (let i = 0; i < 3; i++) acc8[i] += mine[i] / Math.max(his[i], 1)
+          n++
+          if (ours.tone === 'bruneton') {
+            const hl = invertTone(his)
+            const ml = invertTone(mine)
+            if (hl.every(Number.isFinite) && ml.every(Number.isFinite)) {
+              for (let i = 0; i < 3; i++) accLin[i] += ml[i] / Math.max(hl[i], 1e-6)
+              nLin++
+            }
+          }
+        }
+        lastGrid = {
+          n,
+          rgb8: n ? acc8.map((v) => v / n) : [NaN, NaN, NaN],
+          linear: nLin ? accLin.map((v) => v / nLin) : [NaN, NaN, NaN],
+        }
+        return lastGrid
+      }
+      let lastProbe = null
+      // The WebGPU canvas is only readable inside the frame that drew it, so
+      // scripted probes queue a request that the loop fulfils right after render.
+      let pendingProbe = null
+      const probeAsync = (x, y) =>
+        new Promise((resolve) => {
+          probe.x = x
+          probe.y = y
+          pendingProbe = resolve
+        })
+      const sampleProbe = () => {
+        const dpr = window.devicePixelRatio
+        const px = Math.floor(probe.x * window.innerWidth * dpr)
+        const py = Math.floor(probe.y * window.innerHeight * dpr)
+        const his = readPixel(bCanvas, px, py)
+        const mine = readPixel(renderer.domElement, px, py)
+        const hisLin = invertTone(his)
+        const mineLin = ours.tone === 'bruneton' ? invertTone(mine) : [NaN, NaN, NaN]
+        const ratio = mineLin.map((v, i) => v / hisLin[i])
+        lastProbe = { x: probe.x, y: probe.y, his, mine, hisLin, mineLin, ratio }
+        return lastProbe
+      }
+
+      // ------------------------------------------------------------------
+      // Frame loop
+      // ------------------------------------------------------------------
+      const info = document.getElementById('info')
+      const resize = () => {
+        const w = window.innerWidth
+        const h = window.innerHeight
+        const dpr = window.devicePixelRatio
+        bCanvas.style.width = `${w}px`
+        bCanvas.style.height = `${h}px`
+        bCanvas.width = Math.round(w * dpr)
+        bCanvas.height = Math.round(h * dpr)
+        bdemo.gl.viewport(0, 0, bCanvas.width, bCanvas.height) // his loop never resets the viewport
+        renderer.setSize(w, h)
+        camera.aspect = w / h
+        camera.updateProjectionMatrix()
+        hisTex.dispose()
+        hisTex = new THREE.CanvasTexture(bCanvas)
+        hisTex.colorSpace = THREE.NoColorSpace
+        hisTexNode.value = hisTex
+        applyMode()
+      }
+      window.addEventListener('resize', resize)
+      resize()
+
+      let frame = 0
+      let fps = 0
+      let fpsT = performance.now()
+      let fpsN = 0
+      let ready = false
+      const camUp = new THREE.Vector3()
+      renderer.setAnimationLoop(() => {
+        // --- push shared state into his Demo (his own RAF loop renders it) ---
+        bdemo.viewDistanceMeters = state.viewDistanceMeters
+        bdemo.viewZenithAngleRadians = state.viewZenith
+        bdemo.viewAzimuthAngleRadians = state.viewAzimuth
+        bdemo.sunZenithAngleRadians = state.sunZenith
+        bdemo.sunAzimuthAngleRadians = state.sunAzimuth
+        bdemo.exposure = state.exposure
+        exposureU.value = state.exposure
+
+        // --- same camera in Y-up: position = d·(sinZ cosA, sinZ sinA, cosZ), looking at the origin ---
+        const d = state.viewDistanceMeters
+        const cz = Math.cos(state.viewZenith)
+        const sz = Math.sin(state.viewZenith)
+        const ca = Math.cos(state.viewAzimuth)
+        const sa = Math.sin(state.viewAzimuth)
+        camera.position.copy(zupToYup(sz * ca * d, sz * sa * d, cz * d))
+        camera.up.copy(camUp.copy(zupToYup(-cz * ca, -cz * sa, sz)))
+        camera.lookAt(0, 0, 0)
+        camera.near = params.get('near') ? +params.get('near') : Math.min(1e4, Math.max(0.5, d * 1e-4))
+        camera.updateProjectionMatrix()
+        nearU.value = camera.near
+        farU.value = camera.far
+        skyMesh.position.copy(camera.position)
+
+        // --- sun ---
+        sky.setSunDirection({ elevation: sunElevationDeg(), azimuth: sunAzimuthDeg(), raw: true })
+        const T = transmittanceToSun(0, Math.cos(state.sunZenith), sky.baker.atmosphereParams)
+        const e = [0, 1, 2].map((i) => sunScale[i] * T[i] * ours.sunLightScale)
+        const eMax = Math.max(e[0], e[1], e[2], 1e-6)
+        sun.light.color.setRGB(e[0] / eMax, e[1] / eMax, e[2] / eMax, THREE.LinearSRGBColorSpace)
+        sun.light.intensity = eMax
+
+        sky.update(camera, { planetCenter })
+        wireSkyIrradiance() // PMREM exists only after the first bake; identity is stable afterwards
+        sky.updateAerialPerspective()
+        if (ui.mode === 'diff') hisTex.needsUpdate = true
+        post.render()
+
+        // --- HUD / probe ---
+        frame++
+        fpsN++
+        const now = performance.now()
+        if (now - fpsT > 500) {
+          fps = (fpsN * 1000) / (now - fpsT)
+          fpsN = 0
+          fpsT = now
+        }
+        if (pendingProbe || frame % 10 === 0) {
+          const bReady = brunetonReady()
+          if (bReady && !ready) {
+            ready = true
+            window.__ready = true
+          }
+          const p = sampleProbe()
+          if (pendingProbe) {
+            pendingProbe(p)
+            pendingProbe = null
+          }
+          if (frame % 30 === 0 || !lastGrid) sampleGrid()
+          const g = lastGrid
+          const altKm = (camera.position.distanceTo(planetCenter) - bottomRadiusM) / KM
+          const els = sunElevationDeg()
+          info.textContent =
+            `${fps.toFixed(0)} fps · sun elevation ${els.toFixed(1)}° · camera altitude ${altKm.toFixed(2)} km · tone ${ours.tone} ` +
+            `exposure ${state.exposure.toFixed(2)} · units ${ours.units}` +
+            (bReady ? '' : ' · bruneton: loading textures…') +
+            `\nprobe (${(p.x * 100).toFixed(0)}%, ${(p.y * 100).toFixed(0)}%)  shift+click to move` +
+            `\n  his  rgb8 ${fmt(p.his, 0).padEnd(12)} linear ${fmt(p.hisLin)}` +
+            `\n  ours rgb8 ${fmt(p.mine, 0).padEnd(12)} linear ${fmt(p.mineLin)}` +
+            `\n  ours/his  ${fmt(p.ratio, 3)}` +
+            `\nsky match (${g.n} open-sky points) ours/his  rgb8 ${fmt(g.rgb8, 3)}` +
+            (ours.tone === 'bruneton' ? `   linear ${fmt(g.linear, 3)}` : '   (linear needs the bruneton curve)')
+          probeEl.style.left = `${p.x * 100}%`
+          probeEl.style.top = `${p.y * 100}%`
+        }
+      })
+
+      // Scripted access (scripts/verify-bruneton.mjs).
+      window.__cmp = {
+        THREE,
+        scene,
+        sphere,
+        groundCap,
+        groundSphere,
+        sun,
+        post,
+        scenePass,
+        state,
+        ui,
+        ours,
+        sky,
+        renderer,
+        bdemo,
+        camera,
+        setView: (n) => {
+          setView(n)
+          ui.viewPreset = String(n)
+        },
+        setMode: (m) => {
+          ui.mode = m
+          applyMode()
+        },
+        setProbe: (x, y) => {
+          probe.x = x
+          probe.y = y
+        },
+        sampleProbe,
+        probeAsync,
+        sampleGrid: () => lastGrid,
+        tuningPresets,
+        applyUnits,
+        applyTone,
+        applySkyLight,
+        applyAtmosphere,
+        transmittanceToSun,
+      }
+    </script>
+  </body>
+</html>

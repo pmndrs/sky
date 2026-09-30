@@ -1,4 +1,4 @@
-import { Box3, DirectionalLight, Object3D, Vector3 } from 'three/webgpu'
+import { Box3, Color, DirectionalLight, Object3D, Vector3 } from 'three/webgpu'
 
 interface SkySunOptions {
   color?: number
@@ -21,8 +21,11 @@ interface SkySunOptions {
  * updates the light position automatically — no per-frame plumbing required
  * on the consumer side.
  *
- * The light's intensity, colour, and shadow params live on `this.light` for
- * direct mutation. The sun *disc* visibility lives on the sky mesh and stays
+ * The light's intensity and shadow params live on `this.light` for direct
+ * mutation. Its colour is `baseColor × sky sun colour`: it follows
+ * `sky.setSunColor(...)`, so set your own colour with `sun.setColor(...)`
+ * rather than on `light.color`, which the next `setSunColor` overwrites.
+ * The sun *disc* visibility lives on the sky mesh and stays
  * orthogonal — call `sky.setSunDisc(true)` separately if you want the visible
  * disc as well.
  *
@@ -31,17 +34,20 @@ interface SkySunOptions {
  * const sun = sky.createSun({ intensity: 4, castShadow: true });
  * sun.attach(scene);
  * sun.fitShadowToObject(scene);  // tighten shadow frustum
- * sun.light.color.setHex(0xfff0c0);  // mutate freely
+ * sun.setColor(0xfff0c0);  // multiplied by the sky's sun colour
  * ```
  */
 export class SkySun {
   sky: any
   distance: number
   light: DirectionalLight
+  baseColor: Color
   target: Object3D
   _scene: Object3D | null
   _onSunChanged: (sunVec: Vector3) => void
   _unsubscribe: (() => void) | null
+  _onSunColorChanged: (sunColor: Vector3) => void
+  _unsubscribeColor: (() => void) | null
 
   constructor(
     sky: any,
@@ -62,6 +68,7 @@ export class SkySun {
     this.sky = sky
     this.distance = distance
 
+    this.baseColor = new Color(color)
     this.light = new DirectionalLight(color, intensity)
     this.light.castShadow = castShadow
     this.light.shadow.mapSize.width = shadowMapSize
@@ -87,6 +94,11 @@ export class SkySun {
     this._onSunChanged = (sunVec: Vector3) => this._syncFromSunVec(sunVec)
     this._unsubscribe = sky.baker.addSunListener(this._onSunChanged)
 
+    this._onSunColorChanged = (sunColor: Vector3) => this._syncColor(sunColor)
+    this._unsubscribeColor = sky.baker.addSunColorListener?.(this._onSunColorChanged) ?? null
+    const sunColor = sky.baker.sky?.sunColor?.value
+    if (sunColor) this._syncColor(sunColor)
+
     // Prime the light position from the baker's current sun vector so the
     // first attach already has a valid transform.
     this._syncFromSunVec(sky.baker._sunVec)
@@ -106,6 +118,15 @@ export class SkySun {
 
   set intensity(value) {
     this.light.intensity = value
+  }
+
+  /** Base light colour, multiplied by the sky's sun colour. */
+  setColor(color: Color | string | number) {
+    this.baseColor.set(color)
+    const sunColor = this.sky.baker.sky?.sunColor?.value
+    if (sunColor) this._syncColor(sunColor)
+    else this.light.color.copy(this.baseColor)
+    return this
   }
 
   setDistance(value: number) {
@@ -195,8 +216,17 @@ export class SkySun {
       this._unsubscribe = null
     }
 
+    if (this._unsubscribeColor) {
+      this._unsubscribeColor()
+      this._unsubscribeColor = null
+    }
+
     this.detach()
     this.light.dispose()
+  }
+
+  _syncColor(sunColor: Vector3) {
+    this.light.color.setRGB(this.baseColor.r * sunColor.x, this.baseColor.g * sunColor.y, this.baseColor.b * sunColor.z)
   }
 
   _syncFromSunVec(sunVec: Vector3) {

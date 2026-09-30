@@ -177,6 +177,8 @@ export function applyHaze(
     lookUniforms: baker.sky.lookUniforms,
     upVector: baker.sky.upVector,
     skyLuminanceFactor: baker.sky.skyLuminanceFactor,
+    skyDepthEpsilon: baker.skyDepthEpsilon,
+    sunColor: baker.sky.sunColor,
     apDistanceScale: sky._apDistanceScale,
     viewHeightKm: baker.sky.viewHeight,
     // Planet-frame camera position — already updated each frame by

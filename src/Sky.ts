@@ -40,9 +40,21 @@ interface SkyOptions {
   sunDirection?: any
   turbidity?: number
   groundAlbedo?: any
+  sunColor?: string | number | Color | Vector3 | number[]
   enableAerialPerspective?: boolean
   apKmPerSlice?: number
   mirrorBelowHorizon?: boolean
+}
+
+/**
+ * Named sun colours for `sunColor` / `setSunColor`, linear RGB normalised to
+ * green. `neutral` is a white sun (Hillaire's reference). `bruneton` is the
+ * solar irradiance Bruneton's model uses at 680 / 550 / 440 nm
+ * (1.474, 1.8504, 1.91198): slightly less red, which reads as a more cyan sky.
+ */
+export const SUN_COLORS: Record<string, [number, number, number]> = {
+  neutral: [1, 1, 1],
+  bruneton: [1.474 / 1.8504, 1, 1.91198 / 1.8504],
 }
 
 const QUALITY_PRESETS: Record<string, any> = {
@@ -133,6 +145,7 @@ export class Sky {
       // Optional top-level scalar shortcuts merged onto the preset.
       turbidity,
       groundAlbedo,
+      sunColor,
       enableAerialPerspective = true,
       apKmPerSlice = 8.0,
       // Fold below-horizon cube-bake rays to above-horizon so the env's
@@ -169,6 +182,7 @@ export class Sky {
 
     this.setExposure(exposure)
     this.setSunDisc(sunDisc)
+    if (sunColor != null) this.setSunColor(sunColor)
 
     if (sunDirection) {
       this.setSunDirection(sunDirection)
@@ -406,7 +420,7 @@ export class Sky {
         ? value
         : typeof value === 'number'
           ? new Vector3(value, value, value)
-          : new Vector3(value.x ?? 0.3, value.y ?? 0.3, value.z ?? 0.3)
+          : new Vector3(value.x ?? 0.1, value.y ?? 0.1, value.z ?? 0.1)
     this.baker.setAtmosphereParams({ groundAlbedo: v })
     return this
   }
@@ -429,6 +443,31 @@ export class Sky {
    */
   setMultiScatteringFactor(value: number) {
     this.baker.setAtmosphereParams({ multiScatteringFactor: value })
+    return this
+  }
+
+  /**
+   * Colour of the sun as a light source. Tints everything the sun lights:
+   * the sky (before any look), AP haze, the sun disc and the light of every
+   * `createSun()` helper. Accepts a name from `SUN_COLORS` (`'neutral'`,
+   * `'bruneton'`), a hex string / number (sRGB, converted to linear), a
+   * `Color`, a `Vector3`, or `[r, g, b]` (linear). Default is `'neutral'`.
+   * Cube + PMREM re-bake only. For a grade on the sky alone, use
+   * `setSkyLuminanceFactor`.
+   */
+  setSunColor(color: string | number | Color | Vector3 | number[]) {
+    let v: Vector3
+    if (typeof color === 'string' && SUN_COLORS[color]) {
+      v = new Vector3().fromArray(SUN_COLORS[color])
+    } else if (color instanceof Vector3) {
+      v = color
+    } else if (Array.isArray(color)) {
+      v = new Vector3().fromArray(color)
+    } else {
+      const c = color instanceof Color ? color : new Color(color)
+      v = new Vector3(c.r, c.g, c.b)
+    }
+    this.baker.setSunColor(v)
     return this
   }
 
@@ -721,7 +760,7 @@ function applyShortcutScalars(base: any, { turbidity, groundAlbedo }: { turbidit
         ? groundAlbedo.clone()
         : typeof groundAlbedo === 'number'
           ? new Vector3(groundAlbedo, groundAlbedo, groundAlbedo)
-          : new Vector3(groundAlbedo.x ?? 0.3, groundAlbedo.y ?? 0.3, groundAlbedo.z ?? 0.3)
+          : new Vector3(groundAlbedo.x ?? 0.1, groundAlbedo.y ?? 0.1, groundAlbedo.z ?? 0.1)
   }
 
   return mergeAtmosphereParams(base, partial)

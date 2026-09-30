@@ -263,6 +263,72 @@ signature in `luts.wgsl.ts`, (b) the multiply site, (c) the named key in the
 ~0.0003 where >0 was expected. For any new atmosphere param: edit both twins,
 then check `examples/vanilla/parity/` still agrees.
 
+### Haze sky mask: test the raw depth, never `viewZ`/`linearDepth` against `far` (2026-09-26)
+
+The live `SkyAtmosphereMesh` writes depth with the `z = w` trick, which lands
+**one depth ulp below 1.0**, not at 1.0. Every viewZ-based sky test then fails
+for any real far plane: `perspectiveDepthToViewZ` turns `1 - 2^-24` into
+`-near·far / (near + far·2^-24)`, i.e. only `-0.45·far` at far = 2e7, so
+`viewZ < -0.999·far` / `linearDepth > 0.999` both say "geometry", and the haze
+pass adds AP inscatter on top of the Sky-View sample for every sky pixel
+(measured +40 % sky luminance against Bruneton's reference; the "blown-out
+noon" of the live-sky demos). Demos that use the baked cube as
+`scene.background` were never affected — the cleared depth stays exactly 1.0.
+`createHazeOutputNode` now tests the raw depth (a uniform tolerance, so the
+f32 survives codegen), OR-ed with the old tests. Verify with `?debug=is-sky`.
+
+The tolerance is not free (2026-09-29). The first version used 4 ulps, and
+geometry near the far plane shares those depth values: with near 1 m and far
+200 km everything past 191 km was taken for sky, got no haze and showed its
+raw colour — a one-pixel black line along the horizon of a ground plane that
+runs past `far`, flickering as the camera moves. The test is now exact
+(`>= 1.0`) until `baker.createSkyMesh()` hands out a live sky mesh, and
+1.25 ulps after that (`baker.skyDepthEpsilon`, `LIVE_SKY_DEPTH_EPSILON`;
+1.5 would tie and round to 2 ulps in f32). `is-sky` cannot show this bug: the
+misclassified pixels look like sky there. Look for the unhazed surface colour.
+
+### Never inverse-project a far-plane point for a ray direction (2026-09-26)
+
+The haze pass rebuilt each pixel's ray as `invProj · (ndc, 1, 1)`. With the
+far/near ratios planet demos use (far 4e7 m, near < 1 m) that point is at
+40,000 km and float32 loses the direction; `cosFromAxis` collapses, the AP
+slice index explodes and **every geometry pixel renders black** — but only for
+some near values (fine at 0.9 m, black at 0.7 m), so it looks like a scene
+bug. Use a mid-depth clip point (`z = 0.5`), which is what the AP LUT build
+already does; the two reconstructions now agree by construction.
+
+### Sky-View LUT sample spacing is quadratic — measured, not a nicety (2026-09-26)
+
+SebH's `VariableSampleCount = true` spaces steps as `t = (s/N)²·tMax`. The
+port had kept his 30-step count with uniform spacing and a JSDoc saying the
+difference was imperceptible. Against Bruneton's tables it was 15 % across
+the whole sky and 40 % in the sun's aureole; 90 uniform samples change
+nothing, so it is the distribution. Both twins now use quadratic spacing for
+the Sky-View LUT and the two per-pixel raymarch fallbacks
+(`sampleDistribution: 'quadratic'` on the TSL integrator); Transmittance,
+Multi-Scatter and AP LUTs stay uniform like the reference. Parity pages
+still pass. Numbers: `research/bruneton-audit-2026-09-26.md`.
+
+### Ground albedo feeds an isotropic bounce that glows the horizon
+
+Hillaire's multi-scatter LUT treats second-order light as isotropic, and at
+low altitude the sunlit ground below dominates it, so a horizontal ray
+accumulates the bounce over hundreds of km. Measured against Bruneton (sun at
+zenith): last 2° above the horizon read 2× at albedo 0.1 and 3–5× at 0.3, with
+the whole sky 30–40 % too bright at 0.3. `EARTH.groundAlbedo` is now 0.1
+(Bruneton's value); SebH's demo uses 0. Any preset with a high albedo will
+show a bright horizon band — that is the technique, not a bug.
+
+### Reading debug values through the compare page: know what the tone curve wraps
+
+`20-bruneton-compare.html` tone-maps whatever the haze node returns, so the
+library's `?debug=` modes (`w`, `ap-alpha`, `ap-rgb`, `is-sky`, `beyond`) come
+out **through the Bruneton curve**, while the page-local `?dbg=` modes (`depth`,
+`depthenc`, `viewz`, `viewzkm`, `issky`) return **before** it. Decoding a
+page-local mode as if it were tone-mapped produced a 300× wrong "viewZ" and an
+hour of chasing a depth bug that did not exist. `?dbg=depthenc` packs
+`1 - depth` into three fractional channels for an exact readback.
+
 ### `toneMappingExposure` is ignored under `NoToneMapping` — don't use it to read HDR values
 
 three applies `renderer.toneMappingExposure` only inside a tone-mapping
@@ -393,7 +459,15 @@ blocked on r3f-canary/three-webgpu build interop).
 
 ## Reference repos
 
-- `/Users/dex/Documents/GitHub/homefig/UnrealEngineSkyAtmosphere/Resources/`
-  is Hillaire's authoritative HLSL. When porting any new helper, search
-  there first — `RenderSkyRayMarching.hlsl`, `RenderSkyCommon.hlsl`,
+- `/Users/dex/Developer/UnrealEngineSkyAtmosphere/Resources/` is Hillaire's
+  authoritative HLSL (the old `~/Documents/GitHub/homefig/...` path is gone).
+  When porting any new helper, search there first —
+  `RenderSkyRayMarching.hlsl`, `RenderSkyCommon.hlsl`,
   `SkyAtmosphereCommon.hlsl` are the load-bearing files.
+- Bruneton's precomputed-scattering demo is vendored verbatim under
+  `examples/vanilla/public/bruneton/` (his `demo.js` + dumped shaders; the
+  16 MB `.dat` tables are gitignored, `scripts/fetch-bruneton.mjs` downloads
+  them). `20-bruneton-compare.html` renders it next to ours with one camera,
+  one sun and one tone curve; `scripts/verify-bruneton.mjs` writes a
+  per-pixel ours/his radiance report. Use it before trusting any brightness
+  or colour change. Findings live in `research/bruneton-audit-2026-09-26.md`.

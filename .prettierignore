@@ -4,5 +4,6 @@ node_modules/
 pnpm-lock.yaml
 resources/
 .claude/
+examples/vanilla/public/bruneton/
 # Headless verify/bench output (gitignored in examples/vanilla).
 examples/vanilla/scripts/.verify-out/

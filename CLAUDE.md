@@ -345,6 +345,53 @@ toneMappingExposure). To read linear HDR values, scale the source instead
 render target directly. Sanity-check any readback against a tonemapped render
 of the same pixel before trusting it.
 
+### Shadowed haze (light shafts): four traps (2026-09-28)
+
+`applyHaze({ shadows: { light } })` marches the view ray through the sun's
+shadow map (`src/sky/hazeShadows.ts`). What cost time:
+
+- **`SkySun.fitShadowToBox` fitted in a stale frame.** three's shadow camera is
+  not parented to the light; it is only placed (position + `lookAt`) inside
+  `LightShadow.updateMatrices`, at shadow-render time. The fit read
+  `camera.matrixWorldInverse` before that ever ran, so the first fit (and any
+  fit after the sun moved) enclosed the box in the wrong frame and the scene
+  had no shadows at all. It now calls `shadow.updateMatrices(light)` first;
+  `tests/hazeShadows.test.ts` fails without it.
+- **The shadow map does not exist when the haze node is built.** `ShadowNode`
+  creates `light.shadow.map` while compiling the first lit material, i.e.
+  during the first scene-pass render, after the post node is set up. The march
+  samples a private 1×1 `DepthTexture` placeholder (nearest, no compare) and a
+  `uniform().onRenderUpdate` swaps every registered texture node's `.value`
+  to `light.shadow.map.depthTexture` — it runs after the pass's
+  `updateBefore` (which renders the scene) and before bindings update, so the
+  first frame already reads the real map. Sample it with `textureLoad`: it is
+  legal inside a non-uniform `Loop`, needs no sampler, and so stays
+  layout-compatible with the real map's comparison sampler.
+- **Subtracting an exact deficit from the AP LUT striped the ground.** Where a
+  ray is shadowed end to end the march's deficit is ~the whole single-scatter
+  term, while the LUT's value is interpolated between depth slices (off by a
+  few %); `max(AP − D, 0)` then flips across slices into horizontal bands (sun
+  4°, towers scene). Geometry now gets the _fraction_ `D / L_full` (L_full: the
+  same model's single + multi-scatter over the whole path) applied to the AP
+  value; only sky pixels take the absolute deficit.
+- **A per-pixel earth-shadow test on surface points streaks the ground.**
+  Points rebuilt from the depth buffer (or lying on a flat ground plane) sit a
+  few metres either side of the ground sphere; the ones below it read "in the
+  planet's shadow", so the full-path in-scatter flipped between two values
+  along depth steps: horizontal dark-blue streaks at the base of the sphere,
+  mostly while the camera moved. `sunLightAt` now lifts the test point to at
+  least 10 m above the sphere. The occlusion debug view stays smooth through
+  this; split the fraction into deficit and full path to see it.
+- **Sky and geometry texels of the march pass hold different quantities**
+  (absolute deficit vs fraction). The upsample never mixes them, not even as
+  a fallback weight.
+- **The cost is the march, not the shader.** Inline in the haze shader or in
+  its own full-resolution pass: the same +2.1–2.8 ms at 1080p/32 samples.
+  Dropping the per-step medium evaluation (geometric interpolation of the
+  smooth part) saved almost nothing; half resolution + a depth-aware
+  upsample is what brought it to +0.6–1.1 ms. Verify with
+  `examples/vanilla/scripts/verify-haze-shadows.mjs` (baseline, mask, bench).
+
 ### Vite HMR + WebGPU shader edits
 
 Editing a TSL helper while a page is open often leaves the previous shader

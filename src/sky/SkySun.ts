@@ -163,7 +163,11 @@ export class SkySun {
     const cam = this.light.shadow.camera
     this.light.target.updateMatrixWorld()
     this.light.updateMatrixWorld()
-    cam.updateMatrixWorld()
+    // The shadow camera is not parented to the light: three only places it
+    // (position + lookAt the target) inside `updateMatrices`, at shadow render
+    // time. Without this call the first fit — and any fit after the sun moved —
+    // measures the box in a stale light frame and the frustum misses the scene.
+    this.light.shadow.updateMatrices(this.light)
 
     const corners = [
       new Vector3(box3.min.x, box3.min.y, box3.min.z),

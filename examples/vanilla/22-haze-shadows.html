@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>@pmndrs/sky — shadowed haze (light shafts)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+        max-width: 46ch;
+        line-height: 1.4;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      @pmndrs/sky · shadowed haze — the sun's shadow map removes in-scatter from the air behind the sphere and towers,
+      so they cast light shafts through the haze and against the sky.
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { pass, pmremTexture, normalWorld, materialColor, float } from 'three/tsl'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { Sky } from '@pmndrs/sky'
+
+      // ?ui=0 hides the inspector (clean screenshots / timing), ?shadows=0
+      // starts with the feature compiled out, ?debug=<mode> passes a haze debug
+      // mode through (e.g. shadow-occlusion, shadow-deficit).
+      const params = new URLSearchParams(location.search)
+      const showUI = params.get('ui') !== '0'
+      const debugMode = params.get('debug')
+
+      const renderer = new THREE.WebGPURenderer({ antialias: false })
+      renderer.setPixelRatio(showUI ? window.devicePixelRatio : 1)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      // AgX at 0.35 rather than the older demos' ACES 0.5: under ACES 0.5 the
+      // whole low-sun sky sits on the shoulder and a 20 % in-scatter change
+      // flattens to a few 8-bit steps. AgX 0.35 is the closest match to
+      // Bruneton's look (research/bruneton-audit-2026-09-26.md, finding 5).
+      renderer.toneMapping = params.get('tone') === 'aces' ? THREE.ACESFilmicToneMapping : THREE.AgXToneMapping
+      renderer.toneMappingExposure = Number(params.get('toneExposure') ?? 0.35)
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      if (showUI) renderer.inspector = new Inspector()
+      document.body.appendChild(renderer.domElement)
+      await renderer.init()
+
+      const state = {
+        shadows: params.get('shadows') !== '0',
+        samples: Number(params.get('samples') ?? 32),
+        maxDistance: Number(params.get('maxDistance') ?? 20000),
+        strength: Number(params.get('strength') ?? 1),
+        resolution: Number(params.get('resolution') ?? 0.5),
+        elevation: Number(params.get('elevation') ?? 15.5),
+        azimuth: Number(params.get('azimuth') ?? 262),
+        turbidity: Number(params.get('turbidity') ?? 1),
+        hazeStrength: 1,
+        exposure: 40,
+        sunIntensity: 22,
+      }
+
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        exposure: state.exposure,
+        sunDisc: true,
+        turbidity: state.turbidity,
+        enableAerialPerspective: true,
+        sunDirection: { elevation: state.elevation, azimuth: state.azimuth },
+      })
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+
+      const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 200000)
+
+      // --- Scene ------------------------------------------------------------
+      // 'sphere' (default): Bruneton's demo — a 1 km sphere (albedo 0.8) on a
+      //   dark ground (0, 0, 0.04), camera 9 km out at 900 m, sun 15.5° high
+      //   behind the sphere: his view 1, the reference for the shaft. Compare
+      //   with 20-reference-compare.html?layout=solo&solo=bruneton&view=1.
+      // 'towers': the same sphere plus a row of towers, lower camera.
+      const sceneKind = params.get('scene') ?? 'sphere'
+      // Pure Lambert like his scene — any specular lobe gives the lit ground a
+      // grazing-angle sun glint (the camera faces the low sun) that swamps
+      // everything the shafts change. Lambert has no diffuse IBL in three, so
+      // sky irradiance goes in as an emissive PMREM lookup (same trick as the
+      // compare page), re-wired whenever the baker hands out a new PMREM.
+      const lambertMaterials = []
+      const diffuse = (r, g, b) => {
+        const m = new THREE.MeshLambertMaterial({
+          color: new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace),
+          reflectivity: 0,
+        })
+        lambertMaterials.push(m)
+        return m
+      }
+      const wireSkyIrradiance = () => {
+        const env = sky.baker.environmentTexture
+        if (!env) return
+        for (const m of lambertMaterials) {
+          if (m.userData.env === env) continue
+          m.emissiveNode = materialColor.mul(pmremTexture(env, normalWorld, float(1.0)))
+          m.userData.env = env
+          m.needsUpdate = true
+        }
+      }
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(400000, 400000), diffuse(0, 0, 0.04))
+      ground.rotation.x = -Math.PI / 2
+      ground.receiveShadow = true
+      scene.add(ground)
+
+      const stone = diffuse(0.8, 0.8, 0.8)
+      const sphere = new THREE.Mesh(new THREE.SphereGeometry(1000, 128, 96), stone)
+      sphere.position.set(0, 1000, 0)
+      sphere.castShadow = sphere.receiveShadow = true
+      scene.add(sphere)
+
+      let shadowVolume
+      if (sceneKind === 'towers') {
+        const towerGeo = new THREE.BoxGeometry(1, 1, 1)
+        const towers = [
+          [-2600, 1400, 160, 1700],
+          [-1900, -1600, 120, 2300],
+          [-3200, -300, 140, 1300],
+          [-1700, 2600, 110, 1500],
+        ]
+        for (const [x, z, w, h] of towers) {
+          const t = new THREE.Mesh(towerGeo, stone)
+          t.scale.set(w, h, w)
+          t.position.set(x, h / 2, z)
+          t.castShadow = t.receiveShadow = true
+          scene.add(t)
+        }
+        camera.position.set(8200, 700, 1800)
+        shadowVolume = new THREE.Box3(new THREE.Vector3(-4500, 0, -5500), new THREE.Vector3(12000, 2600, 5500))
+      } else {
+        // Bruneton's camera: d·(sinZ cosA, cosZ, −sinZ sinA) with d 9 km, zenith 1.47, azimuth 0.
+        camera.position.set(Math.sin(1.47) * 9000, Math.cos(1.47) * 9000, 0)
+        if (!params.has('elevation')) state.elevation = 90 - THREE.MathUtils.radToDeg(1.3)
+        if (!params.has('azimuth'))
+          state.azimuth = (THREE.MathUtils.radToDeg(Math.atan2(Math.cos(3), -Math.sin(3))) + 360) % 360
+        shadowVolume = new THREE.Box3(new THREE.Vector3(-4000, 0, -5000), new THREE.Vector3(12000, 2400, 5000))
+      }
+      sky.setSunDirection({ elevation: state.elevation, azimuth: state.azimuth })
+
+      // --- Sun light with a shadow frustum covering the air around the scene --
+      const sun = sky.createSun({
+        intensity: state.sunIntensity,
+        castShadow: true,
+        shadowMapSize: Number(params.get('shadowMapSize') ?? 4096),
+      })
+      sun.light.shadow.normalBias = 4
+      sun.attach(scene)
+      // The shafts only exist where the shadow map does, so the frustum has to
+      // enclose the *air* the shadows cross, not just the casters.
+      const refitShadow = () => sun.fitShadowToBox(shadowVolume)
+      refitShadow()
+
+      const controls = new OrbitControls(camera, renderer.domElement)
+      controls.target.set(0, sceneKind === 'towers' ? 700 : 0, 0)
+      controls.update()
+
+      // --- Post: haze, with or without the shadow term ----------------------
+      const scenePass = pass(scene, camera)
+      const post = new THREE.RenderPipeline(renderer)
+      const buildOutput = () => {
+        post.outputNode = sky.applyHaze(scenePass.getTextureNode(), {
+          scenePass,
+          raymarchFallback: false,
+          debugMode,
+          shadows: state.shadows
+            ? {
+                light: sun,
+                samples: state.samples,
+                maxDistance: state.maxDistance,
+                strength: state.strength,
+                resolution: state.resolution,
+              }
+            : false,
+        })
+        post.needsUpdate = true
+      }
+      buildOutput()
+
+      const setSun = () => {
+        sky.setSunDirection({ elevation: state.elevation, azimuth: state.azimuth })
+        refitShadow()
+      }
+      const setShadows = (on) => {
+        state.shadows = on
+        buildOutput()
+      }
+      const setShadowParams = (partial) => {
+        Object.assign(state, partial)
+        sky.setHazeShadows?.({
+          samples: state.samples,
+          maxDistance: state.maxDistance,
+          strength: state.strength,
+          resolution: state.resolution,
+        })
+      }
+
+      if (showUI) {
+        const gui = renderer.inspector.createParameters('Shadowed haze')
+        gui.add(state, 'shadows').onChange((v) => setShadows(v))
+        gui.add(state, 'samples', 1, 128, 1).onChange((v) => setShadowParams({ samples: v }))
+        gui.add(state, 'maxDistance', 500, 60000, 100).onChange((v) => setShadowParams({ maxDistance: v }))
+        gui.add(state, 'strength', 0, 4, 0.01).onChange((v) => setShadowParams({ strength: v }))
+        gui.add(state, 'resolution', [0.25, 0.5, 1]).onChange((v) => setShadowParams({ resolution: Number(v) }))
+        gui.add(state, 'elevation', -2, 60, 0.1).onChange(setSun)
+        gui.add(state, 'azimuth', 0, 360, 0.5).onChange(setSun)
+        gui.add(state, 'turbidity', 0, 6, 0.01).onChange((v) => sky.setTurbidity(v))
+        gui.add(state, 'hazeStrength', 0, 3, 0.01).onChange((v) => sky.setHazeStrength(v))
+        gui.add(state, 'exposure', 0, 120, 0.5).onChange((v) => sky.setExposure(v))
+        gui.add(state, 'sunIntensity', 0, 40, 0.1).onChange((v) => (sun.intensity = v))
+        gui.add(renderer, 'toneMappingExposure', 0, 1, 0.01).name('toneExposure')
+      }
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight
+        camera.updateProjectionMatrix()
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      })
+
+      const frame = () => {
+        controls.update() // before sky.update, which copies the camera matrices for the haze
+        sky.update(camera)
+        wireSkyIrradiance()
+        sky.updateAerialPerspective()
+        post.render()
+      }
+
+      // Scripted-verification hooks (scripts/verify-haze-shadows.mjs).
+      window.__sky = sky
+      window.__THREE = THREE
+      window.__scene = { scene, ground, sphere, sun, post }
+      window.__renderer = renderer
+      window.__camera = camera
+      window.__controls = controls
+      window.__hazeShadows = {
+        state,
+        setShadows,
+        setShadowParams,
+        setSun: (elevation, azimuth) => {
+          Object.assign(state, { elevation, azimuth })
+          setSun()
+        },
+        // Wall-clock of `n` back-to-back frames with the animation loop
+        // paused, waited to GPU completion. Returns ms per frame.
+        async bench(n = 120) {
+          renderer.setAnimationLoop(null)
+          const device = renderer.backend.device
+          for (let i = 0; i < 10; i++) frame()
+          await device.queue.onSubmittedWorkDone()
+          const t0 = performance.now()
+          for (let i = 0; i < n; i++) frame()
+          await device.queue.onSubmittedWorkDone()
+          const ms = (performance.now() - t0) / n
+          renderer.setAnimationLoop(frame)
+          return ms
+        },
+      }
+
+      renderer.setAnimationLoop(frame)
+    </script>
+  </body>
+</html>

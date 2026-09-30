@@ -1,6 +1,8 @@
 import { uniform } from 'three/tsl'
 
 import { createHazeOutputNode } from './sky/HazePostProcess'
+import { createHazeShadowState, releaseHazeShadowPasses, updateHazeShadowState } from './sky/hazeShadows'
+import type { HazeShadowOptions } from './sky/hazeShadows'
 
 interface ApplyHazeOptions {
   sky?: any
@@ -13,6 +15,7 @@ interface ApplyHazeOptions {
   includeSkyCubeBlend?: boolean
   raymarchFallback?: boolean
   raymarchSampleCount?: number
+  shadows?: HazeShadowOptions | false
   debugMode?: string | null
 }
 
@@ -70,6 +73,16 @@ interface ApplyHazeOptions {
  *   keeps orbit-altitude grazing rays band-free; ground-level scenes can use
  *   32 or lower for a cheaper shader. Build-time constant — rebuild the node
  *   (call `applyHaze` again) to change it.
+ * @param {object|false} [options.shadows]               opt-in shadowed haze (light
+ *   shafts). `{ light, samples = 32, maxDistance = 20000, strength = 1,
+ *   resolution = 0.5 }`: `light` is the shadow-casting `DirectionalLight` (or
+ *   a `SkySun`); `maxDistance` is in metres; `resolution` scales the march
+ *   pass against the drawing buffer. The in-scatter the light's shadow map
+ *   occludes is removed from geometry and sky pixels. Omitted (or `false`)
+ *   compiles nothing — the haze shader is unchanged. If `sky.setHazeShadows()`
+ *   was called first with a `light`, that configuration is adopted. The
+ *   numeric knobs stay live through `sky.setHazeShadows()`; adding or removing
+ *   the feature needs a new `applyHaze` call.
  * @param {string} [options.debugMode]                   AP debug mode passthrough
  * @returns {THREE.Node} vec4 output node
  */
@@ -86,6 +99,7 @@ export function applyHaze(
     includeSkyCubeBlend = false,
     raymarchFallback = true,
     raymarchSampleCount = 64,
+    shadows,
     debugMode = null,
   }: ApplyHazeOptions = {},
 ): any {
@@ -148,6 +162,17 @@ export function applyHaze(
   // after `applyHaze`.
   if (!sky._apDistanceScale) sky._apDistanceScale = uniform(1.0)
 
+  // Shadowed haze. Same adopt-or-seed rule as the uniforms above: an explicit
+  // option wins, otherwise a state created by `sky.setHazeShadows()` is used,
+  // and `shadows: false` turns the feature off for this node.
+  if (shadows) {
+    if (!sky._hazeShadow) sky._hazeShadow = createHazeShadowState(shadows)
+    else updateHazeShadowState(sky._hazeShadow, shadows)
+  }
+  // A new haze node gets a new march pass; free the previous node's target.
+  if (sky._hazeShadow) releaseHazeShadowPasses(sky._hazeShadow)
+  const shadowState = shadows === false ? null : sky._hazeShadow?.light ? sky._hazeShadow : null
+
   return createHazeOutputNode({
     scenePass,
     sceneColorNode,
@@ -189,6 +214,7 @@ export function applyHaze(
     transmittanceLUT: baker.transmittanceLUT.texture,
     multiScatterLUT: baker.multiScatterLUT.texture,
     skyCube: includeSkyCubeBlend ? baker.texture : null,
+    shadow: shadowState,
     debugMode,
   })
 }

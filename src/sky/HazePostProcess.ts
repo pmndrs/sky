@@ -14,6 +14,7 @@ import {
   mix,
   abs,
   max,
+  min,
   If,
   dot,
   fract,
@@ -29,6 +30,8 @@ import {
 } from '../backends/tsl/atmosphere.tsl'
 import { applyLook } from '../backends/tsl/look.tsl'
 import { createHazeDepthNodes } from './hazeScenePassDepth'
+import { createShadowDeficitPass, upsampleShadowDeficit } from './hazeShadows'
+import type { HazeShadowState } from './hazeShadows'
 
 interface CreateHazeOutputNodeArgs {
   scenePass: any
@@ -89,6 +92,16 @@ interface CreateHazeOutputNodeArgs {
   transmittanceLUT?: any
   multiScatterLUT?: any
   raymarchOnlyUniform?: any
+  /**
+   * Opt-in shadowed haze (light shafts): the state from
+   * `createHazeShadowState({ light })`. When supplied, the in-scatter the
+   * light's shadow map occludes is removed from both geometry and sky pixels.
+   * Omit it and nothing is compiled — the shader is unchanged. Requires
+   * `atmosphereUniforms`, `sunDirection`, `transmittanceLUT`,
+   * `multiScatterLUT`, `cameraWorldUniform` and `cameraPositionKm` (or
+   * `viewHeightKm`).
+   */
+  shadow?: HazeShadowState | null
   debugMode?: string | null
 }
 
@@ -210,12 +223,15 @@ export function createHazeOutputNode({
   transmittanceLUT = null,
   multiScatterLUT = null,
   raymarchOnlyUniform = null,
+  shadow = null,
   // Debug modes for bisecting silhouette artefacts. Pass one of:
   // 'ap-rgb'   — AP inscatter colour only (×40 for visibility)
   // 'ap-alpha' — AP alpha (transmittance loss) only as grayscale
   // 'w'        — slice index w as grayscale; sky→1, foreground→0
   // 'is-sky'   — sky mask: white = sky, black = geometry
   // 'beyond'   — past-coverage mask: white = pixel uses raymarch fallback
+  // 'shadow-occlusion' — fraction of shadow-march samples in shadow (needs `shadow`)
+  // 'shadow-deficit'   — removed in-scatter, ×5 (needs `shadow`)
   // null       — normal compositing
   debugMode = null,
 }: CreateHazeOutputNodeArgs): any {
@@ -246,7 +262,21 @@ export function createHazeOutputNode({
     }
   }
 
+  if (shadow) {
+    const missing: string[] = []
+    if (!atmosphereUniforms) missing.push('atmosphereUniforms')
+    if (!sunDirection) missing.push('sunDirection')
+    if (!transmittanceLUT) missing.push('transmittanceLUT')
+    if (!multiScatterLUT) missing.push('multiScatterLUT')
+    if (!cameraWorldUniform) missing.push('cameraWorldUniform')
+    if (!viewHeightKm && !cameraPositionKm) missing.push('viewHeightKm or cameraPositionKm')
+    if (missing.length) {
+      throw new Error('createHazeOutputNode: shadow requires ' + missing.join(', ') + '.')
+    }
+  }
+
   const sceneColor = sceneColorNode ?? scenePass.getTextureNode('output')
+
   // `PassNode` uses `perspectiveDepthToViewZ` for `getViewZNode` — correct for
   // default depth, wrong when `logarithmicDepthBuffer` is on; see hazeScenePassDepth.js
   const { viewZNode, linearDepthNode } = createHazeDepthNodes(scenePass, logarithmicDepthBuffer)
@@ -258,6 +288,37 @@ export function createHazeOutputNode({
   // Sky-depth tolerance below 1.0 (see the sky-pixel test); 0 unless a caller
   // has a far-plane sky that cannot write exactly 1.0.
   const skyDepthEpsilon = skyDepthEpsilonNode ?? uniform(0)
+
+  // The shadow march runs in its own (by default half-resolution) pass, which
+  // rebuilds each pixel's view ray from the same depth + matrices as below.
+  const shadowPass = shadow
+    ? createShadowDeficitPass({
+        state: shadow,
+        buildRay: () => {
+          const u = uv()
+          const { viewZNode: vz, linearDepthNode: ld } = createHazeDepthNodes(scenePass, logarithmicDepthBuffer)
+          const ndc = vec2(u.x.mul(2.0).sub(1.0), float(1.0).sub(u.y.mul(2.0)))
+          const viewMid = invProjUniform.mul(vec4(ndc.x, ndc.y, float(0.5), float(1.0)))
+          const dirView = viewMid.xyz.div(viewMid.w)
+          const rayDir = tslNormalize(cameraWorldUniform.mul(vec4(dirView, float(0.0))).xyz)
+          const distanceM = abs(vz).div(max(abs(dirView.normalize().z), float(1e-6)))
+          const rawDepth = scenePass.getTextureNode('depth').x
+          const isSky = rawDepth
+            .greaterThanEqual(float(1.0).sub(skyDepthEpsilon))
+            .or(cameraFarUniform ? vz.lessThan(cameraFarUniform.mul(-0.999)) : ld.greaterThan(float(0.999)))
+          return { rayDir, distanceM, isSky }
+        },
+        luminanceScale,
+        multiScatterLUT,
+        outputOcclusion: debugMode === 'shadow-occlusion',
+        rayOriginM: cameraWorldUniform.mul(vec4(0.0, 0.0, 0.0, 1.0)).xyz,
+        cameraPositionKm: cameraPositionKm || vec3(float(0.0), viewHeightKm, float(0.0)),
+        sunDirection,
+        params: atmosphereUniforms,
+        transmittanceLUT,
+        apDistanceScale,
+      })
+    : null
 
   return Fn(() => {
     const u = uv()
@@ -577,6 +638,48 @@ export function createHazeOutputNode({
     if (skyCube) {
       const skyAtDir = cubeTexture(skyCube, worldRayDir).rgb
       composited = mix(composited, skyAtDir, apA)
+    }
+
+    if (shadowPass) {
+      // Shadowed haze: remove the single-scattered sun light the shadow map
+      // occludes (marched in its own pass, see `createShadowDeficitPass`).
+      // Geometry pixels get the in-shadow *fraction* of their path's
+      // in-scatter, applied to the AP value itself — already graded, and the
+      // fraction is scale-free, so no further grading is needed. Sky pixels
+      // get the absolute deficit, graded exactly like AP inscatter
+      // (luminanceScale — applied in the pass — strength, look chroma, sky
+      // luminance factor, sun colour); with `valueScale: 0` the look is linear in its
+      // input, so grading the deficit separately equals grading the
+      // difference. Rays that miss the shadow frustum read exactly 0.
+      const upsampled = upsampleShadowDeficit({ pass: shadowPass, uvNode: u, distanceM: distAlongRayM, isSky })
+      if (debugMode === 'shadow-occlusion') return vec4(upsampled, 1.0)
+
+      let skyShaft = upsampled
+      if (hazeStrength !== null) skyShaft = skyShaft.mul(hazeStrength)
+      // Same order as AP inscatter: sun colour ahead of the look.
+      if (sunColor) skyShaft = skyShaft.mul(sunColor)
+      if (lookUniforms) {
+        const lookUp = tslNormalize(upVector)
+        skyShaft = applyLook({
+          color: skyShaft,
+          viewZenithCosAngle: clamp(dot(worldRayDir, lookUp), float(-1.0), float(1.0)),
+          lightViewCosAngle: computeLightViewCosAngle(worldRayDir, lookUp, tslNormalize(sunDirection)),
+          look: lookUniforms,
+          valueScale: float(0.0),
+        })
+      }
+      if (skyLuminanceFactor) skyShaft = skyShaft.mul(skyLuminanceFactor)
+      // Never remove more than was there.
+      const skyRemoved = min(skyShaft, max(baseColor.rgb, vec3(0.0)))
+      const geometryRemoved = max(apRgbScaled, vec3(0.0)).mul(clamp(upsampled, vec3(0.0), vec3(1.0)))
+
+      if (debugMode === 'shadow-deficit') {
+        return vec4(mix(geometryRemoved, skyRemoved, isSky.select(1.0, 0.0)).mul(5.0), 1.0)
+      }
+
+      const geometryOut = composited.sub(geometryRemoved)
+      const skyOut = baseColor.rgb.sub(skyRemoved)
+      return vec4(mix(geometryOut, skyOut, isSky.select(1.0, 0.0)), baseColor.a)
     }
 
     return vec4(mix(composited, baseColor.rgb, isSky.select(1.0, 0.0)), baseColor.a)

@@ -23,7 +23,6 @@ import { SkyViewLUT } from './luts/SkyViewLUT'
 import { AerialPerspectiveLUT } from './luts/AerialPerspectiveLUT'
 import { uniform } from 'three/tsl'
 import { SkyAtmosphereMesh } from './SkyAtmosphereMesh'
-import { LIVE_SKY_DEPTH_EPSILON } from './HazePostProcess'
 import type { Look } from '../looks'
 
 import type { AtmosphereParams } from '../core/AtmosphereParams'
@@ -98,7 +97,11 @@ export class SkyAtmosphereBaker {
   _sunVec: Vector3
   _skyViewSunZenith: number
   _sunListeners: Set<(sunVec: Vector3) => void>
-  /** Haze sky-mask tolerance: 0 until `createSkyMesh()` hands out a live sky mesh. */
+  /**
+   * Haze sky-mask tolerance below depth 1.0. 0: backgrounds leave the cleared
+   * 1.0 and the live sky mesh writes exactly 1.0. Raise it only for a custom
+   * far-plane sky that cannot.
+   */
   skyDepthEpsilon: any
   _sunColorListeners: Set<(sunColor: Vector3) => void>
   _camera: PerspectiveCamera | null
@@ -617,9 +620,6 @@ export class SkyAtmosphereBaker {
     mesh.renderOrder = -1
 
     if (showSunDisc) this.sky.showSunDisc.value = 1.0
-
-    // A live sky mesh writes depth one ulp below 1.0; let the haze pass see it as sky.
-    this.skyDepthEpsilon.value = LIVE_SKY_DEPTH_EPSILON
 
     return mesh
   }

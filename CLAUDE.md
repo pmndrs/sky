@@ -277,15 +277,17 @@ noon" of the live-sky demos). Demos that use the baked cube as
 `createHazeOutputNode` now tests the raw depth (a uniform tolerance, so the
 f32 survives codegen), OR-ed with the old tests. Verify with `?debug=is-sky`.
 
-The tolerance is not free (2026-09-29). The first version used 4 ulps, and
-geometry near the far plane shares those depth values: with near 1 m and far
-200 km everything past 191 km was taken for sky, got no haze and showed its
-raw colour — a one-pixel black line along the horizon of a ground plane that
-runs past `far`, flickering as the camera moves. The test is now exact
-(`>= 1.0`) until `baker.createSkyMesh()` hands out a live sky mesh, and
-1.25 ulps after that (`baker.skyDepthEpsilon`, `LIVE_SKY_DEPTH_EPSILON`;
-1.5 would tie and round to 2 ulps in f32). `is-sky` cannot show this bug: the
-misclassified pixels look like sky there. Look for the unhazed surface colour.
+No tolerance works, so the sky mesh writes exactly 1.0 (2026-09-30,
+`material.depthNode = float(1.0)` in `SkyAtmosphereMesh`) and the test is
+exact (`>= 1.0`). History, so nobody re-adds an epsilon: 4 ulps swallowed
+geometry past 191 km at near 1 m / far 200 km (unhazed one-pixel black line
+along the horizon, flickering with camera motion); 1.25 ulps (2026-09-29)
+then let **whole sky-mesh triangles** fall 2+ ulps below 1.0 at some view
+orientations, so mid-drag they were hazed — triangles and hard seams across
+the live sky, gone the moment the camera stops. The rounding varies per
+triangle and per frame, so a static `?debug=is-sky` looks clean; capture it
+every few frames _during_ a camera drag. `baker.skyDepthEpsilon` stays (0) for
+a custom far-plane sky that cannot write 1.0.
 
 ### Never inverse-project a far-plane point for a ray direction (2026-09-26)
 

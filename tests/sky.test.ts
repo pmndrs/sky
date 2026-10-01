@@ -201,4 +201,17 @@ describe('Sky', () => {
     expect(sun.light.color.toArray()).toEqual([0.5, 0.25, 0.125])
     sky.dispose()
   })
+
+  it('setExposure re-bakes the cube on a change and is free for the same value', () => {
+    const sky = new Sky(mockRenderer(), { exposure: 40 })
+
+    sky.baker.cubeDirty = false
+    sky.setExposure(40)
+    expect(sky.baker.cubeDirty).toBe(false)
+
+    sky.setExposure(20)
+    expect(sky.baker.sky.luminanceScale.value).toBe(20)
+    expect(sky.baker.cubeDirty).toBe(true)
+    sky.dispose()
+  })
 })

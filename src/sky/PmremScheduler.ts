@@ -1,6 +1,11 @@
 import { HalfFloatType, LinearFilter, LinearSRGBColorSpace, RGBAFormat, RenderTarget } from 'three/webgpu'
 
+import { beginSkyDraw, createSkyDrawState, endSkyDraw } from './drawState'
+
 import type { PMREMGenerator, Texture } from 'three/webgpu'
+
+// Draws never nest, so one saved-state slot serves every scheduler.
+const _drawState = /*@__PURE__*/ createSkyDrawState()
 
 // three's CubeUVReflectionMapping. A literal because r187 removed the export
 // (the atlas is gone), and a missing named import stops the module loading.
@@ -143,8 +148,17 @@ export class PmremScheduler {
 
   private _bakeWhole(): void {
     this._nextLevel = 0
-    if (this.target === null) this.target = this._gen.fromCubemap(this._source)
-    else this._gen.fromCubemap(this._source, this.target)
+    // three's generator draws under whatever MRT the caller left active.
+    beginSkyDraw(this._renderer, _drawState)
+    try {
+      if (this.target === null) this.target = this._gen.fromCubemap(this._source)
+      else this._gen.fromCubemap(this._source, this.target)
+    } catch (err) {
+      this._pending = true // retry on the next tick
+      throw err
+    } finally {
+      endSkyDraw(this._renderer, _drawState)
+    }
   }
 
   private _levelCount(): number {
@@ -178,32 +192,38 @@ export class PmremScheduler {
     const r = this._renderer
     const g = this._gen
     const scratch = this._scratch!
-    const prevTarget = r.getRenderTarget()
-    const prevFace = r.getActiveCubeFace()
-    const prevMip = r.getActiveMipmapLevel()
     const prevAutoClear = r.autoClear
+    let last = 0
 
-    g._setSizeFromTexture(this._source)
-    g._init(scratch)
-    scratch.scissorTest = true
-    // Level 0 is a straight copy of the cube into the cube-UV layout; it
-    // always happens with level 1 so a slice never re-reads a changed cube.
-    if (this._nextLevel === 1) g._textureToCubeUV(this._source, scratch)
+    beginSkyDraw(r, _drawState)
+    try {
+      g._setSizeFromTexture(this._source)
+      g._init(scratch)
+      scratch.scissorTest = true
+      // Level 0 is a straight copy of the cube into the cube-UV layout; it
+      // always happens with level 1 so a slice never re-reads a changed cube.
+      if (this._nextLevel === 1) g._textureToCubeUV(this._source, scratch)
 
-    r.autoClear = false
-    const last = g._lodMeshes.length - 1
-    let done = 0
-    while (this._nextLevel <= last && done < levels) {
-      g._applyGGXFilter(scratch, this._nextLevel - 1, this._nextLevel)
-      this._nextLevel++
-      done++
+      r.autoClear = false
+      last = g._lodMeshes.length - 1
+      let done = 0
+      while (this._nextLevel <= last && done < levels) {
+        g._applyGGXFilter(scratch, this._nextLevel - 1, this._nextLevel)
+        this._nextLevel++
+        done++
+      }
+    } catch (err) {
+      // Restart the whole refresh on the next tick rather than resume a half-filtered chain.
+      this._nextLevel = 0
+      this._pending = true
+      throw err
+    } finally {
+      r.autoClear = prevAutoClear
+      endSkyDraw(r, _drawState)
+      scratch.scissorTest = false
+      scratch.viewport.set(0, 0, scratch.width, scratch.height)
+      scratch.scissor.set(0, 0, scratch.width, scratch.height)
     }
-    r.autoClear = prevAutoClear
-
-    r.setRenderTarget(prevTarget, prevFace, prevMip)
-    scratch.scissorTest = false
-    scratch.viewport.set(0, 0, scratch.width, scratch.height)
-    scratch.scissor.set(0, 0, scratch.width, scratch.height)
 
     if (this._nextLevel > last) {
       this._nextLevel = 0

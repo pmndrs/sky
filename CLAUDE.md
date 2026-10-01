@@ -408,6 +408,20 @@ shadow map (`src/sky/hazeShadows.ts`). What cost time:
   upsample is what brought it to +0.6–1.1 ms. Verify with
   `examples/vanilla/scripts/verify-haze-shadows.mjs` (baseline, mask, bench).
 
+### Internal draws inherit the caller's MRT — `setMRT` is sticky (issue #36, 2026-10-01)
+
+`renderer.setMRT(mrt({ output, normal }))` stays active until the caller
+clears it, and three r185's `CubeCamera.update` and `PMREMGenerator` save the
+render target / cube face / mip but **not** the MRT (nor anything at all if a
+draw throws). A sky bake run inside a G-buffer frame then compiled the sky
+material under the MRT: `structures must have at least one member` on its
+fragment `OutputType`, then an invalid pipeline every frame. Any new internal
+draw goes through `beginSkyDraw` / `endSkyDraw` (`src/sky/drawState.ts`) with
+the restore in a `finally`, or `RendererUtils.resetRendererState` like the LUT
+passes. `examples/vanilla/scripts/verify-mrt-isolation.mjs` reproduces it
+(fails without the guard; three's generator happened not to error under the
+MRT, the cube capture did).
+
 ### Vite HMR + WebGPU shader edits
 
 Editing a TSL helper while a page is open often leaves the previous shader

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>@pmndrs/sky — sky bakes under a caller MRT</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">Regression fixture for issue #36 — driven by scripts/verify-mrt-isolation.mjs</div>
+    <script type="module">
+      // Re-bakes the sky every frame while the caller leaves a G-buffer MRT
+      // active (`renderer.setMRT(...)` is sticky), the way an editor with a
+      // beauty + normal pass does. The cube capture and PMREM must neither
+      // draw under it nor clear it. `?attachments=4` uses a four-output MRT.
+      // Every 7th frame leaves the sky clean, so a sliced PMREM refresh also
+      // runs from an idle update().
+      import * as THREE from 'three/webgpu'
+      import { mrt, output, normalView, vec4 } from 'three/tsl'
+
+      import { Sky } from '@pmndrs/sky'
+
+      const params = new URLSearchParams(location.search)
+      const attachments = Number(params.get('attachments') ?? 2)
+
+      const renderer = new THREE.WebGPURenderer()
+      renderer.setSize(640, 360)
+      document.body.appendChild(renderer.domElement)
+      await renderer.init()
+
+      // Every WebGPU validation error the device reports, captured or not.
+      const errors = []
+      renderer.backend.device.addEventListener('uncapturederror', (e) => errors.push(e.error.message))
+
+      // `?generator=three` keeps three's PMREMGenerator (time-sliced) instead of the compute path.
+      const generator = params.get('generator') ?? 'sky'
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        timeOfDay: 9,
+        enableAerialPerspective: false,
+        pmrem: { generator, minInterval: 0, levelsPerFrame: 1 },
+      })
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), new THREE.MeshStandardMaterial()))
+      const camera = new THREE.PerspectiveCamera(60, 640 / 360, 0.1, 100)
+      camera.position.set(0, 1, 4)
+      camera.lookAt(0, 0.5, 0)
+
+      const outputs = { output, normal: normalView }
+      for (let i = 2; i < attachments; i++) outputs[`extra${i}`] = vec4(normalView, 1)
+      const callerMRT = mrt(outputs)
+
+      let frames = 0
+      let mrtKept = true
+      let hours = 9
+      async function frame() {
+        renderer.setMRT(callerMRT)
+        if (frames % 7 !== 6) sky.setTimeOfDay((hours += 0.25)) // dirty the cube
+        sky.update(camera)
+        if (renderer.getMRT() !== callerMRT) mrtKept = false
+        renderer.setMRT(null)
+        renderer.render(scene, camera)
+        frames++
+      }
+
+      window.__mrt = {
+        async run(n = 30) {
+          for (let i = 0; i < n; i++) {
+            await frame()
+            await new Promise((r) => requestAnimationFrame(r))
+          }
+          await renderer.backend.device.queue.onSubmittedWorkDone()
+          return { frames, attachments, generator, mrtKept, errors: errors.slice(0, 10), errorCount: errors.length }
+        },
+      }
+      window.__mrtReady = true
+    </script>
+  </body>
+</html>

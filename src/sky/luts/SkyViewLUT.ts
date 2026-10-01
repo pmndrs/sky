@@ -250,14 +250,16 @@ export class SkyViewLUT {
 
   render() {
     const renderer = this.renderer
+    // Resets the caller's MRT; restored even if the pass throws.
     _rendererState = RendererUtils.resetRendererState(renderer, _rendererState)
-
-    renderer.setRenderTarget(this.renderTarget)
-    _quadMesh.material = this.material
-    _quadMesh.name = 'SkyViewLUT'
-    _quadMesh.render(renderer)
-
-    RendererUtils.restoreRendererState(renderer, _rendererState)
+    try {
+      renderer.setRenderTarget(this.renderTarget)
+      _quadMesh.material = this.material
+      _quadMesh.name = 'SkyViewLUT'
+      _quadMesh.render(renderer)
+    } finally {
+      RendererUtils.restoreRendererState(renderer, _rendererState)
+    }
   }
 
   dispose() {

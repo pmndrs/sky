@@ -30,7 +30,16 @@ describe('skyPmremPlan', () => {
 function make(backend: any, texture: any, options = {}) {
   const target = { width: 256, height: 256, texture, dispose: vi.fn() }
   const gen: any = { fromCubemap: vi.fn(() => target) }
-  const renderer = { backend, copyTextureToTexture() {}, getRenderTarget: () => null }
+  const renderer = {
+    backend,
+    copyTextureToTexture() {},
+    getRenderTarget: () => null,
+    setRenderTarget() {},
+    getActiveCubeFace: () => 0,
+    getActiveMipmapLevel: () => 0,
+    getMRT: () => null,
+    setMRT() {},
+  }
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const p = new SkyPmrem(renderer, gen, {} as any, { minInterval: 0, ...options })
   return { p, gen, warn }

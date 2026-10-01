@@ -24,12 +24,16 @@ import { AerialPerspectiveLUT } from './luts/AerialPerspectiveLUT'
 import { uniform } from 'three/tsl'
 import { SKY_RENDER_ORDER, SkyAtmosphereMesh } from './SkyAtmosphereMesh'
 import { SkyPmrem } from './pmrem/SkyPmrem'
+import { beginSkyDraw, createSkyDrawState, endSkyDraw } from './drawState'
 
 import type { Look } from '../looks'
 import type { SkyPmremOptions } from './pmrem/SkyPmrem'
 
 import type { AtmosphereParams } from '../core/AtmosphereParams'
 import type { LutResolutions } from '../core/resolutions'
+
+// The caller's renderer state around a cube capture. Captures never nest.
+const _drawState = /*@__PURE__*/ createSkyDrawState()
 
 interface SkyAtmosphereBakerOptions {
   cubeSize?: number
@@ -651,6 +655,13 @@ export class SkyAtmosphereBaker {
   /**
    * Caller-driven. Does nothing unless something is dirty. Re-runs only the
    * stages of the pipeline whose inputs changed.
+   *
+   * Safe to call with an MRT active (`renderer.setMRT(mrt({ output, normal }))`):
+   * every internal draw — the LUT passes, the cube capture and three's PMREM
+   * generator — runs with the MRT cleared, and the caller's MRT, render
+   * target, cube face and mip level are restored afterwards, also when a draw
+   * throws. A bake that throws leaves the baker dirty, so the next call
+   * retries it.
    */
   update(): void {
     const skyDirty = this.atmosDirty || this.sunDirty || this.cameraDirty
@@ -683,24 +694,9 @@ export class SkyAtmosphereBaker {
     // (the IBL doesn't care about main-camera position).
     const skyContentChanged = this.atmosDirty || this.sunDirty || this.cubeDirty
     if (skyContentChanged) {
-      const prevShowSunDisc = this.sky.showSunDisc.value
-      const prevShowMoonDisc = this.sky.showMoonDisc.value
-      const prevMirror = this.sky.mirrorBelowHorizon.value
-      this.sky.showSunDisc.value = 0
-      this.sky.showMoonDisc.value = 0
-      // Resolved stars are never part of this bake — at cube resolution they
-      // smear into multi-pixel blobs. `SkyStars` draws them as sprites in the
-      // main scene; only the low-frequency Milky Way glow is baked.
-      // Opt-in: fold below-horizon view rays to above-horizon so the
-      // cube's lower hemisphere bakes a clean Y-mirror of the sky
-      // instead of the LUT's lit-ground-albedo colour.
-      this.sky.mirrorBelowHorizon.value = this._mirrorBelowHorizon ? 1.0 : 0.0
-
-      this.cubeCamera.update(this.renderer, this.skyScene)
-
-      this.sky.showSunDisc.value = prevShowSunDisc
-      this.sky.showMoonDisc.value = prevShowMoonDisc
-      this.sky.mirrorBelowHorizon.value = prevMirror
+      // Throws leave every dirty flag set (they are cleared at the end), so
+      // the next update() retries the whole bake.
+      this._captureCube()
 
       // 3. PMREM. On WebGPU with a cube-mip PMREM (three r187+), SkyPmrem
       // re-filters it in one compute pass (~0.9 ms) on every change. Otherwise
@@ -726,11 +722,54 @@ export class SkyAtmosphereBaker {
   }
 
   /**
+   * Render the six cube faces with the bake-only display state. Isolated from
+   * the caller's renderer state (see `drawState.ts`): the MRT is cleared for
+   * the capture, and the MRT, render target, cube face and mip level are
+   * restored afterwards, together with the sky uniforms the bake overrides
+   * and the state `CubeCamera.update` itself only restores on success.
+   */
+  private _captureCube(): void {
+    const renderer = this.renderer
+    const sky = this.sky
+    const cubeTexture = this.cubeRenderTarget.texture
+    const xr = renderer.xr
+    const prevXr = xr ? xr.enabled : false
+    const prevGenerateMipmaps = cubeTexture.generateMipmaps
+    const prevShowSunDisc = sky.showSunDisc.value
+    const prevShowMoonDisc = sky.showMoonDisc.value
+    const prevMirror = sky.mirrorBelowHorizon.value
+
+    // Sun and moon discs off to keep PMREM clean (see PLAN.md risk #3).
+    sky.showSunDisc.value = 0
+    sky.showMoonDisc.value = 0
+    // Resolved stars are never part of this bake — at cube resolution they
+    // smear into multi-pixel blobs. `SkyStars` draws them as sprites in the
+    // main scene; only the low-frequency Milky Way glow is baked.
+    // Opt-in: fold below-horizon view rays to above-horizon so the
+    // cube's lower hemisphere bakes a clean Y-mirror of the sky
+    // instead of the LUT's lit-ground-albedo colour.
+    sky.mirrorBelowHorizon.value = this._mirrorBelowHorizon ? 1.0 : 0.0
+
+    beginSkyDraw(renderer, _drawState)
+    try {
+      this.cubeCamera.update(renderer, this.skyScene)
+    } finally {
+      endSkyDraw(renderer, _drawState)
+      if (xr) xr.enabled = prevXr
+      cubeTexture.generateMipmaps = prevGenerateMipmaps
+      sky.showSunDisc.value = prevShowSunDisc
+      sky.showMoonDisc.value = prevShowMoonDisc
+      sky.mirrorBelowHorizon.value = prevMirror
+    }
+  }
+
+  /**
    * Run the per-frame Aerial Perspective LUT compute pass. Caller invokes
    * each frame after `setCamera()` has been called. Cheap (~1ms on mid GPU).
    *
    * Separated from `update()` because AP must refresh per frame regardless
-   * of dirty flags, while `update()` is dirty-driven.
+   * of dirty flags, while `update()` is dirty-driven. A compute dispatch, so
+   * the caller's MRT and render target play no part in it.
    */
   async updateAerialPerspective(): Promise<void> {
     if (!this.aerialPerspectiveLUT) return

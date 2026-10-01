@@ -116,7 +116,7 @@ the other.
 | Prop                    | Type                           | Default       | Cost        | Notes                                                                                                                                |
 | ----------------------- | ------------------------------ | ------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `atmosphere`            | partial `AtmosphereParams`     | —             | Full rebake | Merged onto the **current** params, so removing a key does not restore it. See [Tuning the atmosphere](../guides/tuning-atmosphere). |
-| `turbidity`             | `number`                       | `1`           | Full rebake | Scales Mie scattering, extinction and absorption against the preset's values. `0` turns Mie off.                                     |
+| `turbidity`             | `number`                       | `1`           | Full rebake | Scales Mie scattering, extinction and absorption against the preset's values. `0` turns Mie off. Applied on top of `atmosphere`.     |
 | `groundAlbedo`          | `number \| Vector3 \| {x,y,z}` | `0.1` (Earth) | Full rebake | Ground bounce in the multi-scatter LUT and the cube's lower hemisphere.                                                              |
 | `multiScatteringFactor` | `number`                       | `1`           | Full rebake | Unreal `MultiScatteringFactor`. `1` is physical. Set it once rather than per frame.                                                  |
 | `mirrorBelowHorizon`    | `boolean`                      | `false`       | Cube rebake | Bakes a Y-mirror of the sky into the cube's lower hemisphere instead of lit ground, for reflective floors.                           |
@@ -131,10 +131,25 @@ the other.
 | `skyLuminanceFactor` | `string \| Color \| Vector3 \| [r,g,b]`                            | white       | Cube rebake | Unreal `SkyLuminanceFactor`: per-channel grade on the sky after any look. Haze inherits it.                                  |
 | `look`               | `string \| object \| null`                                         | —           | Cube rebake | A registered look name or an inline definition. `null` returns to the physical sky. See [Looks](../guides/looks).            |
 | `lookTrack`          | `string \| keyframe[] \| null`                                     | —           | Cube rebake | Look keyed on sun elevation (e.g. `'ghibli'`). Overrides `look` while set.                                                   |
+| `lookTrackOverrides` | `{ chroma?, value?, intensity? } \| null`                          | —           | Cube rebake | Pins those fields across the whole `lookTrack` (`LookTrackOverrides`). Omit to keep overrides set through `useSky()`.        |
 
-To drop a `lookTrack`, set it to `null` **and** give `look` a value
-(`look={null}` for the physical sky). With `look` left undefined, clearing the
-track leaves the last sampled look in place.
+How the look props combine:
+
+- A `lookTrack` wins over `look` while it is set. Removing it (or setting it
+  to `null`) applies `look`, or returns to the physical sky when `look` is
+  unset.
+- `lookTrackOverrides` applies to whichever track is set. Left unset, the
+  overrides the instance already has are kept, so ones set with
+  `useSky().setLookTrack(track, overrides)` survive a change of `look` or
+  `lookTrack`. `null` clears them, and so does removing the prop.
+- With none of the three props set, `<Sky>` never calls `setLook` or
+  `setLookTrack`, so a look driven through `useSky()` is left alone.
+
+`turbidity` is applied after `atmosphere`, and again whenever `atmosphere`
+changes. Mie fields in `atmosphere` reset the vanilla turbidity baseline (see
+[Tuning the atmosphere](../guides/tuning-atmosphere#turbidity)), so
+`<Sky atmosphere={{ mieScattering: [...] }} turbidity={2} />` gives twice
+that Mie scattering, whichever of the two props changed last.
 
 ### Haze
 
@@ -157,10 +172,10 @@ and can be set before it.
 ### Object props compare by value
 
 Since 0.4, object-valued props (`sunDirection`, `groundAlbedo`, `atmosphere`,
-`look`, `lookTrack`, `sunColor`, `skyLuminanceFactor`, `hazeAltitudeBlend`)
-are compared by value, not by reference. An inline object is a new reference
-on every parent render; before 0.4 that re-ran the setter and re-baked the
-sky each render. Now the setter only runs when the contents change, so this
+`look`, `lookTrack`, `lookTrackOverrides`, `sunColor`, `skyLuminanceFactor`,
+`hazeAltitudeBlend`) are compared by value, not by reference. An inline
+object is a new reference on every parent render; before 0.4 that re-ran the
+setter and re-baked the sky each render. Now the setter only runs when the contents change, so this
 is fine:
 
 ```jsx
@@ -181,8 +196,10 @@ change.
 Removing a live prop, or setting it to `undefined`, does **not** reset the
 instance: it keeps the last value applied. The exceptions are props with a
 default in `<Sky>` itself (`exposure`, `sunDisc`, `north`,
-`mirrorBelowHorizon`), which go back to that default. To return to a
-default, pass it explicitly (e.g. `turbidity={1}`).
+`mirrorBelowHorizon`), which go back to that default, and `lookTrack` /
+`lookTrackOverrides`, which clear what they set (see
+[Appearance and looks](#appearance-and-looks)). To return to a default, pass
+it explicitly (e.g. `turbidity={1}`).
 
 ## Lifecycle
 
@@ -235,6 +252,8 @@ cast but untyped.
 
 A setter called through the instance holds until the matching prop changes,
 at which point the prop is applied again. Drive each setting from one place.
+The exception is look-track overrides: with `lookTrackOverrides` unset, a
+change of `look` or `lookTrack` keeps the overrides set through the instance.
 
 ## `<AutoHaze>`
 
@@ -305,17 +324,16 @@ way, `<Sky>` runs `updateAerialPerspective()` every frame once haze is wired.
 These `Sky` features have no `<Sky>` prop. Most are reachable through
 `useSky()` from a child component.
 
-| Feature                     | Vanilla API                                                       | From React                                                                                                                                                                                          |
-| --------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stars and Milky Way         | `enableStars(opts)`, `disableStars()`, `sky.stars`                | Call `sky.enableStars()` in a child's effect and `sky.disableStars()` in its cleanup. See [Night sky](../guides/night-sky).                                                                         |
-| Light shafts                | `applyHaze({ shadows })`, `setHazeShadows(opts)`                  | Pass `shadows` to `<AutoHaze>`; adjust the live knobs with `sky.setHazeShadows(...)`.                                                                                                               |
-| Look-track overrides        | `setLookTrack(track, overrides)`                                  | Call `sky.setLookTrack(track, { chroma, value, intensity })` and leave the `look` / `lookTrack` props unset: when either prop changes, `<Sky>` calls `setLookTrack(track)` again without overrides. |
-| Preset swap without rebuild | `setPreset(name)`                                                 | `sky.setPreset(name)`. The `preset` prop rebuilds the instance instead.                                                                                                                             |
-| Sun disc size and softness  | `setSunDisc({ visible, angularDiameter, edgeSoftness })`          | The object form works at runtime but the `sunDisc` prop is typed `boolean`; call `sky.setSunDisc({...})` for type safety.                                                                           |
-| Planet-centred altitude     | `update(camera, { planetCenter })`                                | Not supported: `<Sky>` calls `update(camera)` with flat-ground altitude (`y`). Use the vanilla `Sky` for [planet-scale](../guides/planet-scale) scenes.                                             |
-| IBL flush                   | `flushEnvironment()`                                              | `sky.flushEnvironment()`, e.g. before a screenshot.                                                                                                                                                 |
-| Helpers                     | `createSun`, `createGround`, `createGroundedSkybox`, `createMoon` | Create from a child via `useSky()`; dispose them yourself (see [Lifecycle](#lifecycle)).                                                                                                            |
-| Live sky mesh               | `sky.baker.createSkyMesh(opts)`                                   | `sky.baker.createSkyMesh(...)`, then add the mesh to the scene.                                                                                                                                     |
+| Feature                     | Vanilla API                                                       | From React                                                                                                                                              |
+| --------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stars and Milky Way         | `enableStars(opts)`, `disableStars()`, `sky.stars`                | Call `sky.enableStars()` in a child's effect and `sky.disableStars()` in its cleanup. See [Night sky](../guides/night-sky).                             |
+| Light shafts                | `applyHaze({ shadows })`, `setHazeShadows(opts)`                  | Pass `shadows` to `<AutoHaze>`; adjust the live knobs with `sky.setHazeShadows(...)`.                                                                   |
+| Preset swap without rebuild | `setPreset(name)`                                                 | `sky.setPreset(name)`. The `preset` prop rebuilds the instance instead.                                                                                 |
+| Sun disc size and softness  | `setSunDisc({ visible, angularDiameter, edgeSoftness })`          | The object form works at runtime but the `sunDisc` prop is typed `boolean`; call `sky.setSunDisc({...})` for type safety.                               |
+| Planet-centred altitude     | `update(camera, { planetCenter })`                                | Not supported: `<Sky>` calls `update(camera)` with flat-ground altitude (`y`). Use the vanilla `Sky` for [planet-scale](../guides/planet-scale) scenes. |
+| IBL flush                   | `flushEnvironment()`                                              | `sky.flushEnvironment()`, e.g. before a screenshot.                                                                                                     |
+| Helpers                     | `createSun`, `createGround`, `createGroundedSkybox`, `createMoon` | Create from a child via `useSky()`; dispose them yourself (see [Lifecycle](#lifecycle)).                                                                |
+| Live sky mesh               | `sky.baker.createSkyMesh(opts)`                                   | `sky.baker.createSkyMesh(...)`, then add the mesh to the scene.                                                                                         |
 
 For example, stars:
 

@@ -447,11 +447,31 @@ export class Sky {
   }
 
   setAtmosphere(partial: any) {
-    this.baker.setAtmosphereParams(partial)
-    // Explicit Mie values define a new turbidity-1 baseline.
+    // Explicit Mie values define a new turbidity-1 baseline. Merge them onto
+    // the current baseline, not the live (turbidity-scaled) values: otherwise
+    // a partial like `{ mieScattering }` keeps extinction/absorption at the
+    // old turbidity, and a following `setTurbidity` scales them twice.
     if (partial && (partial.mieScattering || partial.mieExtinction || partial.mieAbsorption)) {
-      this._captureBaseMie(this.baker.atmosphereParams)
+      const b = this._baseMie
+      const base = mergeAtmosphereParams(
+        {
+          ...this.baker.atmosphereParams,
+          mieScattering: b.scattering,
+          mieExtinction: b.extinction,
+          mieAbsorption: b.absorption,
+        },
+        partial,
+      )
+      this.baker.setAtmosphereParams({
+        ...partial,
+        mieScattering: base.mieScattering,
+        mieExtinction: base.mieExtinction,
+        mieAbsorption: base.mieAbsorption,
+      })
+      this._captureBaseMie(base)
       this._turbidity = 1.0
+    } else {
+      this.baker.setAtmosphereParams(partial)
     }
     return this
   }

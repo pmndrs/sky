@@ -67,9 +67,10 @@ graph = sky.applyHaze(graph, { scenePass }) // haze over scene + bloom
 post.outputNode = graph // temporal resolve (TRAA/FSR) goes after this
 ```
 
-Sky pixels keep the base color unchanged (the cube background already
-contains atmospheric scattering), so bloom that spills over the sky
-survives too.
+Sky pixels keep the base color (the cube background already contains
+atmospheric scattering), so bloom that spills over the sky survives too.
+The one exception is [light shafts](#light-shafts-shadowed-haze): with
+`shadows` on, the shadowed in-scatter is subtracted from sky pixels as well.
 
 > **History:** before 2026-08-09 `applyHaze` ignored `sceneColorNode` and
 > composited over `scenePass.getTextureNode('output')` directly, silently
@@ -94,10 +95,11 @@ selected per-pixel by **policy**:
 
 Sky pixels never take either path — the sky mesh already renders the full
 Sky-View LUT integration behind the geometry, so the post-process passes
-their colour through untouched. The raymarch fallback runs at 64 samples
-per pixel by default (band-free on 1000 km grazing rays at orbit
-altitude); ground-level scenes whose raymarched geometry stays close can
-cheapen the shader with `applyHaze(node, { raymarchSampleCount: 32 })`.
+their colour through (minus shafts, when `shadows` is on). The raymarch
+fallback runs at 64 samples per pixel by default (band-free on 1000 km
+grazing rays at orbit altitude); ground-level scenes whose raymarched
+geometry stays close can cheapen the shader with
+`applyHaze(node, { raymarchSampleCount: 32 })`.
 This is a build-time constant, not a live uniform — call `applyHaze`
 again to change it.
 
@@ -163,6 +165,21 @@ Multiplies both the inscatter colour and the AP alpha (surface-occlusion)
 term. Useful as an art-direction knob independent of the physical
 atmosphere parameters.
 
+## Setting knobs before `applyHaze`
+
+The haze setters on `Sky` — `setHazeStrength`, `setHazePolicy`,
+`setHazeAltitudeBlend`, `setAerialPerspectiveDistanceScale` and
+`setHazeShadows` — work before the post-process exists. They create the
+uniforms on the sky, and `applyHaze` adopts their current values. Only an
+option you actually pass to `applyHaze` (`strength`, `policy`,
+`altitudeBlend`, `shadows`) overrides what a setter stored; the defaults
+apply only when neither was set:
+
+```js
+sky.setHazeStrength(0.6).setHazePolicy('ap') // e.g. restored from saved settings
+post.outputNode = sky.applyHaze(color, { scenePass }) // starts at 0.6, 'ap'
+```
+
 ## Light shafts (shadowed haze)
 
 Without a shadow term every point of air glows as if the sun reached it, so
@@ -191,6 +208,12 @@ sky.setHazeShadows({ samples: 16, strength: 1.5 }) // live, no rebuild
 | `maxDistance` | `20000` | metres from the camera beyond which nothing is marched                          |
 | `strength`    | `1`     | multiplier on the removed light; `0` skips the march                            |
 | `resolution`  | `0.5`   | march resolution vs the drawing buffer; depth-aware upsample keeps edges intact |
+
+`sky.setHazeShadows({ light: sun })` before `applyHaze` works too: the next
+`applyHaze` adopts that light and compiles the shafts in without a `shadows`
+option. `shadows: false` builds a node without them even then (the stored
+configuration is kept for a later call). Adding or removing the feature always
+needs a new `applyHaze`; the numeric knobs stay live.
 
 How it works: the view ray is clipped to the light's shadow frustum (an
 orthographic box), marched through the shadow map with per-pixel jitter, and
@@ -224,6 +247,15 @@ Things to know:
   runs). It scales with the number of
   pixels whose ray enters the frustum times `samples`.
 - One light, orthographic (`DirectionalLight`) shadows only; no cascades.
+
+For `createHazeOutputNode` users wiring the post-process by hand, the shadow
+state is exported:
+
+| Export                                  | What it does                                                                 |
+| --------------------------------------- | ---------------------------------------------------------------------------- |
+| `HAZE_SHADOW_DEFAULTS`                  | `{ samples: 32, maxDistance: 20000, strength: 1, resolution: 0.5 }`          |
+| `createHazeShadowState(options)`        | Uniform bundle for one light; pass it as `createHazeOutputNode({ shadow })`. |
+| `updateHazeShadowState(state, options)` | Applies a partial options object live — what `sky.setHazeShadows` calls.     |
 
 ## Known issue: concentric banding at 50–100 km altitude (AP LUT only)
 

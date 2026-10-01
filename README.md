@@ -13,8 +13,9 @@ Sky and Atmosphere Rendering Technique_](https://sebh.github.io/publications/egs
 (EGSR 2020) to Three.js TSL. Attach it to a scene and you get a
 physically-based sky driven by real solar position, correct at any camera
 altitude from ground level to orbit, with an opt-in aerial-perspective haze
-post-process for distant geometry — vanilla and React (R3F) entry points,
-one `update()` call per frame.
+post-process for distant geometry (with optional light shafts), image-based
+lighting re-filtered on every sky change, a night sky, and stylized looks —
+vanilla and React (R3F) entry points, one `update()` call per frame.
 
 **[Full docs →](https://sky.docs.pmnd.rs)** · **[Demo gallery →](https://sky.docs.pmnd.rs/examples/)**
 
@@ -26,7 +27,8 @@ npm install @pmndrs/sky
 pnpm add @pmndrs/sky
 ```
 
-Peer-deps: `three` (≥0.185), and optionally `react` + `@react-three/fiber`
+Peer-deps: `three` (≥0.185.0 — CI tests 0.185.x; the library also runs on
+r187-dev), and optionally `react` + `@react-three/fiber`
 (≥10.0.0-alpha.4 — earlier 10.x canaries import a WebGL-only class from
 `three/webgpu` and fail to load) if you use the React bindings. Requires the WebGPU
 renderer — see [Installation](https://sky.docs.pmnd.rs/getting-started/installation)
@@ -102,10 +104,12 @@ function Scene() {
 ```
 
 `<AutoHaze>` lives in its own sub-export so the `useRenderPipeline` hook it
-depends on is only pulled into bundles that actually need it. R3F builds
-that don't yet export `useRenderPipeline` (e.g. `@react-three/fiber@10.0.0-alpha.2`)
-can still use the plain `<Sky>`; haze becomes available once your R3F build
-includes the hook.
+depends on is only pulled into bundles that actually need it.
+
+`<Sky>` props mirror the facade: construction options (`preset`, `quality`,
+…) rebuild the instance, the rest (`timeOfDay`, `exposure`, `sunColor`,
+`look` / `lookTrack`, haze knobs, …) go through the setters live. See the
+[React reference](https://sky.docs.pmnd.rs/api/react) for the full props table.
 
 To compose with your own pipeline, skip `<AutoHaze />` and grab the instance
 via `useSky()`:
@@ -134,6 +138,10 @@ function CustomPipeline() {
 - **[Haze guide](https://sky.docs.pmnd.rs/guides/haze)** — aerial perspective, policies, known issues
 - **[Planet-scale guide](https://sky.docs.pmnd.rs/guides/planet-scale)** — `planetCenter`, radial frames, flight controls
 - **[Tuning the atmosphere](https://sky.docs.pmnd.rs/guides/tuning-atmosphere)** — `AtmosphereParams`, presets
+- **[Stylized looks](https://sky.docs.pmnd.rs/guides/looks)** — colour ramps over the physical sky, elevation-keyed tracks
+- **[Night sky](https://sky.docs.pmnd.rs/guides/night-sky)** — star sprites and the baked Milky Way
+- **[React reference](https://sky.docs.pmnd.rs/api/react)** — `<Sky>` props, `<AutoHaze>`, `useSky()`
+- **[Upgrading to 0.4](https://sky.docs.pmnd.rs/guides/upgrading)** — behaviour changes since 0.3
 
 A condensed method table for the `Sky` facade:
 
@@ -145,17 +153,26 @@ A condensed method table for the `Sky` facade:
 | `setNorth('+X' \| '-X' \| '+Z' \| '-Z')`                                                     | Which world axis is geographic north                                                                                           |
 | `setExposure(n)`                                                                             | Sky luminance scale (default 40)                                                                                               |
 | `setSunDisc(boolean \| { angularDiameter })`                                                 | Disc visibility + size in radians                                                                                              |
+| `setSunColor(color)`                                                                         | Colour of the sun as a light (`'neutral'`, `'bruneton'`, hex, `Color`, `[r,g,b]`)                                              |
+| `setLook(look)` / `setLookTrack(track)`                                                      | Stylized colour ramp over the physical sky, fixed or following sun elevation                                                   |
 | `setTurbidity(n)`                                                                            | Mie scattering scalar (1 = Earth)                                                                                              |
 | `setGroundAlbedo(n \| Vector3)`                                                              | Multi-scatter LUT input                                                                                                        |
 | `setMirrorBelowHorizon(boolean)`                                                             | Bake a Y-mirrored sky on the cube's lower hemisphere instead of lit-ground albedo (clean sky HDRI for reflective-floor scenes) |
 | `setPreset('earth' \| 'mars' \| 'titan')`                                                    | Swap atmosphere defaults                                                                                                       |
 | `setAtmosphere(partial)`                                                                     | Direct atmosphere-params override                                                                                              |
 | `setHazeStrength(n)` / `setHazePolicy(p)` / `setHazeAltitudeBlend({startKm, endKm})`         | Live haze knobs                                                                                                                |
+| `setHazeShadows(opts)`                                                                       | Live light-shaft knobs (shadowed haze)                                                                                         |
 | `update(camera, { planetCenter? })`                                                          | Per-frame; planet-frame altitude when `planetCenter` is set                                                                    |
 | `updateAerialPerspective()`                                                                  | Per-frame; required when `applyHaze` is wired                                                                                  |
-| `applyHaze(sceneColorNode, options)`                                                         | Returns a `vec4` TSL output node                                                                                               |
+| `flushEnvironment()`                                                                         | Finish any pending IBL refresh now (screenshots, hard cuts)                                                                    |
+| `applyHaze(sceneColorNode, options)`                                                         | Returns a `vec4` TSL output node; pass `shadows: { light }` for light shafts                                                   |
 | `createSun(opts)` / `createGround(opts)` / `createGroundedSkybox(opts)` / `createMoon(opts)` | Factories for the optional helper objects                                                                                      |
+| `enableStars(opts)` / `disableStars()`                                                       | Night sky: star sprites + Milky Way (async on first enable)                                                                    |
 | `attach(scene)` / `detach()` / `dispose()`                                                   | Lifecycle                                                                                                                      |
+
+The `pmrem` constructor option picks the IBL prefilter: by default
+`environmentTexture` is re-filtered on every sky change with WebGPU compute
+(~1 ms), falling back to three's throttled `PMREMGenerator` on the WebGL2 backend.
 
 See the [full `Sky` API reference](https://sky.docs.pmnd.rs/api/sky) for every option and setter.
 
@@ -185,8 +202,9 @@ LUT debug views, and the numbered scratch demos used during development.
 
 ## Status
 
-Baked sky, aerial-perspective haze, and planet-scale (ground→orbit) rendering
-are all functional. Volumetric clouds and god-rays are out of scope.
+Baked sky, aerial-perspective haze with light shafts, planet-scale
+(ground→orbit) rendering, the night sky, and stylized looks are all
+functional. Volumetric clouds are out of scope.
 
 ## Contributing
 

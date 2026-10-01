@@ -21,11 +21,12 @@ From cheapest/coarsest to most precise:
    later. Merges onto whatever's currently active.
 
 Any `setAtmosphere`/`setAtmosphereParams`/`setPreset`/`setTurbidity`/
-`setGroundAlbedo` call marks the baker's `atmosDirty` flag, which triggers
-a full LUT rebuild (Transmittance → MultiScatter → SkyView → cube → PMREM)
-on the next `update()`. That's the most expensive dirty path in the
-pipeline — fine for occasional GUI tweaks or preset switches, not
-something to call every frame.
+`setGroundAlbedo`/`setMultiScatteringFactor` call that changes a value
+marks the baker's `atmosDirty` flag, which triggers a full LUT rebuild
+(Transmittance → MultiScatter → SkyView → cube → PMREM) on the next
+`update()`. That's the most expensive dirty path in the pipeline — fine for
+occasional GUI tweaks or preset switches, not something to call every frame.
+Re-applying values that are already current is a no-op.
 
 ## `AtmosphereParams` shape
 
@@ -57,17 +58,20 @@ interface AtmosphereParams {
   absorptionDensity1ConstantTerm: number
   absorptionDensity1LinearTerm: number // 1/km
 
-  // Back-compat aliases (read by legacy code paths; prefer the fields above)
-  ozoneAbsorption: Vector3
-  ozoneLayerCenterAltitude: number
-  ozoneLayerHalfWidth: number
-
   // Ground albedo — feeds the multi-scatter LUT's ground-bounce term
-  groundAlbedo: Vector3
+  groundAlbedo: Vector3 // default 0.1
+
+  // Gain on the multiple-scattering term (Unreal MultiScatteringFactor)
+  multiScatteringFactor: number // default 1 (physical)
 
   // Sun
-  sunAngularRadius: number // radians
-  sunIlluminance: Vector3
+  sunAngularRadius: number // radians — sizes the sun disc
+
+  /** @deprecated accepted but read by no shader */
+  ozoneAbsorption: Vector3 // use absorptionExtinction
+  ozoneLayerCenterAltitude: number // use absorptionDensity0LayerWidth
+  ozoneLayerHalfWidth: number // use the absorptionDensity* tent fields
+  sunIlluminance: Vector3 // LUTs assume a unit sun; see the note below
 }
 ```
 
@@ -76,10 +80,9 @@ Vector fields (`rayleighScattering`, `mieScattering`, etc.) accept a
 partial override is accepted — `mergeAtmosphereParams` normalizes them.
 
 > **Note:**
-> `sunIlluminance` here is a _parameter of the atmosphere model_, not the display-brightness knob you want for
-> day-to-day tuning — the LUTs are baked with sun illuminance normalized to `1.0` regardless of this field (the
-> `ILLUMINANCE_IS_ONE` contract — see [LUTs](../api/luts)). Use `sky.setExposure(n)` / the `exposure` constructor option
-> to control brightness.
+> `sunIlluminance` does nothing: the LUTs are baked with sun illuminance normalized to `1.0` (the `ILLUMINANCE_IS_ONE`
+> contract — see [LUTs](../api/luts)). Use `sky.setExposure(n)` / the `exposure` constructor option to control
+> brightness, and [`sunColor`](#sun-colour) to tint the sun.
 
 ## `EARTH` defaults
 
@@ -137,9 +140,11 @@ sky.setTurbidity(1.5)
 A convenience multiplier (1.0 = Earth default) applied to
 `mieScattering`/`mieExtinction`/`mieAbsorption` together — raise it for a
 hazier/dustier look, lower toward 0 for a clearer sky with Mie effectively
-off. `setTurbidity` tracks the current value internally so repeated calls
-compose correctly (each call computes a fresh ratio against the
-_previous_ turbidity, not a fresh multiply against the base preset).
+off. The value is absolute: each call multiplies a turbidity-1 baseline of
+the three Mie fields, so repeated calls don't compound and `0` can be undone.
+The baseline is the preset (plus any `atmosphere` Mie override) at
+construction; `setPreset` resets it to the new preset's Mie and turbidity
+to 1, and so does a `setAtmosphere` call that sets any of the Mie fields.
 
 ### `groundAlbedo`
 

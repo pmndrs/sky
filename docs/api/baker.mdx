@@ -39,6 +39,7 @@ new SkyAtmosphereBaker(renderer, options?)
 | `apKmPerSlice`            | `8.0`              | AP LUT depth-slice size in km. Must match whatever `kmPerSlice` you pass to `createHazeOutputNode` if you're not going through `Sky.applyHaze` (which wires this for you). |
 | `apResolution`            | `{x:32,y:32,z:32}` | AP LUT voxel grid override.                                                                                                                                                |
 | `mirrorBelowHorizon`      | `false`            | See `setMirrorBelowHorizon` below.                                                                                                                                         |
+| `pmrem`                   | `{}`               | `SkyPmremOptions`: how the IBL is prefiltered. See [Environment (PMREM) refresh](#environment-pmrem-refresh).                                                              |
 
 ## Getters
 
@@ -59,14 +60,20 @@ new SkyAtmosphereBaker(renderer, options?)
 The baker tracks four independent dirty flags so `update()` skips work
 whose inputs haven't changed:
 
-| Flag          | Set by                                                                                           | Triggers on next `update()`                                                  |
-| ------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `atmosDirty`  | `setAtmosphereParams(partial)`                                                                   | Transmittance + MultiScatter + SkyView + cube bake + PMREM (full chain)      |
-| `sunDirty`    | `setSun({ elevation, azimuth })`                                                                 | SkyView + cube bake + PMREM (Transmittance/MultiScatter don't depend on sun) |
-| `cubeDirty`   | `markCubeDirty()`, or indirectly by the above, or a meaningful camera-frame drift in planet mode | Cube bake + PMREM only                                                       |
-| `cameraDirty` | `setCamera(camera, opts)`, only when viewHeight or the local sun zenith actually changed         | SkyView (viewHeight) — the AP LUT is refreshed separately, see below         |
+| Flag          | Set by                                                                                                                                                                                                                                                                                    | Triggers on next `update()`                                                  |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `atmosDirty`  | `setAtmosphereParams(partial)`, when a value actually changed                                                                                                                                                                                                                             | Transmittance + MultiScatter + SkyView + cube bake + PMREM (full chain)      |
+| `sunDirty`    | `setSun({ elevation, azimuth })`, when either value changed                                                                                                                                                                                                                               | SkyView + cube bake + PMREM (Transmittance/MultiScatter don't depend on sun) |
+| `cubeDirty`   | The two above; `markCubeDirty()`; `setLook` / `setSunColor` / `setSkyLuminanceFactor` / `setMirrorBelowHorizon`; a `displayScale` change (`Sky` only); and from `setCamera`: altitude moved more than 100 m (or 2 % of altitude, if larger) or the local sun zenith cosine drifted > 1e-3 | Cube bake + PMREM only                                                       |
+| `cameraDirty` | `setCamera(camera, opts)`, when altitude moved more than 1 m (or 0.5 % of altitude, if larger) or the local sun zenith cosine changed                                                                                                                                                     | SkyView (viewHeight) — the AP LUT is refreshed separately, see below         |
 
-`update()` is a no-op if nothing is dirty. This is why calling `sky.update(camera)`
+The `setCamera` thresholds compare against the state at the last SkyView
+render / cube bake, not the previous frame, so slow drift still re-bakes
+eventually. The altitude rule applies in flat and planet mode alike; the
+zenith drift only happens in planet mode (local up tilts as you move).
+
+`update()` is a no-op if nothing is dirty (apart from advancing a pending
+`generator: 'three'` IBL refresh). This is why calling `sky.update(camera)`
 every frame is cheap once the sun/atmosphere have settled — most frames it's
 just a camera-height comparison.
 
@@ -122,7 +129,9 @@ about 6 ms and latency-bound, so a smaller cube barely helps. The scheduler:
 - **time-slices** (r185/r186): each refresh filters `levelsPerFrame`
   roughness levels per frame (default 1) into a scratch target and copies
   into the persistent target when complete. The result is identical to a
-  whole bake;
+  whole bake. Slicing drives three's private per-level `PMREMGenerator`
+  methods, which r187 removed: there every refresh is a whole bake, and a
+  finite `levelsPerFrame` logs one warning;
 - bakes the **first** environment synchronously, so frame one has IBL.
 
 ```js
@@ -137,7 +146,26 @@ cost 7.7 ms mean / 17 ms max per update; the defaults cost 1.0 ms mean /
 about ten frames.
 
 Either way, `environmentTexture` keeps the same texture object from the first
-bake until `dispose()`.
+bake until `dispose()`. `baker.flushPmrem()` (what `sky.flushEnvironment()`
+calls) finishes any pending or in-flight refresh immediately.
+
+### Options and classes
+
+| `pmrem` option   | Default   | Notes                                                                                                                                  |
+| ---------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `generator`      | `'sky'`   | `'sky'`: compute prefilter on every change (WebGPU; falls back to `'three'` on WebGL or an unknown PMREM layout). `'three'`: as above. |
+| `quality`        | `'three'` | `'sky'` only. `'fast'`: 96 samples on the sharpest level, ~35 % cheaper on r187+, saves little on r185/r186.                           |
+| `minInterval`    | `250`     | `'three'` only. Milliseconds between refreshes while the sky keeps changing; `0` refreshes on every change.                            |
+| `levelsPerFrame` | `1`       | `'three'` only, r185/r186 only. `Infinity` bakes the whole PMREM in one frame.                                                         |
+
+The baker builds this from `SkyPmrem`, exposed as `baker.pmrem`. All three
+pieces are exported for custom facades:
+
+| Export                                                                             | Notes                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `new SkyPmrem(renderer, pmremGenerator, cubeTexture, SkyPmremOptions)`             | `markDirty()` after each cube bake, `tick()` once per frame, `flush()`, `dispose()`; `.texture` / `.target` (`null` before the first bake). `.mode` stays `'three'` until the compute pipelines finish compiling after the first bake, then reads `'sky'`; `.layout` is `'cube'` (r187+) or `'atlas'` (r185/r186). |
+| `new PmremScheduler(renderer, pmremGenerator, cubeTexture, PmremSchedulerOptions)` | three's generator, throttled and time-sliced. Same `markDirty` / `tick` / `flush` / `dispose` / `texture` / `target`; `minInterval` and `levelsPerFrame` are public fields you can change live.                                                                                                                    |
+| `skyPmremPlan(maxLod, quality?)`                                                   | The per-level plan `SkyPmrem` runs on an r187+ cube PMREM: level 0 `{ fis: 0 }` (copy), the last three `{ integ: 16 }` (integrate the 16² mip), the rest `{ fis: 256 }` (`96` on level 1 with `'fast'`).                                                                                                           |
 
 ## Sun and camera
 
@@ -147,7 +175,9 @@ Degrees. `phi = 90 - elevation` (polar angle from +Y), `theta = azimuth`.
 Produces a Y-up world-space sun vector fed to the sky mesh, and separately
 derives the Z-up sun vector the Sky-View LUT's internal frame expects (see
 the Y-up/Z-up coordinate dance in the project's `CLAUDE.md` if you're
-debugging a tilted horizon). Sets `sunDirty` and `cubeDirty`.
+debugging a tilted horizon). Sets `sunDirty` and `cubeDirty`. A call with
+the same `elevation` and `azimuth` as the last one returns early (no dirty
+flags, no listeners), so re-applying an unchanged value every frame is free.
 
 ### `setCamera(camera, { planetCenter? })`
 
@@ -171,7 +201,8 @@ to matter.
 ### `addSunListener(fn)` / `removeSunListener(fn)`
 
 Subscribe to sun-direction changes — `fn(sunVec: Vector3)` fires at the end
-of every `setSun()` call (vector passed by reference; clone if you keep it).
+of every `setSun()` call that changed the sun (vector passed by reference;
+clone if you keep it).
 `SkySun`/`SkyMoon` use this to keep their `DirectionalLight`s in lockstep
 without per-frame polling. Returns an unsubscribe function.
 
@@ -184,6 +215,12 @@ Merges `partial` onto the current `AtmosphereParams` (see
 and pushes updated values into the TSL uniform bundle. Sets `atmosDirty`
 and `cubeDirty` — this is the expensive path, triggering a full LUT
 rebuild on the next `update()`.
+
+It returns early when every key in `partial` already equals the current
+value (numbers by `===`, vectors by `.equals()`), so an object re-created
+each render (React props) does not re-bake. A changed `sunAngularRadius`
+also resizes the sun disc; an unchanged one leaves a size set through
+`Sky.setSunDisc` alone.
 
 ### `markCubeDirty()`
 
@@ -200,6 +237,40 @@ sky instead of the LUT's lit-ground-albedo content. The **live** sky mesh
 in the main scene (if you added one via `createSkyMesh`) is unaffected —
 only the baked cube changes. Zero extra render passes; forces `cubeDirty`.
 
+## Sky colour
+
+Each of these is a uniform on the sky mesh, so it re-bakes only the cube +
+PMREM (`cubeDirty`), never the LUTs — cheap enough to scrub per frame. The
+haze picks up the same uniforms through `applyHaze`. `Sky`'s versions also
+accept names and hex strings; the baker's take resolved values.
+
+| Method                                  | Notes                                                                                                                                                                                                          |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setLook(look \| null)`                 | Assign a resolved `Look` (`resolveLook('ghibli-day')`) or clear it. See the [Looks guide](../guides/looks).                                                                                                    |
+| `setSkyLuminanceFactor(v)`              | Per-channel grade on the sky and haze, after the look (Unreal `SkyLuminanceFactor`). Excludes the sun, moon and star discs. `Vector3`, `{x, y, z}` or `[r, g, b]`.                                             |
+| `setSunColor(v)`                        | Colour of the sun as a light source, linear RGB (`Vector3`, `{x, y, z}` or `[r, g, b]`). Tints the sky (before the look), the sun disc and the haze. See [Sun colour](../guides/tuning-atmosphere#sun-colour). |
+| `addSunColorListener(fn)` → unsubscribe | `fn(sunColor: Vector3)` fires on every `setSunColor` (by reference; clone to keep). `SkySun` uses it to tint its light.                                                                                        |
+
+### Keeping looks display-referred
+
+A look's ramp is multiplied by `baker.sky.lookUniforms.displayScale`, which
+must equal `1 / renderer.toneMappingExposure` (`1` under `NoToneMapping`) so
+a look shows its authored colours at any exposure. `Sky.update` keeps it in
+sync; with the baker alone, do it yourself before `update()`:
+
+```js
+const exposure = renderer.toneMapping === NoToneMapping ? 1 : renderer.toneMappingExposure
+const displayScale = 1 / Math.max(exposure, 1e-4)
+const u = baker.sky.lookUniforms.displayScale
+if (u.value !== displayScale) {
+  u.value = displayScale
+  baker.markCubeDirty() // the cube holds the look
+}
+baker.update()
+```
+
+It has no effect while no look is set.
+
 ## Mesh access
 
 ### `createSkyMesh({ scale = 450000, showSunDisc = true })`
@@ -209,9 +280,10 @@ Returns a `THREE.Mesh` sharing the baker's internal geometry + material
 updates every `setCamera` call instead of only on cube re-bake. Useful at
 planet scale where altitude changes fast enough that the cube-bake cadence
 alone looks stepped. `frustumCulled = false`; it is drawn like a game-engine
-sky, after the opaque geometry (`renderOrder = SKY_RENDER_ORDER`), depth-tested
-at the far plane with `depthWrite` off, so sky hidden behind geometry is never
-shaded. Transparent objects still draw over it. If you add your own
+sky, after the opaque geometry (`renderOrder = SKY_RENDER_ORDER`, which is
+`1_000_000` and exported from `@pmndrs/sky`), depth-tested at the far plane
+with `depthWrite` off, so sky hidden behind geometry is never shaded.
+Transparent objects still draw over it. If you add your own
 `SkyAtmosphereMesh`, give it the same `renderOrder`.
 
 The cube bake still runs on sun-dirty for IBL — `environmentTexture`
@@ -223,5 +295,6 @@ add a live mesh.
 | Method                              | Notes                                                                                                                                                                                                                                             |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `update()`                          | Runs only the dirty pipeline stages. Call once per frame — cheap when nothing is dirty.                                                                                                                                                           |
+| `flushPmrem()`                      | Finish any throttled or in-flight IBL refresh now (screenshots, hard cuts). `Sky.flushEnvironment()` calls this.                                                                                                                                  |
 | `updateAerialPerspective()` (async) | Runs the AP compute pass unconditionally. ~1ms on a mid-range GPU. No-op if AP was disabled.                                                                                                                                                      |
 | `dispose()`                         | Disposes all LUT render targets, the cube render target, PMREM target/generator, and the sky mesh's geometry/material. Does not remove the baker from any scene it wasn't added to directly — the baker manages its own private scene internally. |

@@ -35,14 +35,17 @@ Every look has two strengths, not one:
 | -------------------------------- | -------- | ------- |
 | physical (no look)               | 0        | 0       |
 | grade — default when unspecified | 1        | 0       |
-| `ghibli-*` built-ins             | 0.7      | 0.25    |
+| `ghibli-day`, `ghibli-dusk`      | 0.7      | 0.25    |
+| `ghibli-night`                   | 0.7      | 0.5     |
 | full gradient override           | 1        | 1       |
 
 Looks are **display-referred**. The ramp is authored in display colours and
-enters the tonemapper at its authored value: the sky divides it by
-`renderer.toneMappingExposure` for you. So a look at `value: 1` shows its
-authored colours on screen, exactly under `NeutralToneMapping` or no
-tonemapping, and with the curve's own contrast under ACES or AgX. It also
+enters the tonemapper at its authored value: `sky.update()` divides it by
+`renderer.toneMappingExposure` for you (by 1 under `NoToneMapping`, where
+three ignores the exposure) and re-bakes the cube when that changes. So a
+look at `value: 1` shows its authored colours on screen, exactly under
+`NeutralToneMapping` or no tonemapping, and with the curve's own contrast
+under ACES or AgX. It also
 does not drift when you change `exposure` on the sky, which only moves the
 physical side of the blend.
 
@@ -124,9 +127,25 @@ is arbitrary anyway, pass `{ by: 'time' }` to `createLookTrack` and key on
 hours.
 
 Keyframes may have different stop counts — the track resamples them onto a
-shared set of positions when it is created. Re-evaluation happens inside
-`setTimeOfDay` / `setLatitude` / `setDayOfYear`, costs a handful of
-multiplies, and only writes uniforms.
+shared set of positions when it is created. A keyframe whose stops already sit
+on that union keeps its easing; one that gets resampled has the curve baked
+into colours at the new positions, with **linear** segments between them. If
+an ease matters, author every keyframe on the same stop positions.
+
+Re-evaluation happens inside every call that moves the sun —
+`setTimeOfDay` / `setLatitude` / `setDayOfYear` / `setSunDirection` /
+`setNorth` — costs a handful of multiplies, and only writes uniforms.
+
+To drive the blend axes from a GUI while a track runs, pass overrides:
+
+```js
+sky.setLookTrack('ghibli', { value: 0.6 }) // pins value; chroma, intensity stay per keyframe
+```
+
+`LookTrackOverrides` (`chroma`, `value`, `intensity`) are applied on top of
+every track sample, without touching the registered looks. Omitted fields
+keep each keyframe's own value; calling `setLookTrack` again without
+overrides drops them, and `setLook` clears the track altogether.
 
 ## Cost
 
@@ -160,7 +179,9 @@ you load a preset, not per frame. The other two are uniforms.
 
 Unreal's `TransmittanceMinLightElevationAngle` is deliberately **not** here:
 it clamps the sun _light's_ transmittance colour, and this library's
-`DirectionalLight` helper doesn't derive its colour from the atmosphere yet.
+`DirectionalLight` helper (`SkySun`) takes its colour from `setSunColor` (its
+own base colour × the sun's colour), not from atmospheric transmittance, so
+there is nothing to clamp.
 
 ## Built-ins
 
@@ -169,6 +190,23 @@ from the research memo: desaturated cerulean → periwinkle zeniths, warm
 never-fully-saturated horizon tints. Day and dusk carry a narrow horizon band
 (a stop at `at: 0.08` / `0.12`) so the pale horizon colour hands off to the
 blue by ~20° elevation instead of owning the whole lower sky.
+
+## Low-level helpers
+
+The math behind looks is exported for GUIs, previews and tests. It is plain
+JS — no renderer.
+
+| Export                                        | What it does                                                                                |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `resolveLook(input)`                          | Name, `LookInput` or `Look` → a normalized `Look` (linear colours, sorted stops, defaults). |
+| `resolveLookTrack(track)`                     | Name, keyframe array or `LookTrack` → a `LookTrack`.                                        |
+| `sampleLook(look, at, target?)`               | Ramp colour at `at` = sin(elevation), clamped; the reference the shader mirrors.            |
+| `sampleLookTrack(track, { elevation, time })` | The blended `Look` for a sun position, clamped to the keyed range.                          |
+| `lerpLooks(a, b, t)`                          | Pairwise blend of two looks; both must have the same stop count.                            |
+| `packLook(look, target?)`                     | Flattens a look into the fixed-length arrays the shader uniforms take (`PackedLook`).       |
+| `applyEase(t, easeExp, easeSmooth)`           | The shared easing curve: `pow(t, easeExp)` mixed toward smoothstep by `easeSmooth`.         |
+| `MAX_LOOK_STOPS`                              | The stop cap, `8`.                                                                          |
+| `looks`, `lookTracks`                         | The registries `registerLook` / `registerLookTrack` write to, keyed by name.                |
 
 ## Trying it
 

@@ -48,6 +48,17 @@ using both `TransmittanceLUT` and `MultiScatterLUT`. Re-rendered whenever
 the sun (`sunDirty`) or camera altitude (`cameraDirty`) changes, or on
 `atmosDirty`.
 
+The 30 samples are spaced **quadratically** along the ray (segment `s` spans
+`(s/N)²…((s+1)/N)²` of its length), as in Hillaire's `VariableSampleCount`
+path, so they crowd the dense air near the camera. 0.4.0 switched to this
+from uniform spacing, which under-integrated the sky: the sky is now about
+15 % brighter overall and about 40 % brighter near a low sun, and its open
+sky matches Bruneton's reference tables within a few percent (the last few
+degrees above the horizon and twilight stay brighter, a property of
+Hillaire's multi-scatter approximation). The two per-pixel raymarch
+fallbacks (sky mesh above `topRadius`, haze past AP coverage) use the same
+spacing; Transmittance, MultiScatter and the AP LUT stay uniform.
+
 > **Warning:**
 > The Sky-View LUT's horizon-packed V parameterization assumes the camera is _inside_ the atmosphere. As camera altitude
 > approaches `topRadius` (~100 km), the horizon angle collapses and the LUT degrades into visible concentric banding.
@@ -112,6 +123,11 @@ background's brightness — **if you build a custom consumer of any of these
 LUTs, you must apply this scale yourself**, or the result will look
 unlit/black even though the LUT rendered correctly.
 
-The `40` default is tuned by eye against the reference renders, not
-derived from a physical sun-illuminance constant — treat it as an exposure
-knob, not a physically load-bearing number.
+The `40` default is a display convention, not derived from a physical
+sun-illuminance constant — treat it as an exposure knob. The LUT values
+themselves are physical: at `luminanceScale = 1` with
+`skyLuminanceFactor = (1.474, 1.8504, 1.91198)` (Bruneton's solar spectrum),
+the open sky matches Bruneton's reference within ±5 %. With the brighter
+Sky-View integration, `40` under ACES at `toneMappingExposure 0.5` reads
+brighter than Bruneton's look; `toneMappingExposure ≈ 0.3` (or
+`exposure: 24` at 0.5) matches it.

@@ -66,8 +66,9 @@ interface SkyAtmosphereBakerOptions {
  *   atmosDirty  → Transmittance + MultiScatter + SkyView + cube + PMREM
  *   sunDirty    → SkyView + cube + PMREM          (T and MS do not depend on sun)
  *   cubeDirty   → cube + PMREM                    (e.g. markCubeDirty after direct mutation)
- *   cameraDirty → SkyView + AP                    (camera moved; only LUTs that read
- *                                                  viewHeight / camera matrices refresh)
+ *   cameraDirty → SkyView                         (camera height / local sun zenith moved;
+ *                                                  the AP LUT refreshes separately, every
+ *                                                  frame, via updateAerialPerspective())
  *
  * Phase 2 additions:
  *   - `setCamera(camera)`: feeds the main camera's height into SkyView LUT and
@@ -538,10 +539,6 @@ export class SkyAtmosphereBaker {
   }
 
   /**
-   * Mark the cube bake as stale. Useful when something mutated sky uniforms
-   * directly without going through setSun/setAtmosphereParams.
-   */
-  /**
    * Assign (or clear) the stylized look on the sky mesh.
    *
    * Marks only `cubeDirty` — the look lives entirely in uniforms on the sky
@@ -595,6 +592,10 @@ export class SkyAtmosphereBaker {
     return () => this._sunColorListeners.delete(fn)
   }
 
+  /**
+   * Mark the cube bake as stale. Useful when something mutated sky uniforms
+   * directly without going through setSun/setAtmosphereParams.
+   */
   markCubeDirty(): void {
     this.cubeDirty = true
   }
@@ -757,5 +758,6 @@ export class SkyAtmosphereBaker {
     // Drop SkySun / SkyMoon / SkyHelper closures so a disposed baker does not
     // keep them (and whatever they capture) alive.
     this._sunListeners.clear()
+    this._sunColorListeners.clear()
   }
 }

@@ -9,7 +9,7 @@ export interface SkyPmremOptions extends PmremSchedulerOptions {
   /**
    * `'sky'` (default): on the WebGPU backend, re-filter the IBL with our
    * compute prefilter on every sky change (~0.9 ms at 256 on three r187+,
-   * ~1.5 ms on r185/r186), so it updates in the same frame as the background.
+   * ~1.1 ms on r185/r186), so it updates in the same frame as the background.
    * Falls back to `'three'` where it can't run (WebGL backend, an unknown
    * PMREM layout).
    * `'three'`: three's `PMREMGenerator`, throttled and time-sliced by
@@ -67,7 +67,7 @@ export const lodToRoughness = (lod: number, maxLod: number) => (maxLod > 0 ? 1 -
  * three's `PMREMGenerator` renders every level as six face passes of a long
  * per-texel loop; at 256 it costs ~3–6 ms depending on the three version,
  * too much to run on every sun change. This runs in one compute pass
- * (~0.9–1.5 ms), so a moving sun or a scrubbed time-of-day slider updates the
+ * (~0.9–1.1 ms), so a moving sun or a scrubbed time-of-day slider updates the
  * IBL in the same frame as the background, with no throttle.
  *
  * three still allocates the target (its first bake), so the texture has the

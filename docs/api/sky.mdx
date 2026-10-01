@@ -21,24 +21,26 @@ new Sky(renderer, options?)
 `renderer` is a `THREE.WebGPURenderer` that has already resolved
 `await renderer.init()`.
 
-| Option                    | Default    | Notes                                                                                                                                              |
-| ------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `preset`                  | `'earth'`  | `'earth' \| 'mars' \| 'titan'` — see [`presets`](../guides/tuning-atmosphere)                                                                      |
-| `quality`                 | `'medium'` | `'low' \| 'medium' \| 'high'` — LUT resolution tier. Unknown values silently fall back to `'medium'`.                                              |
-| `cubeSize`                | `256`      | Cube-render-target face size (px) used for the background/IBL bake.                                                                                |
-| `atmosphere`              | —          | Partial `AtmosphereParams`, merged onto the resolved preset. See [Tuning the atmosphere](../guides/tuning-atmosphere).                             |
-| `exposure`                | `40`       | Initial `luminanceScale` (see [LUTs](./luts) — the `ILLUMINANCE_IS_ONE` contract).                                                                 |
-| `north`                   | `'+Z'`     | `'+X' \| '-X' \| '+Z' \| '-Z'` — which world axis is treated as geographic north for azimuth.                                                      |
-| `sunDisc`                 | `true`     | `boolean` or `{ visible?, angularDiameter? }` (radians).                                                                                           |
-| `timeOfDay`               | `12`       | Hours, `0..24`. Combined with `latitude` + `dayOfYear` via NOAA solar position.                                                                    |
-| `latitude`                | `37.7`     | Degrees.                                                                                                                                           |
-| `dayOfYear`               | `172`      | `1..365`.                                                                                                                                          |
-| `sunDirection`            | —          | `{ elevation, azimuth }` degrees — bypasses solar-position math entirely if provided.                                                              |
-| `turbidity`               | —          | Top-level shortcut scalar; multiplies Mie scattering/extinction/absorption on the resolved preset before construction.                             |
-| `groundAlbedo`            | —          | Top-level shortcut; number or `Vector3`/`{x,y,z}`.                                                                                                 |
-| `enableAerialPerspective` | `true`     | Builds the aerial-perspective LUT + compute pipeline. Set `false` to skip it entirely (cheaper; `applyHaze` throws if you didn't enable it).       |
-| `apKmPerSlice`            | `8.0`      | Aerial-perspective LUT depth-slice size in km. Bump for planet-scale views — see [Planet-scale guide](../guides/planet-scale).                     |
-| `mirrorBelowHorizon`      | `false`    | Y-mirrors the cube bake's lower hemisphere instead of lit-ground-albedo content — useful for reflective-floor scenes. See `setMirrorBelowHorizon`. |
+| Option                    | Default     | Notes                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preset`                  | `'earth'`   | `'earth' \| 'mars' \| 'titan'` — see [`presets`](../guides/tuning-atmosphere)                                                                                                                                                                                                                                                                     |
+| `quality`                 | `'medium'`  | `'low' \| 'medium' \| 'high'` — LUT resolution tier. Unknown values silently fall back to `'medium'`.                                                                                                                                                                                                                                             |
+| `cubeSize`                | `256`       | Cube-render-target face size (px) used for the background/IBL bake.                                                                                                                                                                                                                                                                               |
+| `atmosphere`              | —           | Partial `AtmosphereParams`, merged onto the resolved preset. See [Tuning the atmosphere](../guides/tuning-atmosphere).                                                                                                                                                                                                                            |
+| `exposure`                | `40`        | Initial `luminanceScale` (see [LUTs](./luts) — the `ILLUMINANCE_IS_ONE` contract).                                                                                                                                                                                                                                                                |
+| `north`                   | `'+Z'`      | `'+X' \| '-X' \| '+Z' \| '-Z'` — which world axis is treated as geographic north for azimuth.                                                                                                                                                                                                                                                     |
+| `sunDisc`                 | `true`      | `boolean` or `{ visible?, angularDiameter?, edgeSoftness? }` — see `setSunDisc`.                                                                                                                                                                                                                                                                  |
+| `sunColor`                | `'neutral'` | Colour of the sun as a light source — see `setSunColor`.                                                                                                                                                                                                                                                                                          |
+| `timeOfDay`               | `12`        | Hours, `0..24`. Combined with `latitude` + `dayOfYear` via NOAA solar position.                                                                                                                                                                                                                                                                   |
+| `latitude`                | `37.7`      | Degrees.                                                                                                                                                                                                                                                                                                                                          |
+| `dayOfYear`               | `172`       | `1..365`.                                                                                                                                                                                                                                                                                                                                         |
+| `sunDirection`            | —           | `{ elevation, azimuth }` degrees — bypasses solar-position math entirely if provided.                                                                                                                                                                                                                                                             |
+| `turbidity`               | `1`         | Top-level shortcut scalar; multiplies Mie scattering/extinction/absorption on the resolved preset before construction.                                                                                                                                                                                                                            |
+| `groundAlbedo`            | —           | Top-level shortcut; number or `Vector3`/`{x,y,z}`. Unset, the preset's value applies (Earth: `0.1`).                                                                                                                                                                                                                                              |
+| `enableAerialPerspective` | `true`      | Builds the aerial-perspective LUT + compute pipeline. Set `false` to skip it entirely (cheaper; `applyHaze` throws if you didn't enable it).                                                                                                                                                                                                      |
+| `apKmPerSlice`            | `8.0`       | Aerial-perspective LUT depth-slice size in km. Bump for planet-scale views — see [Planet-scale guide](../guides/planet-scale).                                                                                                                                                                                                                    |
+| `mirrorBelowHorizon`      | `false`     | Y-mirrors the cube bake's lower hemisphere instead of lit-ground-albedo content — useful for reflective-floor scenes. See `setMirrorBelowHorizon`.                                                                                                                                                                                                |
+| `pmrem`                   | `{}`        | `SkyPmremOptions`. `generator: 'sky'` (default) re-filters the IBL on every sky change with WebGPU compute (~1 ms; `quality: 'three' \| 'fast'`); `'three'` uses three's `PMREMGenerator`, throttled by `minInterval` / `levelsPerFrame` (also the WebGL-backend fallback). See [Environment (PMREM) refresh](./baker#environment-pmrem-refresh). |
 
 ## Getters
 
@@ -59,17 +61,22 @@ new Sky(renderer, options?)
 > frame instead of only on cube re-bake, useful at planet scale where
 > altitude changes fast), use `sky.baker.createSkyMesh({ scale, showSunDisc })`
 > instead — see `examples/vanilla/component-03-planet.html` for a working
-> example.
+> example. That mesh gets `renderOrder = SKY_RENDER_ORDER`: it draws after
+> your opaque geometry, depth-tested at the far plane without writing depth,
+> so sky pixels hidden behind geometry are rejected before shading
+> (transparent objects still draw over it). Give a `SkyAtmosphereMesh` you add
+> yourself the same `renderOrder` (`import { SKY_RENDER_ORDER } from '@pmndrs/sky'`).
 
 ## Lifecycle
 
-| Method                      | Description                                                                                                                 |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `attach(scene)`             | Sets `scene.environment` + `scene.background`. Returns `this`.                                                              |
-| `detach()`                  | Clears them (only if they still point at this sky's textures). Returns `this`.                                              |
-| `update(camera, opts?)`     | Per-frame entry point — see below.                                                                                          |
-| `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                                                 |
-| `dispose()`                 | Detaches, removes the stars and frees the Milky Way map, and disposes the baker. Idempotent; baker-backed calls then throw. |
+| Method                      | Description                                                                                                                                     |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attach(scene)`             | Sets `scene.environment` + `scene.background`. Returns `this`.                                                                                  |
+| `detach()`                  | Clears them (only if they still point at this sky's textures). Returns `this`.                                                                  |
+| `update(camera, opts?)`     | Per-frame entry point — see below.                                                                                                              |
+| `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                                                                     |
+| `flushEnvironment()`        | Finishes any throttled / time-sliced IBL refresh now, so `environmentTexture` matches the current sky (screenshots, hard cuts). Returns `this`. |
+| `dispose()`                 | Detaches, removes the stars and frees the Milky Way map, and disposes the baker. Idempotent; baker-backed calls then throw.                     |
 
 > **Warning:**
 > `dispose()` does not dispose helpers created by `createSun`, `createGround`, `createGroundedSkybox`, or `createMoon`.
@@ -85,10 +92,14 @@ Call once per frame with the active render camera. Internally:
 
 1. `baker.setCamera(camera, opts)` — feeds camera height/position into the
    Sky-View LUT and (if wired) the aerial-perspective LUT's camera uniforms.
-2. `baker.update()` — re-runs only the dirty LUT stages (see
+2. Syncs the looks' display scale to `1 / renderer.toneMappingExposure`
+   (`1` under `NoToneMapping`) so a [look](../guides/looks) keeps its authored
+   colours when exposure changes; a change re-bakes the cube.
+3. `baker.update()` — re-runs only the dirty LUT stages (see
    [Baker: dirty-flag semantics](./baker#dirty-flag-semantics)).
-3. Keeps `scene.environment` pointed at the current `environmentTexture`
+4. Keeps `scene.environment` pointed at the current `environmentTexture`
    (guards against a stale reference after a PMREM re-bake).
+5. If `enableStars()` was called, moves the star sprites with the camera.
 
 Pass `{ planetCenter: someVector3 }` for spherical-planet scenes so
 altitude is computed as distance-from-center instead of world `y`. See the
@@ -109,26 +120,35 @@ frame), so it's a separate call. Only needed if you've wired `applyHaze`.
 
 ## Appearance
 
-| Method                                                  | Notes                                                                                          |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `setExposure(n)`                                        | Sky luminance scale (default 40) — see the [LUT `ILLUMINANCE_IS_ONE` note](./luts).            |
-| `setSunDisc(boolean \| { visible?, angularDiameter? })` | `angularDiameter` is radians, default ≈0.00935 rad (~0.535°).                                  |
-| `setTurbidity(n)`                                       | Convenience scalar (1.0 = Earth default) that multiplies Mie scattering/extinction/absorption. |
-| `setGroundAlbedo(n \| Vector3 \| {x,y,z})`              | Feeds the multi-scatter LUT's ground-bounce term.                                              |
-| `setAtmosphere(partial)`                                | Direct `AtmosphereParams` partial override — merges onto current params.                       |
-| `setPreset(name)`                                       | Swap to a different curated preset (`'earth' \| 'mars' \| 'titan'`).                           |
-| `setMirrorBelowHorizon(flag)`                           | Toggle the cube bake's below-horizon Y-mirror (see constructor option above).                  |
+| Method                                                                 | Notes                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setExposure(n)`                                                       | Sky luminance scale (default 40) — see the [LUT `ILLUMINANCE_IS_ONE` note](./luts).                                                                                                                                                                        |
+| `setSunDisc(boolean \| { visible?, angularDiameter?, edgeSoftness? })` | `angularDiameter` is radians, default ≈0.00935 rad (~0.535°). `edgeSoftness` is the fraction of the disc radius the rim ramps over (default `0.1`); it only applies together with `angularDiameter`.                                                       |
+| `setSunColor(color)`                                                   | Colour of the sun as a light: tints the sky, haze, sun disc and every `createSun()` light. A `SUN_COLORS` name (`'neutral'` — default, `'bruneton'`), hex string / number (sRGB), `Color`, or `Vector3` / `[r, g, b]` (linear). Cube + PMREM re-bake only. |
+| `setSkyLuminanceFactor(color)`                                         | Unreal's `SkyLuminanceFactor`: per-channel grade on the sky after any look; haze inherits it. Hex / `Color` / `Vector3` / `[r, g, b]`. Cube + PMREM re-bake only.                                                                                          |
+| `setMultiScatteringFactor(n)`                                          | Unreal's `MultiScatteringFactor`: gain on multiple scattering (`1` = physical). Rebuilds the LUTs — set it at load time, not per frame.                                                                                                                    |
+| `setAerialPerspectiveDistanceScale(n)`                                 | Unreal's `AerialPerspectiveViewDistanceScale`: haze per metre (`2` = twice). Sample-time only; works before or after `applyHaze`.                                                                                                                          |
+| `setTurbidity(n)`                                                      | Absolute Mie multiplier against a turbidity-1 baseline (the preset's Mie): `0` turns Mie off, `1` restores it. `setPreset` and Mie fields in `setAtmosphere` reset the baseline and turbidity to `1`.                                                      |
+| `setGroundAlbedo(n \| Vector3 \| {x,y,z})`                             | Feeds the multi-scatter LUT's ground-bounce term.                                                                                                                                                                                                          |
+| `setAtmosphere(partial)`                                               | Direct `AtmosphereParams` partial override — merges onto current params.                                                                                                                                                                                   |
+| `setPreset(name)`                                                      | Swap to a different curated preset (`'earth' \| 'mars' \| 'titan'`).                                                                                                                                                                                       |
+| `setLook(name \| look \| null)`                                        | Stylized [look](../guides/looks): a registered name or an inline definition; `null` returns to the physical sky. Clears any look track. Cube + PMREM re-bake, no LUT rebuild.                                                                              |
+| `setLookTrack(track, overrides?)`                                      | Keyframed look re-evaluated on every sun change, keyed on sun elevation by default; `null` returns to physical. `overrides` (`LookTrackOverrides`: `{ chroma?, value?, intensity? }`) pins those fields across the whole track.                            |
+| `setMirrorBelowHorizon(flag)`                                          | Toggle the cube bake's below-horizon Y-mirror (see constructor option above).                                                                                                                                                                              |
 
 ## Haze
 
-See the [Haze guide](../guides/haze) for the full picture. Facade methods:
+See the [Haze guide](../guides/haze) for the full picture. The setters work
+before `applyHaze` too: it adopts their values, and only an option passed to
+`applyHaze` explicitly overrides them. Facade methods:
 
-| Method                                        | Notes                                                                                |
-| --------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `applyHaze(sceneColorNode, options)`          | Returns a `vec4` TSL output node. Throws if `enableAerialPerspective` was `false`.   |
-| `setHazeStrength(n)`                          | Multiplies inscatter colour + AP alpha. No-op until `applyHaze` has been wired once. |
-| `setHazePolicy('auto' \| 'ap' \| 'raymarch')` | Switch policy live.                                                                  |
-| `setHazeAltitudeBlend({ startKm?, endKm? })`  | Adjust the `'auto'`-mode altitude blend window.                                      |
+| Method                                        | Notes                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `applyHaze(sceneColorNode, options)`          | Returns a `vec4` TSL output node. Throws if `enableAerialPerspective` was `false`.                                                                                                                                                                                                          |
+| `setHazeStrength(n)`                          | Multiplies inscatter colour + AP alpha (`1` = physical, `0` = no haze).                                                                                                                                                                                                                     |
+| `setHazePolicy('auto' \| 'ap' \| 'raymarch')` | Switch policy live.                                                                                                                                                                                                                                                                         |
+| `setHazeAltitudeBlend({ startKm?, endKm? })`  | Adjust the `'auto'`-mode altitude blend window.                                                                                                                                                                                                                                             |
+| `setHazeShadows(opts)`                        | Live knobs for [light shafts](../guides/haze#light-shafts-shadowed-haze): `{ light, samples, maxDistance, strength, resolution }`; omitted fields are left as is. The shadow march is compiled in only when `applyHaze` gets `shadows`, or when this supplied a `light` before `applyHaze`. |
 
 ## Helper factories
 

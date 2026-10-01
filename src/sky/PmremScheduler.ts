@@ -38,8 +38,9 @@ export interface PmremSchedulerOptions {
  * never changes — swapping `scene.environment` to a new texture invalidates
  * every material's pipeline cache.
  *
- * Slicing drives the generator's private per-level methods. If they are
- * missing (a future three), it falls back to whole bakes.
+ * Slicing drives the generator's private per-level methods (three r185/r186).
+ * Where they are missing (r187 rewrote the generator), it falls back to whole
+ * bakes.
  */
 export class PmremScheduler {
   target: RenderTarget | null = null

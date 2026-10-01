@@ -94,8 +94,15 @@ colour longer.
 **Colours** given as hex strings or numbers are sRGB and converted to linear.
 Arrays and `{ r, g, b }` objects are taken as already linear.
 
-**`sunTint`** is a warm lobe around the sun's azimuth, so a ramp is not
-sun-blind. `falloff` is the lobe's angular width (larger = broader).
+**`sunTint`** is a warm lobe toward the sun, so a ramp is not sun-blind. Its
+shape follows the sun's elevation. With the sun near or below the horizon it
+is keyed on azimuth alone, so the whole sunward side of the sky warms, from
+the horizon up: the twilight band. As the sun climbs it narrows into a glow
+around the sun, and by 30° up it is keyed on the true angle to the sun, so a
+midday tint stays around the sun and does not flood a strip of sky from the
+horizon to the zenith. `falloff` is the lobe's angular width (larger =
+broader). The same value gives the same width in both shapes: the angle off
+the sun's azimuth at sunset, the angle off the sun itself at midday.
 
 At most **8 stops**. That is a hard cap: a sky ramp wants three or four, and
 needing more usually means the ramp is doing work that belongs in the

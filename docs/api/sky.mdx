@@ -70,18 +70,40 @@ new Sky(renderer, options?)
 
 ## Lifecycle
 
-| Method                      | Description                                                                                                                                     |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `attach(scene)`             | Sets `scene.environment` + `scene.background`. Returns `this`.                                                                                  |
-| `detach()`                  | Clears them (only if they still point at this sky's textures). Returns `this`.                                                                  |
-| `update(camera, opts?)`     | Per-frame entry point — see below.                                                                                                              |
-| `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                                                                     |
-| `flushEnvironment()`        | Finishes any throttled / time-sliced IBL refresh now, so `environmentTexture` matches the current sky (screenshots, hard cuts). Returns `this`. |
-| `dispose()`                 | Detaches, removes the stars and frees the Milky Way map, and disposes the baker. Idempotent; baker-backed calls then throw.                     |
+| Method                      | Description                                                                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attach(scene, options?)`   | Sets `scene.background` and/or `scene.environment` (both by default) and adds the star sprites. See [Attach roles](#attach-roles). Returns `this`. |
+| `detach()`                  | Clears the slots it set (only if they still point at this sky's textures) and removes the stars. Returns `this`.                                   |
+| `update(camera, opts?)`     | Per-frame entry point — see below.                                                                                                                 |
+| `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                                                                        |
+| `flushEnvironment()`        | Finishes any throttled / time-sliced IBL refresh now, so `environmentTexture` matches the current sky (screenshots, hard cuts). Returns `this`.    |
+| `dispose()`                 | Detaches, removes the stars and frees the Milky Way map, and disposes the baker. Idempotent; baker-backed calls then throw.                        |
 
 > **Warning:**
 > `dispose()` does not dispose helpers created by `createSun`, `createGround`, `createGroundedSkybox`, or `createMoon`.
 > Call `dispose()` on sun, ground, and moon helpers. For a grounded skybox, dispose its `geometry` and `material`.
+
+### Attach roles
+
+```js
+sky.attach(scene, { background: true, environment: false })
+```
+
+| Option        | Default | Slot                                                                     |
+| ------------- | ------- | ------------------------------------------------------------------------ |
+| `background`  | `true`  | `scene.background` ← `sky.texture` (the raw cube).                       |
+| `environment` | `true`  | `scene.environment` ← `sky.environmentTexture` (the PMREM-filtered IBL). |
+
+Turn a role off to keep that slot your own: `{ environment: false }` shows the
+procedural sky outside while an indoor HDRI lights the scene, and
+`{ background: false }` lights with the sky behind your own backdrop. The
+sky never writes a slot it did not claim, and the star sprites from
+`enableStars()` join the attached scene whatever the roles.
+
+Calling `attach()` again on the same scene with different roles releases a
+slot no longer requested and claims a newly requested one (claiming
+overwrites what is there). `detach()`, `dispose()` and attaching to another
+scene clear only claimed slots that still hold this sky's textures.
 
 ### `update(camera, opts?)`
 
@@ -98,8 +120,10 @@ Call once per frame with the active render camera. Internally:
    colours when exposure changes; a change re-bakes the cube.
 3. `baker.update()` — re-runs only the dirty LUT stages (see
    [Baker: dirty-flag semantics](./baker#dirty-flag-semantics)).
-4. Keeps `scene.environment` pointed at the current `environmentTexture`
-   (guards against a stale reference after a PMREM re-bake).
+4. Fills `scene.environment` once the first PMREM bake exists, if
+   `attach()` claimed it: the IBL is `null` before that bake. It only writes
+   a slot that is empty or still holds what the sky wrote, so a texture you
+   assign later stays put.
 5. If `enableStars()` was called, moves the star sprites with the camera.
 
 Pass `{ planetCenter: someVector3 }` for spherical-planet scenes so

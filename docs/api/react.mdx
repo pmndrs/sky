@@ -6,9 +6,10 @@ description: The React (R3F) bindings — the Sky component, useSky, AutoHaze, a
 `@pmndrs/sky/react` wraps one vanilla [`Sky`](./sky) instance in a
 react-three-fiber component. `<Sky>` builds the instance against the
 `<Canvas>` renderer, attaches it to the scene (`scene.background` +
-`scene.environment`), calls `update(camera)` every frame, and disposes it on
-unmount. Props map onto the `Sky` setters; anything without a prop is
-reachable through the instance with `useSky()`.
+`scene.environment`, unless the `background` / `environment` props say
+otherwise), calls `update(camera)` every frame, and disposes it on unmount.
+Props map onto the `Sky` setters; anything without a prop is reachable
+through the instance with `useSky()`.
 
 This page documents the surface as implemented in `src/react/`.
 
@@ -95,6 +96,17 @@ underlying flags.
 | `pmrem`                   | `object`  | —          | Rebuild | IBL prefilter (`SkyPmremOptions`): `generator`, `quality`, `minInterval`, `levelsPerFrame`. Compared by value.           |
 
 A change of `<Canvas>` renderer or scene also rebuilds.
+
+### Scene slots
+
+| Prop          | Type      | Default | Cost      | Notes                                                                                                      |
+| ------------- | --------- | ------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `background`  | `boolean` | `true`  | Re-attach | Claim `scene.background` for the sky cube.                                                                 |
+| `environment` | `boolean` | `true`  | Re-attach | Claim `scene.environment` for the sky's IBL. `false` keeps your own environment map (an indoor HDRI, say). |
+
+Both map onto [`attach(scene, { background, environment })`](./sky#attach-roles):
+the instance is not rebuilt; turning a role off clears that slot if it still
+holds the sky's texture, turning it on claims it. Stars attach either way.
 
 ### Time and place
 
@@ -197,8 +209,8 @@ change.
 Removing a live prop, or setting it to `undefined`, does **not** reset the
 instance: it keeps the last value applied. The exceptions are props with a
 default in `<Sky>` itself (`exposure`, `sunDisc`, `north`,
-`mirrorBelowHorizon`), which go back to that default, and `lookTrack` /
-`lookTrackOverrides`, which clear what they set (see
+`mirrorBelowHorizon`, `background`, `environment`), which go back to that
+default, and `lookTrack` / `lookTrackOverrides`, which clear what they set (see
 [Appearance and looks](#appearance-and-looks)). To return to a default, pass
 it explicitly (e.g. `turbidity={1}`).
 
@@ -206,7 +218,7 @@ it explicitly (e.g. `turbidity={1}`).
 
 | Situation                  | Behaviour                                                                                                                                                                  |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Mount                      | One effect constructs the `Sky`, calls `attach(scene)`, then renders `children`. Live props are applied before the first frame.                                            |
+| Mount                      | One effect constructs the `Sky`, calls `attach(scene, { background, environment })`, then renders `children`. Live props are applied before the first frame.               |
 | Every frame                | `useFrame` calls `sky.update(camera)` with R3F's default camera. Once `applyHaze` has run, it also calls `sky.updateAerialPerspective()`.                                  |
 | Construction prop change   | The old instance is disposed and a new one built in the same commit. Nothing renders against the disposed instance; `children` remount and `useSky()` returns the new one. |
 | Unmount                    | `sky.dispose()`: detaches from the scene, removes the stars, disposes the baker. Synchronous, no timer.                                                                    |
@@ -237,17 +249,17 @@ methods below and allows any other member through an index signature
 (typed `any`), so the rest of the [`Sky` API](./sky) is callable without a
 cast but untyped.
 
-| Member                                                                                                        | Notes                                                                  |
-| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `attach(scene)` / `detach()` / `dispose()`                                                                    | Owned by `<Sky>`. Don't call these yourself.                           |
-| `update(camera)`                                                                                              | Called by `<Sky>` every frame.                                         |
-| `setTimeOfDay` / `setLatitude` / `setDayOfYear` / `setSunDirection` / `setNorth`                              | Same as the time-and-place props.                                      |
-| `setExposure` / `setSunDisc` / `setTurbidity` / `setGroundAlbedo` / `setAtmosphere` / `setMirrorBelowHorizon` | Same as the matching props.                                            |
-| `setLook` / `setLookTrack` / `setSkyLuminanceFactor` / `setSunColor`                                          | Same as the matching props.                                            |
-| `setHazeStrength` / `setHazePolicy` / `setHazeAltitudeBlend`                                                  | Same as the haze props.                                                |
-| `setAerialPerspectiveDistanceScale` / `setMultiScatteringFactor`                                              | Same as `apDistanceScale` / `multiScatteringFactor`.                   |
-| `applyHaze(sceneColorNode, options?)`                                                                         | Builds the haze output node. See [`<AutoHaze>`](#autohaze).            |
-| _anything else_ (`any`)                                                                                       | e.g. `enableStars`, `createSun`, `setHazeShadows`, `texture`, `baker`. |
+| Member                                                                                                        | Notes                                                                                    |
+| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `attach(scene)` / `detach()` / `dispose()`                                                                    | Owned by `<Sky>`. Don't call these yourself; use the `background` / `environment` props. |
+| `update(camera)`                                                                                              | Called by `<Sky>` every frame.                                                           |
+| `setTimeOfDay` / `setLatitude` / `setDayOfYear` / `setSunDirection` / `setNorth`                              | Same as the time-and-place props.                                                        |
+| `setExposure` / `setSunDisc` / `setTurbidity` / `setGroundAlbedo` / `setAtmosphere` / `setMirrorBelowHorizon` | Same as the matching props.                                                              |
+| `setLook` / `setLookTrack` / `setSkyLuminanceFactor` / `setSunColor`                                          | Same as the matching props.                                                              |
+| `setHazeStrength` / `setHazePolicy` / `setHazeAltitudeBlend`                                                  | Same as the haze props.                                                                  |
+| `setAerialPerspectiveDistanceScale` / `setMultiScatteringFactor`                                              | Same as `apDistanceScale` / `multiScatteringFactor`.                                     |
+| `applyHaze(sceneColorNode, options?)`                                                                         | Builds the haze output node. See [`<AutoHaze>`](#autohaze).                              |
+| _anything else_ (`any`)                                                                                       | e.g. `enableStars`, `createSun`, `setHazeShadows`, `texture`, `baker`.                   |
 
 `SkyProps` and `SkyContextValue` are exported as types from `@pmndrs/sky/react`.
 

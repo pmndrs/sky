@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { Color, PerspectiveCamera, Scene, Vector3 } from 'three/webgpu'
+import { Color, PerspectiveCamera, Scene, Texture, Vector3 } from 'three/webgpu'
 
 import { Sky } from '../src/Sky'
 import { looks } from '../src/looks'
@@ -296,5 +296,168 @@ describe('Sky', () => {
     expect(sky.baker.sky.luminanceScale.value).toBe(20)
     expect(sky.baker.cubeDirty).toBe(true)
     sky.dispose()
+  })
+})
+
+describe('Sky.attach roles', () => {
+  // The IBL is null until the first PMREM bake; drive it by hand and keep
+  // `update()` from baking against the mock renderer.
+  function makeSky() {
+    const sky = new Sky(mockRenderer())
+    let env: any = null
+    Object.defineProperty(sky._baker, 'environmentTexture', { get: () => env, configurable: true })
+    vi.spyOn(sky._baker, 'update').mockImplementation(() => {})
+    return {
+      sky,
+      bake() {
+        env = new Texture()
+        return env
+      },
+    }
+  }
+
+  it('default attach() claims both slots and update() fills the environment after the first bake', () => {
+    const { sky, bake } = makeSky()
+    const scene = new Scene()
+    sky.attach(scene)
+    expect(scene.background).toBe(sky.texture)
+    expect(scene.environment).toBeNull()
+
+    const env = bake()
+    sky.update(null)
+    expect(scene.environment).toBe(env)
+
+    sky.detach()
+    expect(scene.background).toBeNull()
+    expect(scene.environment).toBeNull()
+    sky.dispose()
+  })
+
+  it('background-only never touches an existing environment, across update() and dispose()', () => {
+    const { sky, bake } = makeSky()
+    const scene = new Scene()
+    const hdri = new Texture()
+    scene.environment = hdri
+    sky.attach(scene, { environment: false })
+    expect(scene.background).toBe(sky.texture)
+    expect(scene.environment).toBe(hdri)
+
+    bake()
+    sky.update(null)
+    expect(scene.environment).toBe(hdri)
+
+    // Even an emptied environment stays the caller's to fill.
+    scene.environment = null
+    sky.update(null)
+    expect(scene.environment).toBeNull()
+
+    scene.environment = hdri
+    sky.dispose()
+    expect(scene.background).toBeNull()
+    expect(scene.environment).toBe(hdri)
+  })
+
+  it('environment-only leaves the background alone', () => {
+    const { sky, bake } = makeSky()
+    const scene = new Scene()
+    const backdrop = new Color(0x223344)
+    scene.background = backdrop
+    sky.attach(scene, { background: false })
+    expect(scene.background).toBe(backdrop)
+
+    const env = bake()
+    sky.update(null)
+    expect(scene.environment).toBe(env)
+    expect(scene.background).toBe(backdrop)
+
+    sky.detach()
+    expect(scene.background).toBe(backdrop)
+    expect(scene.environment).toBeNull()
+    sky.dispose()
+  })
+
+  it('update() does not clobber an environment assigned after attach', () => {
+    const { sky, bake } = makeSky()
+    const scene = new Scene()
+    sky.attach(scene)
+    bake()
+    sky.update(null)
+
+    const hdri = new Texture()
+    scene.environment = hdri
+    sky.update(null)
+    expect(scene.environment).toBe(hdri)
+
+    // Not the sky's any more, so detach leaves it.
+    sky.detach()
+    expect(scene.environment).toBe(hdri)
+    sky.dispose()
+  })
+
+  it('attaches the star sprites with background-only and environment-only roles', async () => {
+    const { sky } = makeSky()
+    const scene = new Scene()
+    sky.attach(scene, { environment: false })
+    const night = await sky.enableStars({ count: 20 })
+    expect(night.stars!.parent).toBe(scene)
+
+    sky.attach(scene, { background: false })
+    expect(night.stars!.parent).toBe(scene)
+
+    sky.detach()
+    expect(night.stars!.parent).toBeNull()
+    sky.dispose()
+  })
+
+  it('re-attaching the same scene releases a dropped role and claims a new one', () => {
+    const { sky, bake } = makeSky()
+    const scene = new Scene()
+    sky.attach(scene)
+    const env = bake()
+    sky.update(null)
+    expect(scene.environment).toBe(env)
+
+    // Drop the environment: released because it still holds the sky's IBL.
+    sky.attach(scene, { environment: false })
+    expect(scene.environment).toBeNull()
+    expect(scene.background).toBe(sky.texture)
+    sky.update(null)
+    expect(scene.environment).toBeNull()
+
+    // Drop the background too, but someone else holds it by now: left alone.
+    const backdrop = new Color(0x000000)
+    scene.background = backdrop
+    const hdri = new Texture()
+    scene.environment = hdri
+    sky.attach(scene, { background: false, environment: false })
+    expect(scene.background).toBe(backdrop)
+    expect(scene.environment).toBe(hdri)
+    expect(sky.state).toBe('attached')
+
+    // Requesting a role again claims the slot: an explicit attach takes it.
+    sky.attach(scene)
+    expect(scene.background).toBe(sky.texture)
+    expect(scene.environment).toBe(env)
+    sky.dispose()
+  })
+
+  it('switching scenes releases only the slots the sky owned in the old one', () => {
+    const { sky, bake } = makeSky()
+    const a = new Scene()
+    const hdri = new Texture()
+    a.environment = hdri
+    sky.attach(a, { environment: false })
+    bake()
+    sky.update(null)
+
+    const b = new Scene()
+    sky.attach(b)
+    expect(a.background).toBeNull()
+    expect(a.environment).toBe(hdri)
+    expect(b.background).toBe(sky.texture)
+    expect(b.environment).toBe(sky.environmentTexture)
+    sky.dispose()
+    expect(b.background).toBeNull()
+    expect(b.environment).toBeNull()
   })
 })

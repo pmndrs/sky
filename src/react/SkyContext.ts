@@ -7,7 +7,7 @@ import type { SkyNorth } from '../Sky'
  * three objects are left as `any`.
  */
 export interface SkyContextValue {
-  attach(scene: any): void
+  attach(scene: any, options?: { background?: boolean; environment?: boolean }): void
   detach(): void
   dispose(): void
   update(camera: any): void

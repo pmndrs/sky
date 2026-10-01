@@ -37,6 +37,17 @@ export interface LookTrackOverrides {
   intensity?: number
 }
 
+/**
+ * Which scene slots `Sky.attach` claims. Both default to `true`. The star
+ * sprites (`enableStars`) join the attached scene whatever the roles.
+ */
+export interface SkyAttachOptions {
+  /** Assign the raw sky cube to `scene.background`. */
+  background?: boolean
+  /** Assign the PMREM-filtered sky to `scene.environment` (IBL). */
+  environment?: boolean
+}
+
 interface SkyOptions {
   preset?: string
   quality?: string
@@ -104,6 +115,11 @@ export class Sky {
   _disposed = false
   _renderer: any
   _scene: any
+  /** Slots of `_scene` this sky claimed in `attach()`. */
+  _ownsBackground = false
+  _ownsEnvironment = false
+  /** The value this sky last wrote to `_scene.environment` (null before the first PMREM bake). */
+  _assignedEnvironment: any = null
   _timeOfDay: number
   _latitude: number
   _dayOfYear: number
@@ -244,23 +260,62 @@ export class Sky {
     return this._baker
   }
 
-  /** Clear `scene.environment` / `scene.background` if they still point at this sky. */
+  /** Clear `scene.background` if this sky claimed it and it still holds the sky cube. */
+  _releaseBackground(scene: any) {
+    if (this._ownsBackground && scene.background === this._baker.texture) scene.background = null
+    this._ownsBackground = false
+  }
+
+  /** Clear `scene.environment` if this sky claimed it and it still holds the sky's IBL. */
+  _releaseEnvironment(scene: any) {
+    if (this._ownsEnvironment && scene.environment === this._baker.environmentTexture) scene.environment = null
+    this._ownsEnvironment = false
+    this._assignedEnvironment = null
+  }
+
+  /** Release the slots this sky still owns and take the stars out of the scene. */
   _releaseScene() {
     const scene = this._scene
     if (!scene) return
-    if (scene.environment === this._baker.environmentTexture) scene.environment = null
-    if (scene.background === this._baker.texture) scene.background = null
+    this._releaseEnvironment(scene)
+    this._releaseBackground(scene)
     this._night?._detachStars()
     this._scene = null
   }
 
-  attach(scene: any) {
+  /**
+   * Attach to a scene: claim `scene.background` (raw sky cube) and/or
+   * `scene.environment` (PMREM-filtered IBL), and add the night-sky star
+   * sprites, which join the scene whatever the roles.
+   *
+   * `{ environment: false }` keeps your own `scene.environment` (an indoor
+   * HDRI, say) under the procedural background; `{ background: false }` lights
+   * with the sky while you draw your own backdrop. The sky only ever writes
+   * the slots it claims, and `detach()`, `dispose()` or attaching elsewhere
+   * clear only claimed slots that still hold this sky's textures.
+   *
+   * Calling again on the same scene with different roles releases a slot no
+   * longer requested and claims a newly requested one. Returns `this`.
+   */
+  attach(scene: any, { background = true, environment = true }: SkyAttachOptions = {}) {
     // Read through the guarded accessor before changing attachment state.
     const baker = this.baker
-    if (this._scene !== scene) this._releaseScene()
+    if (this._scene !== scene) {
+      this._releaseScene()
+    } else {
+      // Same scene, new roles: give back the slots no longer requested.
+      if (!background) this._releaseBackground(scene)
+      if (!environment) this._releaseEnvironment(scene)
+    }
     this._scene = scene
-    scene.environment = baker.environmentTexture
-    scene.background = baker.texture
+    if (environment) {
+      scene.environment = this._assignedEnvironment = baker.environmentTexture
+      this._ownsEnvironment = true
+    }
+    if (background) {
+      scene.background = baker.texture
+      this._ownsBackground = true
+    }
     // Stars are sprites in the main scene, not part of the bake.
     this._night?._attachStars()
     return this
@@ -608,8 +663,17 @@ export class Sky {
     }
     this.baker.update()
 
-    if (this._scene && this._scene.environment !== this.baker.environmentTexture) {
-      this._scene.environment = this.baker.environmentTexture
+    // The IBL is null until the first PMREM bake, so `attach()` may have
+    // written null; fill the slot once it exists. Only a slot this sky claimed
+    // and that is empty or still holds what it wrote: a texture someone else
+    // assigned since is theirs.
+    const scene = this._scene
+    if (scene && this._ownsEnvironment) {
+      const env = this.baker.environmentTexture
+      const current = scene.environment
+      if (current !== env && (current == null || current === this._assignedEnvironment)) {
+        scene.environment = this._assignedEnvironment = env
+      }
     }
 
     if (this._night && camera) this._night.update(camera, this._renderer.getPixelRatio?.() ?? 1)

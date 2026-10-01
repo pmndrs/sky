@@ -10,4 +10,6 @@
 // are declared optional in package.json so the vanilla entry (`@pmndrs/sky`)
 // stays importable without React or r3f installed.
 export { Sky } from './Sky'
+export type { SkyProps } from './Sky'
 export { SkyContext, useSky } from './SkyContext'
+export type { SkyContextValue } from './SkyContext'

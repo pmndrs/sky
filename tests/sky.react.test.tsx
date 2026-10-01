@@ -267,6 +267,44 @@ describe('<Sky>', () => {
     expect(sky.calls).toContain('setAtmosphere:[{"miePhaseG":0.9}]')
   })
 
+  it('passes pmrem to the constructor and rebuilds only when its value changes', () => {
+    render(
+      <StrictMode>
+        <Sky pmrem={{ generator: 'three', minInterval: 0.5 }}>
+          <Probe />
+        </Sky>
+      </StrictMode>,
+    )
+    const [sky] = live()
+    expect(sky.options.pmrem).toEqual({ generator: 'three', minInterval: 0.5 })
+
+    // A new-but-equal inline object (every parent render) must not rebuild.
+    const mountsBefore = probeMounts
+    render(
+      <StrictMode>
+        <Sky pmrem={{ generator: 'three', minInterval: 0.5 }}>
+          <Probe />
+        </Sky>
+      </StrictMode>,
+    )
+    expect(live()).toEqual([sky])
+    expect(sky.disposed).toBe(false)
+    expect(probeMounts).toBe(mountsBefore)
+
+    // A different value is a construction change: rebuild against it.
+    render(
+      <StrictMode>
+        <Sky pmrem={{ generator: 'sky', quality: 'fast' }}>
+          <Probe />
+        </Sky>
+      </StrictMode>,
+    )
+    expect(sky.disposed).toBe(true)
+    expect(live()).toHaveLength(1)
+    expect(live()[0].options.pmrem).toEqual({ generator: 'sky', quality: 'fast' })
+    expect(probeSeen.at(-1)).toBe(live()[0])
+  })
+
   it('disposes when hidden by <Activity> and comes back live when shown', () => {
     const ui = (mode: 'visible' | 'hidden') => (
       <StrictMode>

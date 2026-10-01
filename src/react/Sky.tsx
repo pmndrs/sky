@@ -13,6 +13,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { useFrame, useThree } from '@react-three/fiber/webgpu'
 
 import { Sky as VanillaSky } from '../Sky'
+import type { SkyPmremOptions } from '../sky/pmrem/SkyPmrem'
 import { SkyContext } from './SkyContext'
 import { useStableValue } from './useStableValue'
 
@@ -23,6 +24,8 @@ export interface SkyProps {
   atmosphere?: any
   enableAerialPerspective?: boolean
   apKmPerSlice?: number
+  /** IBL prefilter options (`generator`, `quality`, `minInterval`, `levelsPerFrame`). Construction-only: a change (by value) rebuilds. */
+  pmrem?: SkyPmremOptions
   mirrorBelowHorizon?: boolean
   exposure?: number
   north?: any
@@ -60,6 +63,8 @@ interface SkyConfig {
   cubeSize: number
   enableAerialPerspective: boolean
   apKmPerSlice: number
+  /** Value-stable (`useStableValue`), so reference equality is value equality. */
+  pmrem: SkyPmremOptions | undefined
 }
 
 /** The live instance and the config it was built from. */
@@ -76,7 +81,8 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
     a.quality === b.quality &&
     a.cubeSize === b.cubeSize &&
     a.enableAerialPerspective === b.enableAerialPerspective &&
-    a.apKmPerSlice === b.apKmPerSlice
+    a.apKmPerSlice === b.apKmPerSlice &&
+    a.pmrem === b.pmrem
   )
 }
 
@@ -87,7 +93,8 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  * Suspended children show a null fallback while their assets load.
  *
  * Construction-time options (rebuild the instance and remount `children`):
- *   `preset`, `quality`, `cubeSize`, `enableAerialPerspective`, `apKmPerSlice`
+ *   `preset`, `quality`, `cubeSize`, `enableAerialPerspective`, `apKmPerSlice`,
+ *   `pmrem` (compared by value)
  *
  * Imperative props (applied via setters; no rebuild):
  *   `timeOfDay`, `latitude`, `dayOfYear`, `sunDirection`, `north`,
@@ -127,8 +134,10 @@ export function Sky(props: SkyProps) {
 
   const renderer = useThree((s) => s.gl)
   const scene = useThree((s) => s.scene)
+  // By value: an inline `pmrem={{ ... }}` must not rebuild every render.
+  const pmrem = useStableValue(props.pmrem)
 
-  const config: SkyConfig = { renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice }
+  const config: SkyConfig = { renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice, pmrem }
   const [resource, setResource] = useState<SkyResource | null>(null)
 
   useEffect(() => {
@@ -141,6 +150,7 @@ export function Sky(props: SkyProps) {
       atmosphere,
       enableAerialPerspective,
       apKmPerSlice,
+      pmrem,
       mirrorBelowHorizon,
       exposure,
       north,
@@ -153,14 +163,17 @@ export function Sky(props: SkyProps) {
       groundAlbedo,
     })
     sky.attach(scene)
-    setResource({ sky, config: { renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice } })
+    setResource({
+      sky,
+      config: { renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice, pmrem },
+    })
 
     return () => {
       sky.dispose()
       setResource((current) => (current?.sky === sky ? null : current))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice])
+  }, [renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice, pmrem])
 
   // Nothing renders against an instance whose config no longer matches: it is
   // disposed and replaced by the effect in this same commit.

@@ -92,6 +92,7 @@ underlying flags.
 | `cubeSize`                | `number`  | `256`      | Rebuild | Cube face size (px) for the background and IBL bake.                                                                     |
 | `enableAerialPerspective` | `boolean` | `true`     | Rebuild | Builds the aerial-perspective LUT. Must be `true` for `<AutoHaze>`.                                                      |
 | `apKmPerSlice`            | `number`  | `8.0`      | Rebuild | AP LUT depth-slice size in km. See [Planet-scale guide](../guides/planet-scale).                                         |
+| `pmrem`                   | `object`  | —          | Rebuild | IBL prefilter (`SkyPmremOptions`): `generator`, `quality`, `minInterval`, `levelsPerFrame`. Compared by value.           |
 
 A change of `<Canvas>` renderer or scene also rebuilds.
 
@@ -171,6 +172,10 @@ arrays, `Vector3` and `Color`. Values that can't be serialized (functions,
 circular references) count as changed on every render. `sunDisc` is not in
 this list; it only writes uniforms, so an inline value costs nothing.
 
+The construction prop `pmrem` is compared the same way: an inline
+`pmrem={{ generator: 'three' }}` rebuilds the instance only when its contents
+change.
+
 ### Removing a prop
 
 Removing a live prop, or setting it to `undefined`, does **not** reset the
@@ -226,8 +231,7 @@ cast but untyped.
 | `applyHaze(sceneColorNode, options?)`                                                                         | Builds the haze output node. See [`<AutoHaze>`](#autohaze).            |
 | _anything else_ (`any`)                                                                                       | e.g. `enableStars`, `createSun`, `setHazeShadows`, `texture`, `baker`. |
 
-`SkyProps` and `SkyContextValue` are not exported from the entry; use
-`React.ComponentProps<typeof Sky>` and `NonNullable<ReturnType<typeof useSky>>`.
+`SkyProps` and `SkyContextValue` are exported as types from `@pmndrs/sky/react`.
 
 A setter called through the instance holds until the matching prop changes,
 at which point the prop is applied again. Drive each setting from one place.
@@ -303,7 +307,6 @@ These `Sky` features have no `<Sky>` prop. Most are reachable through
 
 | Feature                     | Vanilla API                                                       | From React                                                                                                                                                                                          |
 | --------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| IBL prefilter options       | `new Sky(renderer, { pmrem })`                                    | Not reachable: construction-only and `<Sky>` doesn't forward it. The default (`generator: 'sky'`) applies.                                                                                          |
 | Stars and Milky Way         | `enableStars(opts)`, `disableStars()`, `sky.stars`                | Call `sky.enableStars()` in a child's effect and `sky.disableStars()` in its cleanup. See [Night sky](../guides/night-sky).                                                                         |
 | Light shafts                | `applyHaze({ shadows })`, `setHazeShadows(opts)`                  | Pass `shadows` to `<AutoHaze>`; adjust the live knobs with `sky.setHazeShadows(...)`.                                                                                                               |
 | Look-track overrides        | `setLookTrack(track, overrides)`                                  | Call `sky.setLookTrack(track, { chroma, value, intensity })` and leave the `look` / `lookTrack` props unset: when either prop changes, `<Sky>` calls `setLookTrack(track)` again without overrides. |

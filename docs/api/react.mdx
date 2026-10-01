@@ -1,0 +1,337 @@
+---
+title: React
+description: The React (R3F) bindings — the Sky component, useSky, AutoHaze, and their lifecycle.
+---
+
+`@pmndrs/sky/react` wraps one vanilla [`Sky`](./sky) instance in a
+react-three-fiber component. `<Sky>` builds the instance against the
+`<Canvas>` renderer, attaches it to the scene (`scene.background` +
+`scene.environment`), calls `update(camera)` every frame, and disposes it on
+unmount. Props map onto the `Sky` setters; anything without a prop is
+reachable through the instance with `useSky()`.
+
+This page documents the surface as implemented in `src/react/`.
+
+## Install
+
+```bash
+npm install @pmndrs/sky three @react-three/fiber@^10.0.0-alpha.4 react react-dom
+```
+
+| Package              | Version            | Why                                                                                                                                        |
+| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `three`              | `>=0.185.0`        | WebGPU renderer (`three/webgpu`); see [Installation](../getting-started/installation).                                                     |
+| `react`, `react-dom` | `>=18`             | Peer dependencies of the React entry.                                                                                                      |
+| `@react-three/fiber` | `>=10.0.0-alpha.4` | `package.json` accepts any `10.x` pre-release, but canaries before alpha.4 import a WebGL-only class from `three/webgpu` and fail to load. |
+| `useRenderPipeline`  | in your R3F build  | Only for `<AutoHaze>` (present in alpha.4). A build without the hook can still use `<Sky>`.                                                |
+
+The React peers are optional in `package.json`, so the vanilla entry works
+without them. The `<Canvas>` must run a `WebGPURenderer`; `<Sky>` does not run
+on `WebGLRenderer`.
+
+| Entry                         | Exports                                               |
+| ----------------------------- | ----------------------------------------------------- |
+| `@pmndrs/sky/react`           | `Sky`, `useSky`, `SkyContext`                         |
+| `@pmndrs/sky/react/auto-haze` | `AutoHaze` (also the default export), `AutoHazeProps` |
+
+## Usage
+
+```jsx
+import { Canvas } from '@react-three/fiber'
+import * as THREE from 'three/webgpu'
+import { Sky } from '@pmndrs/sky/react'
+import { AutoHaze } from '@pmndrs/sky/react/auto-haze'
+
+export function App() {
+  return (
+    <Canvas
+      gl={async (props) => {
+        const renderer = new THREE.WebGPURenderer(props)
+        await renderer.init()
+        return renderer
+      }}>
+      <Sky preset="earth" timeOfDay={14.5} latitude={37.7}>
+        <AutoHaze />
+      </Sky>
+      <Mountains />
+    </Canvas>
+  )
+}
+```
+
+`<Sky>` renders its `children` only once the instance exists, so anything
+that calls `useSky()` belongs inside it. Scene content that doesn't need the
+instance can sit next to it, as `<Mountains />` does here.
+
+## `<Sky>` props
+
+Every prop is optional. Props fall into two groups:
+
+- **Construction props** are passed to `new Sky(...)`. Changing one disposes
+  the instance and builds a new one, and `children` remount against it.
+- **Live props** call a `Sky` setter on the current instance. What the setter
+  costs depends on what it changes:
+
+| Cost        | What re-runs on the next frame                                                         |
+| ----------- | -------------------------------------------------------------------------------------- |
+| Rebuild     | New `Sky` instance: every LUT, cube and IBL is built from scratch. `children` remount. |
+| Full rebake | Transmittance + MultiScatter + Sky-View LUTs, cube, IBL.                               |
+| Sun rebake  | Sky-View LUT, cube, IBL.                                                               |
+| Cube rebake | Cube and IBL only.                                                                     |
+| Uniform     | Nothing is baked; a uniform is written.                                                |
+
+See [Baker: dirty-flag semantics](./baker#dirty-flag-semantics) for the
+underlying flags.
+
+### Construction
+
+| Prop                      | Type      | Default    | Cost    | Notes                                                                                                                    |
+| ------------------------- | --------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `preset`                  | `string`  | `'earth'`  | Rebuild | `'earth' \| 'mars' \| 'titan'`. The vanilla `setPreset` swaps without a rebuild; see [below](#not-yet-exposed-as-props). |
+| `quality`                 | `string`  | `'medium'` | Rebuild | `'low' \| 'medium' \| 'high'` LUT resolution tier.                                                                       |
+| `cubeSize`                | `number`  | `256`      | Rebuild | Cube face size (px) for the background and IBL bake.                                                                     |
+| `enableAerialPerspective` | `boolean` | `true`     | Rebuild | Builds the aerial-perspective LUT. Must be `true` for `<AutoHaze>`.                                                      |
+| `apKmPerSlice`            | `number`  | `8.0`      | Rebuild | AP LUT depth-slice size in km. See [Planet-scale guide](../guides/planet-scale).                                         |
+
+A change of `<Canvas>` renderer or scene also rebuilds.
+
+### Time and place
+
+| Prop           | Type                           | Default | Cost       | Notes                                                                                              |
+| -------------- | ------------------------------ | ------- | ---------- | -------------------------------------------------------------------------------------------------- |
+| `timeOfDay`    | `number`                       | `12`    | Sun rebake | Hours, `0..24`. Sun position from NOAA solar math with `latitude` + `dayOfYear`.                   |
+| `latitude`     | `number`                       | `37.7`  | Sun rebake | Degrees.                                                                                           |
+| `dayOfYear`    | `number`                       | `172`   | Sun rebake | `1..365`.                                                                                          |
+| `sunDirection` | `{ elevation, azimuth, raw? }` | —       | Sun rebake | Degrees. Bypasses the solar-position math. `azimuth` is clockwise from `north` unless `raw: true`. |
+| `north`        | `'+X' \| '-X' \| '+Z' \| '-Z'` | `'+Z'`  | Sun rebake | World axis treated as geographic north.                                                            |
+
+`sunDirection` and the solar inputs both set the sun, and whichever changed
+last wins. On mount `sunDirection` wins; a later change to `timeOfDay`,
+`latitude` or `dayOfYear` moves the sun back onto the solar path. Use one or
+the other.
+
+### Atmosphere
+
+| Prop                    | Type                           | Default       | Cost        | Notes                                                                                                                                |
+| ----------------------- | ------------------------------ | ------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `atmosphere`            | partial `AtmosphereParams`     | —             | Full rebake | Merged onto the **current** params, so removing a key does not restore it. See [Tuning the atmosphere](../guides/tuning-atmosphere). |
+| `turbidity`             | `number`                       | `1`           | Full rebake | Scales Mie scattering, extinction and absorption against the preset's values. `0` turns Mie off.                                     |
+| `groundAlbedo`          | `number \| Vector3 \| {x,y,z}` | `0.1` (Earth) | Full rebake | Ground bounce in the multi-scatter LUT and the cube's lower hemisphere.                                                              |
+| `multiScatteringFactor` | `number`                       | `1`           | Full rebake | Unreal `MultiScatteringFactor`. `1` is physical. Set it once rather than per frame.                                                  |
+| `mirrorBelowHorizon`    | `boolean`                      | `false`       | Cube rebake | Bakes a Y-mirror of the sky into the cube's lower hemisphere instead of lit ground, for reflective floors.                           |
+
+### Appearance and looks
+
+| Prop                 | Type                                                               | Default     | Cost        | Notes                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------ | ----------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `exposure`           | `number`                                                           | `40`        | Uniform     | Sky luminance scale; see the [`ILLUMINANCE_IS_ONE` note](./luts).                                                            |
+| `sunDisc`            | `boolean`                                                          | `true`      | Uniform     | Show the in-shader sun disc.                                                                                                 |
+| `sunColor`           | `'neutral' \| 'bruneton' \| string \| Color \| Vector3 \| [r,g,b]` | `'neutral'` | Cube rebake | Colour of the sun as a light. Tints the sky, haze, sun disc and `createSun` lights. Hex strings are sRGB; arrays are linear. |
+| `skyLuminanceFactor` | `string \| Color \| Vector3 \| [r,g,b]`                            | white       | Cube rebake | Unreal `SkyLuminanceFactor`: per-channel grade on the sky after any look. Haze inherits it.                                  |
+| `look`               | `string \| object \| null`                                         | —           | Cube rebake | A registered look name or an inline definition. `null` returns to the physical sky. See [Looks](../guides/looks).            |
+| `lookTrack`          | `string \| keyframe[] \| null`                                     | —           | Cube rebake | Look keyed on sun elevation (e.g. `'ghibli'`). Overrides `look` while set.                                                   |
+
+To drop a `lookTrack`, set it to `null` **and** give `look` a value
+(`look={null}` for the physical sky). With `look` left undefined, clearing the
+track leaves the last sampled look in place.
+
+### Haze
+
+These take effect once `<AutoHaze>` (or your own `applyHaze` call) is wired,
+and can be set before it.
+
+| Prop                | Type                           | Default                       | Cost    | Notes                                                                              |
+| ------------------- | ------------------------------ | ----------------------------- | ------- | ---------------------------------------------------------------------------------- |
+| `hazeStrength`      | `number`                       | `1`                           | Uniform | Multiplies inscatter and AP alpha. `0` = no haze.                                  |
+| `hazePolicy`        | `'auto' \| 'ap' \| 'raymarch'` | `'auto'`                      | Uniform | See the [Haze guide](../guides/haze).                                              |
+| `hazeAltitudeBlend` | `{ startKm?, endKm? }`         | `{ startKm: 50, endKm: 100 }` | Uniform | Altitude window over which `'auto'` blends from the AP LUT to raymarching.         |
+| `apDistanceScale`   | `number`                       | `1`                           | Uniform | Unreal `AerialPerspectiveViewDistanceScale`: haze per metre. `2` = twice the haze. |
+
+### Children
+
+| Prop       | Type        | Notes                                                                                                  |
+| ---------- | ----------- | ------------------------------------------------------------------------------------------------------ |
+| `children` | `ReactNode` | Rendered once the instance exists, inside a `<Suspense fallback={null}>`. `useSky()` is non-null here. |
+
+### Object props compare by value
+
+Since 0.4, object-valued props (`sunDirection`, `groundAlbedo`, `atmosphere`,
+`look`, `lookTrack`, `sunColor`, `skyLuminanceFactor`, `hazeAltitudeBlend`)
+are compared by value, not by reference. An inline object is a new reference
+on every parent render; before 0.4 that re-ran the setter and re-baked the
+sky each render. Now the setter only runs when the contents change, so this
+is fine:
+
+```jsx
+<Sky sunDirection={{ elevation: 12, azimuth: 200 }} atmosphere={{ miePhaseG: 0.7 }} />
+```
+
+The comparison is `JSON.stringify` equality, which covers plain objects,
+arrays, `Vector3` and `Color`. Values that can't be serialized (functions,
+circular references) count as changed on every render. `sunDisc` is not in
+this list; it only writes uniforms, so an inline value costs nothing.
+
+### Removing a prop
+
+Removing a live prop, or setting it to `undefined`, does **not** reset the
+instance: it keeps the last value applied. The exceptions are props with a
+default in `<Sky>` itself (`exposure`, `sunDisc`, `north`,
+`mirrorBelowHorizon`), which go back to that default. To return to a
+default, pass it explicitly (e.g. `turbidity={1}`).
+
+## Lifecycle
+
+| Situation                  | Behaviour                                                                                                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mount                      | One effect constructs the `Sky`, calls `attach(scene)`, then renders `children`. Live props are applied before the first frame.                                            |
+| Every frame                | `useFrame` calls `sky.update(camera)` with R3F's default camera. Once `applyHaze` has run, it also calls `sky.updateAerialPerspective()`.                                  |
+| Construction prop change   | The old instance is disposed and a new one built in the same commit. Nothing renders against the disposed instance; `children` remount and `useSky()` returns the new one. |
+| Unmount                    | `sky.dispose()`: detaches from the scene, removes the stars, disposes the baker. Synchronous, no timer.                                                                    |
+| `StrictMode`               | Safe. The replayed effect disposes the first instance and builds a second; children only ever see the live one.                                                            |
+| Suspense                   | Children render inside `<Suspense fallback={null}>` within `<Sky>`, so a child loading assets does not unmount or replay the `Sky` (fixed in 0.3.0).                       |
+| `<Activity mode="hidden">` | Hidden disposes the instance; shown builds a new one.                                                                                                                      |
+
+> **Helpers are yours to dispose.**
+> `sky.dispose()` does not dispose helpers made with `createSun`,
+> `createGround`, `createGroundedSkybox` or `createMoon`. Create them in a
+> child's effect and dispose them in its cleanup; a rebuild remounts the
+> child, which recreates them against the new instance.
+
+## `useSky()` and `SkyContext`
+
+```ts
+function useSky(): SkyContextValue | null
+```
+
+Returns the vanilla [`Sky`](./sky) instance owned by the nearest `<Sky>`, or
+`null` outside one. Inside `<Sky>` it is never `null`. The instance is stable
+until a construction prop changes; at that point `children` remount with the
+new one. `SkyContext` is the raw React context, for class components or
+custom providers.
+
+The context value is the full `Sky` object. `SkyContextValue` types the
+methods below and allows any other member through an index signature
+(typed `any`), so the rest of the [`Sky` API](./sky) is callable without a
+cast but untyped.
+
+| Member                                                                                                        | Notes                                                                  |
+| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `attach(scene)` / `detach()` / `dispose()`                                                                    | Owned by `<Sky>`. Don't call these yourself.                           |
+| `update(camera)`                                                                                              | Called by `<Sky>` every frame.                                         |
+| `setTimeOfDay` / `setLatitude` / `setDayOfYear` / `setSunDirection` / `setNorth`                              | Same as the time-and-place props.                                      |
+| `setExposure` / `setSunDisc` / `setTurbidity` / `setGroundAlbedo` / `setAtmosphere` / `setMirrorBelowHorizon` | Same as the matching props.                                            |
+| `setLook` / `setLookTrack` / `setSkyLuminanceFactor` / `setSunColor`                                          | Same as the matching props.                                            |
+| `setHazeStrength` / `setHazePolicy` / `setHazeAltitudeBlend`                                                  | Same as the haze props.                                                |
+| `setAerialPerspectiveDistanceScale` / `setMultiScatteringFactor`                                              | Same as `apDistanceScale` / `multiScatteringFactor`.                   |
+| `applyHaze(sceneColorNode, options?)`                                                                         | Builds the haze output node. See [`<AutoHaze>`](#autohaze).            |
+| _anything else_ (`any`)                                                                                       | e.g. `enableStars`, `createSun`, `setHazeShadows`, `texture`, `baker`. |
+
+`SkyProps` and `SkyContextValue` are not exported from the entry; use
+`React.ComponentProps<typeof Sky>` and `NonNullable<ReturnType<typeof useSky>>`.
+
+A setter called through the instance holds until the matching prop changes,
+at which point the prop is applied again. Drive each setting from one place.
+
+## `<AutoHaze>`
+
+```jsx
+import { AutoHaze } from '@pmndrs/sky/react/auto-haze'
+
+;<Sky timeOfDay={16} hazeStrength={1.2}>
+  <AutoHaze policy="auto" raymarchFallback={false} />
+</Sky>
+```
+
+`<AutoHaze>` renders nothing. It calls R3F's `useRenderPipeline` and sets
+`renderPipeline.outputNode` to `sky.applyHaze(scenePass.getTextureNode(), { ...props, scenePass })`.
+It must be a child of `<Sky>` with `enableAerialPerspective` left on, or
+`applyHaze` throws. It lives in its own entry so bundles without it never
+import `useRenderPipeline`.
+
+Props are the `applyHaze` options (`scenePass` is supplied for you):
+
+| Prop                     | Default                       | Notes                                                                                                           |
+| ------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `policy`                 | `'auto'`                      | `'auto' \| 'ap' \| 'raymarch'`. Seeds the policy; `hazePolicy` on `<Sky>` changes it live.                      |
+| `strength`               | `1`                           | Seeds haze strength; `hazeStrength` on `<Sky>` changes it live.                                                 |
+| `altitudeBlend`          | `{ startKm: 50, endKm: 100 }` | Seeds the `'auto'` window; `hazeAltitudeBlend` on `<Sky>` changes it live.                                      |
+| `raymarchFallback`       | `true`                        | `false` drops the raymarch path from the shader: much faster compile, for scenes within AP coverage.            |
+| `raymarchSampleCount`    | `64`                          | Samples per pixel on the raymarch path. Build-time.                                                             |
+| `logarithmicDepthBuffer` | `false`                       | Must match the renderer's `logarithmicDepthBuffer`.                                                             |
+| `useCameraFar`           | auto                          | View-Z sky detection; on by default when `camera.far > 1e6`.                                                    |
+| `shadows`                | —                             | `{ light, samples, maxDistance, strength, resolution }` for light shafts. See the [Haze guide](../guides/haze). |
+| `includeSkyCubeBlend`    | `false`                       | Legacy sky-cube blend shim.                                                                                     |
+| `debugMode`              | `null`                        | AP debug view passthrough.                                                                                      |
+
+The pipeline callback runs once, with the props from the first render:
+changing an `<AutoHaze>` prop later has no effect. For live control, use the
+haze props on `<Sky>`, which write the uniforms `applyHaze` reads. Set
+strength, policy and the altitude window in one place: an explicit
+`strength`, `policy` or `altitudeBlend` on `<AutoHaze>` overrides the `<Sky>`
+prop when haze is wired, and the `<Sky>` prop only applies again once it
+changes.
+
+`<AutoHaze>` owns `renderPipeline.outputNode`, so don't combine it with
+another `useRenderPipeline` call. To compose haze with your own passes, skip
+`<AutoHaze>` and call `applyHaze` yourself:
+
+```jsx
+import { useSky } from '@pmndrs/sky/react'
+import { useRenderPipeline } from '@react-three/fiber/webgpu'
+
+function CustomPipeline() {
+  const sky = useSky()
+  useRenderPipeline(({ renderPipeline, passes }) => {
+    if (!sky) return
+    renderPipeline.outputNode = sky.applyHaze(passes.scenePass.getTextureNode(), {
+      scenePass: passes.scenePass,
+      policy: 'auto',
+    })
+  })
+  return null
+}
+```
+
+`applyHaze` composites over its first argument, so a node with bloom or AO
+already applied keeps that work (see [Haze guide](../guides/haze)). Either
+way, `<Sky>` runs `updateAerialPerspective()` every frame once haze is wired.
+
+## Not yet exposed as props
+
+These `Sky` features have no `<Sky>` prop. Most are reachable through
+`useSky()` from a child component.
+
+| Feature                     | Vanilla API                                                       | From React                                                                                                                                                                                          |
+| --------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| IBL prefilter options       | `new Sky(renderer, { pmrem })`                                    | Not reachable: construction-only and `<Sky>` doesn't forward it. The default (`generator: 'sky'`) applies.                                                                                          |
+| Stars and Milky Way         | `enableStars(opts)`, `disableStars()`, `sky.stars`                | Call `sky.enableStars()` in a child's effect and `sky.disableStars()` in its cleanup. See [Night sky](../guides/night-sky).                                                                         |
+| Light shafts                | `applyHaze({ shadows })`, `setHazeShadows(opts)`                  | Pass `shadows` to `<AutoHaze>`; adjust the live knobs with `sky.setHazeShadows(...)`.                                                                                                               |
+| Look-track overrides        | `setLookTrack(track, overrides)`                                  | Call `sky.setLookTrack(track, { chroma, value, intensity })` and leave the `look` / `lookTrack` props unset: when either prop changes, `<Sky>` calls `setLookTrack(track)` again without overrides. |
+| Preset swap without rebuild | `setPreset(name)`                                                 | `sky.setPreset(name)`. The `preset` prop rebuilds the instance instead.                                                                                                                             |
+| Sun disc size and softness  | `setSunDisc({ visible, angularDiameter, edgeSoftness })`          | The object form works at runtime but the `sunDisc` prop is typed `boolean`; call `sky.setSunDisc({...})` for type safety.                                                                           |
+| Planet-centred altitude     | `update(camera, { planetCenter })`                                | Not supported: `<Sky>` calls `update(camera)` with flat-ground altitude (`y`). Use the vanilla `Sky` for [planet-scale](../guides/planet-scale) scenes.                                             |
+| IBL flush                   | `flushEnvironment()`                                              | `sky.flushEnvironment()`, e.g. before a screenshot.                                                                                                                                                 |
+| Helpers                     | `createSun`, `createGround`, `createGroundedSkybox`, `createMoon` | Create from a child via `useSky()`; dispose them yourself (see [Lifecycle](#lifecycle)).                                                                                                            |
+| Live sky mesh               | `sky.baker.createSkyMesh(opts)`                                   | `sky.baker.createSkyMesh(...)`, then add the mesh to the scene.                                                                                                                                     |
+
+For example, stars:
+
+```jsx
+import { useEffect } from 'react'
+import { useSky } from '@pmndrs/sky/react'
+
+function Stars({ intensity = 1 }) {
+  const sky = useSky()
+  useEffect(() => {
+    void sky.enableStars({ intensity })
+    return () => {
+      sky.disableStars()
+    }
+  }, [sky, intensity])
+  return null
+}
+
+;<Sky timeOfDay={22}>
+  <Stars />
+</Sky>
+```

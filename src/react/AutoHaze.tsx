@@ -15,10 +15,9 @@ export interface AutoHazeProps {
  * `useRenderPipeline` and assigns `sky.applyHaze(scenePass)` to
  * `renderPipeline.outputNode`.
  *
- * Lives in its own sub-export (`tsl-sky/react/auto-haze`) so the
+ * Lives in its own sub-export (`@pmndrs/sky/react/auto-haze`) so the
  * `useRenderPipeline` import is only pulled into bundles that actually
- * need it. R3F builds without that hook (e.g. `10.0.0-alpha.2`) can
- * still use the plain `<Sky>` from `tsl-sky/react`.
+ * need it; the plain `<Sky>` from `@pmndrs/sky/react` doesn't import it.
  *
  * Mutually exclusive with a user-owned `useRenderPipeline` — the docs
  * warn against multiple init callsites racing for `outputNode`. For

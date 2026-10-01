@@ -42,7 +42,8 @@ blurry blob several pixels wide.
 
 Both layers are oriented from the same inputs as the sun — `timeOfDay`,
 `dayOfYear`, `latitude` and `north` — using local sidereal time from the same
-solar model, so the stars stay registered to the sunset (to within ~0.2°):
+solar model, so the stars stay registered to the sunset (the tests hold the sun's
+catalog position within 0.5° of the sky's sun):
 
 ```js
 sky.setTimeOfDay(23) // the sky turns about the celestial pole
@@ -56,6 +57,12 @@ place you set.
 Both layers are also dimmed and reddened toward the horizon by atmospheric
 transmittance, hidden below the planet's horizon, and depth-tested against
 your geometry, so they set behind terrain.
+
+The sprites are additive and transparent, so they draw over the sky whether
+it is the `scene.background` cube or a live sky mesh in the scene
+(`sky.baker.createSkyMesh()`): the live mesh draws after the opaque geometry
+(`SKY_RENDER_ORDER`) without writing depth, and transparent objects are a
+later list still.
 
 ## Twilight
 
@@ -89,6 +96,26 @@ the setters change one value without enabling a disabled night sky.
 | `milkyWayTexture`   | —       | `setMilkyWayTexture`   | Your own map instead of the procedural one; `null` goes back.                                    |
 
 `sky.disableStars()` hides both layers; `sky.enableStars()` brings them back.
+`sky.setStarsIntensity(n)` is a shortcut for `setIntensity` and `sky.stars`
+returns the `SkyNight` (or `null` before the first `enableStars`).
+
+The options are typed as `SkyNightOptions`: `SkyStarsOptions` (the star
+rows, `intensity` through `catalog`) plus the three `milkyWay*` fields.
+`SkyStars` is exported on its own too —
+`new SkyStars(sky.baker, options)` builds the sprite group, but then you own
+its `orientation` matrix and its per-frame `update(camera, pixelRatio)`,
+which `SkyNight` otherwise handles.
+
+## Astronomy helpers
+
+The solar model behind the sun and the star field is exported:
+`solarPosition({ timeOfDay, dayOfYear, latitude })` gives the sun's
+`{ elevation, azimuth }` in degrees (azimuth clockwise from north),
+`solarEquatorial({ timeOfDay, dayOfYear })` its right ascension and
+declination in radians, and `localSiderealTime({ timeOfDay, dayOfYear })`
+the right ascension on the meridian, in radians. All take local solar hours.
+`localSiderealTime` uses the same hour angle as `solarPosition`, which is
+what keeps the stars registered to the sun.
 
 ## Your own Milky Way map or catalog
 
@@ -118,7 +145,8 @@ Measured on an M5 Pro, per frame, over the plain cube background:
 The Milky Way lives in the cube, so it only costs anything when the cube
 re-bakes. Moving the time of day re-bakes the cube anyway — that is the sun
 moving — and dominates everything above: see
-`examples/vanilla/16-stars-bench.html` and `scripts/bench-stars.mjs`.
+`examples/vanilla/16-stars-bench.html` and
+`examples/vanilla/scripts/bench-stars.mjs`.
 
 ## Upgrading from 0.3
 

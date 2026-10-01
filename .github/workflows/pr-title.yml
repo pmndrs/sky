@@ -1,0 +1,39 @@
+name: PR title
+
+# PRs are squash-merged, so the PR title becomes the commit on main, and
+# release-please builds the version bump + CHANGELOG.md from those commits.
+# Titles must be Conventional Commits: `feat(haze): …`, `fix: …`, `feat!: …`.
+# feat → minor (pre-1.0: also breaking changes), fix/perf → patch,
+# docs/examples → listed in the changelog, chore/ci/test/build/refactor → hidden.
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional-title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            revert
+            docs
+            examples
+            refactor
+            test
+            build
+            ci
+            chore
+          requireScope: false
+          # One-commit PRs: GitHub suggests the commit message instead of the
+          # PR title for the squash commit; check it too.
+          validateSingleCommit: true

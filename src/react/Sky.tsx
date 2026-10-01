@@ -97,11 +97,10 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  *   `multiScatteringFactor`
  *
  * Aerial-perspective haze post-process: render an `<AutoHaze />` child
- * (imported from `tsl-sky/react/auto-haze`). It calls `useRenderPipeline`
+ * (imported from `@pmndrs/sky/react/auto-haze`). It calls `useRenderPipeline`
  * and assigns the haze composite to `renderPipeline.outputNode`. The
  * separate sub-export keeps `useRenderPipeline` out of this module's
- * import graph, so `<Sky>` works on R3F builds where the hook hasn't
- * shipped yet (e.g. `10.0.0-alpha.2`). For custom pipelines, skip
+ * import graph, so apps that don't use haze never pull it in. For custom pipelines, skip
  * `<AutoHaze />` and call `sky.applyHaze` from your own
  * `useRenderPipeline` callback (use `useSky()` to grab the instance).
  */

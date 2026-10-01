@@ -56,9 +56,9 @@ interface SkyViewLUTOptions {
  * `mieRayPhase=true` and the MS LUT attached, matching the HLSL's
  * `MULTISCATAPPROX_ENABLED` + `MieRayPhase=true` path.
  *
- * View position assumption (phase 1b): viewer sits at ground level,
- * `viewHeight = bottomRadius + PLANET_RADIUS_OFFSET`. Phase 2 will promote this
- * to a camera-world-position uniform when we support non-ground views.
+ * The view height comes from the `viewHeight` uniform, which
+ * `SkyAtmosphereBaker.setCamera()` keeps at the camera's altitude (ground level
+ * until a camera is set).
  *
  * Sampling vs. the reference: the HLSL uses `VariableSampleCount=true`, which
  * does two things — picks 4–14 steps from the ray length, and spaces them

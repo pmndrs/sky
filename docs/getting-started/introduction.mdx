@@ -37,13 +37,23 @@ lookup textures (LUTs) once per sun/atmosphere change, so you get:
 - **`Sky`** — the 90% facade. Construct it, `attach()` it to a scene, call
   `update(camera)` every frame. See [Your First Sky](./your-first-sky).
 - **`applyHaze`** — an opt-in post-process node for aerial-perspective haze
-  on your scene's opaque geometry. See the [Haze guide](../guides/haze).
+  on your scene's opaque geometry, with optional light shafts from a
+  shadow-casting sun. See the [Haze guide](../guides/haze).
+- **Image-based lighting** that keeps up with the sky — `environmentTexture`
+  is re-filtered with WebGPU compute on every sun or atmosphere change
+  (~1 ms on the WebGPU backend). See [Baker: Environment (PMREM) refresh](../api/baker#environment-pmrem-refresh).
+- **Night sky** — resolved stars and the Milky Way, placed from the same
+  time, date and latitude as the sun. See [Night sky](../guides/night-sky).
+- **Stylized looks** — artist colour ramps over the physical sky that the
+  IBL and haze follow. See [Stylized looks](../guides/looks).
 - **Planet-scale support** via `planetCenter` — fly from a few metres off
   the ground to orbit with one continuous atmosphere model. See the
   [Planet-scale guide](../guides/planet-scale).
 - **`SkyAtmosphereBaker`** and the individual LUT classes for power users who
   want to swap pieces or drive the pipeline directly. See the
   [API reference](../api/baker).
+- **React bindings** — `<Sky>`, `<AutoHaze>` and `useSky()` for R3F. See the
+  [React reference](../api/react).
 - Curated atmosphere presets (`earth`, `mars`, `titan`) and full control over
   every Hillaire parameter. See [Tuning the atmosphere](../guides/tuning-atmosphere).
 
@@ -55,6 +65,7 @@ dependency versions and WebGPU browser support notes.
 
 ## Status
 
-Baked sky, aerial-perspective haze, and planet-scale (ground→orbit)
-rendering are all functional today. Volumetric clouds and god-rays are out
-of scope for this library.
+Baked sky, aerial-perspective haze with light shafts, planet-scale
+(ground→orbit) rendering, the night sky, and stylized looks are all
+functional today. Volumetric clouds are out of scope for this library.
+Coming from 0.3? See [Upgrading to 0.4](../guides/upgrading).

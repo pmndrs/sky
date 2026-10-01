@@ -1,59 +1,102 @@
-name: Publish to npm
+name: Release & publish
 
-# Triggered by pushing a `v*` tag (e.g. `v0.1.5`). The tag's commit must match
-# the version in `package.json` — the publish step will fail otherwise.
+# Releases are cut by release-please (see RELEASING.md):
 #
-# Auth: npm Trusted Publishing (OIDC). No NPM_TOKEN secret needed — GitHub
-# Actions exchanges an OIDC token for npm publish credentials at runtime.
-# Configure the trusted publisher on npmjs.com:
+#   1. Every push to main updates one standing "chore: release X.Y.Z" pull
+#      request: version bump in package.json + CHANGELOG.md, generated from
+#      the Conventional Commit titles of the PRs merged since the last release.
+#   2. Merging that PR makes release-please tag vX.Y.Z and create the GitHub
+#      release; the publish job below then builds, tests and publishes to npm.
+#
+# Publishing is gated on the repository variable NPM_PUBLISH_ENABLED == 'true'
+# (Settings → Secrets and variables → Actions → Variables). While it is unset,
+# every path below still builds and tests, then stops before `npm publish`.
+#
+# Manual cut (escape hatch): bump package.json, then `git tag vX.Y.Z && git push
+# --tags`. The tag must match package.json.
+#
+# This must stay ONE workflow file named publish.yml: npm Trusted Publishing
+# (OIDC, no NPM_TOKEN) is configured on npmjs.com for exactly this filename:
 #   @pmndrs/sky → Settings → Publishing → Trusted Publishers
-#   - Publisher: GitHub Actions
-#   - Repository: pmndrs/sky
-#   - Workflow filename: publish.yml
-#
-# Trusted Publishing requires npm CLI 11.5.1+, so we upgrade npm before the
-# publish step (Node 20 ships npm 10.x). We install + build with pnpm (the
-# repo's package manager) and publish the built `dist/` with `npm publish`.
-#
-# Manual cut: `git tag v0.1.5 && git push --tags`.
+#   - Publisher: GitHub Actions · Repository: pmndrs/sky · Workflow: publish.yml
+# Trusted Publishing needs npm CLI 11.5.1+, hence the npm upgrade before publish.
 
 on:
   push:
-    tags:
-      - 'v*'
-  # Manual run from any ref: exercises install/build/test and the
-  # already-published guard without publishing (the guard skips it).
+    branches: [main]
+    tags: ['v*']
+  # Manual run. On a branch: a dry run (install/build/test + registry check).
+  # On a tag ("Use workflow from" → Tags → vX.Y.Z): publishes that tag if the
+  # gate is on, e.g. a release that was tagged while publishing was disabled.
   workflow_dispatch:
 
+# One release pipeline at a time: with a PAT, the tag release-please creates
+# also triggers the tag path; serialised, that run hits the already-published guard.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  release-please:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # tags + GitHub releases + the release branch
+      pull-requests: write # the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          # A PAT / GitHub App token lets CI run on the release PR (PRs opened
+          # with the default GITHUB_TOKEN don't trigger workflows). Optional.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   publish:
+    needs: release-please
+    # Runs for a release-please release, a pushed v* tag, or a manual run. The
+    # release-please job is skipped on tag pushes, hence !cancelled().
+    if: >-
+      !cancelled() && (
+        needs.release-please.outputs.release_created == 'true' ||
+        github.ref_type == 'tag' ||
+        github.event_name == 'workflow_dispatch'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write # required for npm provenance + Trusted Publishing
     steps:
       - uses: actions/checkout@v4
+        with:
+          # For a release-please release, build exactly the tagged commit.
+          ref: ${{ needs.release-please.outputs.tag_name || github.ref }}
 
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           # npm@11 (Trusted Publishing needs >= 11.5.1) supports Node 20/22;
-          # npm@latest (12.x) needs Node >= 22.22, which is why the 0.2.0 tag
-          # run failed on Node 20. Pin both.
+          # npm@latest (12.x) needs Node >= 22.22. Pin both.
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
-      # Sanity check: the version on the tag matches package.json.
+      # The tag being released must match package.json.
       - name: Verify tag matches package.json version
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || needs.release-please.outputs.tag_name != ''
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name || github.ref_name }}
         run: |
           PKG_VERSION="v$(node -p "require('./package.json').version")"
-          if [ "${GITHUB_REF_NAME}" != "${PKG_VERSION}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}" >&2
+          if [ "${TAG}" != "${PKG_VERSION}" ]; then
+            echo "Tag ${TAG} does not match package.json version ${PKG_VERSION}" >&2
             exit 1
           fi
 
@@ -62,8 +105,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
-      # Idempotent: a tag pushed for a version that was already published
-      # (e.g. 0.2.0, published manually) must not fail the run.
+      # Idempotent: a version that is already on the registry is skipped.
       - name: Skip if this version is already on the registry
         id: check
         run: |
@@ -74,9 +116,14 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Publishing disabled (set NPM_PUBLISH_ENABLED=true to enable)
+        if: steps.check.outputs.exists != 'true' && vars.NPM_PUBLISH_ENABLED != 'true'
+        run: |
+          echo "::notice::Built and tested $(node -p "require('./package.json').version"); not publishing because the NPM_PUBLISH_ENABLED repository variable is not 'true'."
+
       # Trusted Publishing (OIDC) needs npm 11.5.1+.
-      - if: steps.check.outputs.exists != 'true'
+      - if: steps.check.outputs.exists != 'true' && vars.NPM_PUBLISH_ENABLED == 'true' && (github.event_name != 'workflow_dispatch' || github.ref_type == 'tag')
         run: npm install -g npm@11
 
-      - if: steps.check.outputs.exists != 'true'
+      - if: steps.check.outputs.exists != 'true' && vars.NPM_PUBLISH_ENABLED == 'true' && (github.event_name != 'workflow_dispatch' || github.ref_type == 'tag')
         run: npm publish --provenance --access public

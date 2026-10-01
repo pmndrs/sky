@@ -1,0 +1,132 @@
+---
+title: Upgrading to 0.4
+description: What changes for existing scenes when moving from @pmndrs/sky 0.3 to 0.4, and how to keep the old behaviour where you need it.
+---
+
+0.4 is mostly new features: per-frame image-based lighting, stars and the
+Milky Way, light shafts, sun colour, and look-track overrides. A few defaults
+and behaviours changed too, and some of them are visible in an existing
+scene. This page lists those, in rough order of how likely you are to notice.
+
+Everything here is pre-1.0, so a minor version can change behaviour; the full
+list of changes is in the [changelog](https://github.com/pmndrs/sky/blob/main/CHANGELOG.md).
+
+## The sky is brighter, and noon no longer whites out
+
+Matching Bruneton's reference sky fixed several things at once: the Sky-View
+LUT samples the horizon more finely, the haze sky mask and ray precision were
+fixed, and the default **ground albedo dropped from 0.3 to 0.1**. The sky is
+brighter overall, by about 15%, and by up to about 40% near a low sun. The
+noon whiteout some scenes had is gone.
+
+- If you tuned `toneMappingExposure` or the sky's exposure around the old,
+  dimmer sky, check it again.
+- To keep the old ground bounce, pass it explicitly:
+  `new Sky(renderer, { groundAlbedo: 0.3 })`.
+
+## Reflections update every frame (and look slightly different on three r185/r186)
+
+On the WebGPU backend, the environment map (`sky.environmentTexture`, the
+image-based lighting for `scene.environment`) is now re-filtered with compute
+shaders on every sky change, in the same frame as the background. Before, it
+was refreshed at most every 250 ms and spread over several frames, so
+reflections lagged a moving sun. It costs about 1 ms per change at the default
+256 cube. See [the PMREM section of the baker docs](../api/baker#environment-pmrem-refresh).
+
+- **three r187+:** the output is identical to three's `PMREMGenerator`.
+- **three r185/r186:** three's generator doesn't filter its levels at the
+  roughness its own material sampler expects. Ours does, which is about 7×
+  closer to the true GGX reflection. Rough metals therefore reflect a softer
+  horizon, and very rough surfaces keep the ground's falloff.
+- **WebGL backend:** unchanged; there's no compute, so three's generator is
+  used as before.
+
+To get the old generator and look back:
+
+```js
+new Sky(renderer, { pmrem: { generator: 'three' } })
+```
+
+`environmentTexture` is still the same texture object from the first bake to
+`dispose()`, so materials don't recompile.
+
+## The live sky mesh draws after opaque geometry
+
+This only affects the live sky mesh from `baker.createSkyMesh()` (used by the
+planet-scale setups); `Sky`'s default background is the baked cube and is
+unchanged. The live sky now draws like a game-engine sky: after the opaque
+geometry, depth-tested at the far plane, without writing depth. Sky
+hidden behind geometry is never shaded, which is faster, and transparent
+objects still draw over it.
+
+If you create your own `SkyAtmosphereMesh`, give it the same order:
+
+```js
+import { SKY_RENDER_ORDER } from '@pmndrs/sky'
+
+mesh.renderOrder = SKY_RENDER_ORDER
+```
+
+If you relied on the sky drawing first (`renderOrder = -1`), for example to
+draw something behind it, move that object to a lower `renderOrder` than
+`SKY_RENDER_ORDER` and give it depth.
+
+## `setTurbidity` is absolute
+
+`setTurbidity(n)` now sets the haze relative to turbidity 1. Before, each call
+scaled relative to the previous value, so repeated calls compounded, and a
+value of 0 could never be recovered from. `setPreset(...)`, or Mie fields
+passed to `setAtmosphere(...)`, reset the turbidity-1 baseline.
+
+If you called `setTurbidity` with ratios to step the haze, pass the absolute
+value you want instead.
+
+## Looks: ramp intensity is display-referred
+
+A look's colour ramp is now multiplied by `1 / renderer.toneMappingExposure`,
+which `Sky.update()` keeps in sync, so at `value: 1` the authored colours
+reach the screen as authored, whatever the sky's exposure. Custom looks that
+use `value > 0` and were tuned against 0.3 may need their `intensity` re-tuned.
+Looks with `value: 0` (chroma only) are unaffected. The built-in Ghibli
+palettes were retuned. See [Stylized looks](./looks).
+
+If you drive `SkyAtmosphereBaker` directly instead of `Sky`, keep
+`baker.lookUniforms.displayScale` in sync with the exposure yourself; see the
+[baker docs](../api/baker).
+
+## Sun colour, and `SkySun` follows it
+
+`sunColor` (an option and `setSunColor('neutral' | 'bruneton' | color)`) tints
+the sky, haze, sun disc and `createSun()` lights together. The default is a
+white sun, as before.
+
+A `SkySun` light's colour is now `baseColor × the sky's sun colour`, so the
+next `setSunColor` overwrites anything assigned to `sun.light.color` directly.
+Set your colour with `sun.setColor(...)` instead.
+
+## Haze setters work before `applyHaze`
+
+`setHazeStrength`, `setHazePolicy`, `setHazeAltitudeBlend` and the new
+`setHazeShadows` can be called before `applyHaze()`; `applyHaze()` adopts the
+current values. Before, they were silently ignored until haze was wired, so
+code that set them first and wired haze later now gets the values it asked
+for.
+
+## React: object props compare by value
+
+`<Sky>` props such as `sunDirection`, `groundAlbedo` or colours are compared
+by value, so writing them inline (a new object every render) no longer
+re-bakes the sky every render. Nothing to change; inline objects are fine now.
+
+## Deprecated atmosphere fields
+
+The `ozone*` and `sunIlluminance` fields of the atmosphere params are
+`@deprecated`: no shader reads them, so setting them has no effect.
+`sunAngularRadius` now resizes the sun disc.
+
+## three.js r187
+
+0.3 failed to load against three's unreleased r187 (`dev`), because it
+imported an export r187 removed. 0.4 loads on it, and the per-frame IBL
+supports both PMREM formats: r185/r186's CubeUV atlas and r187's cube mips.
+CI tests against r185.

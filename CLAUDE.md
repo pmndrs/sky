@@ -39,8 +39,11 @@ _per unit sun illuminance_ — raw values are 0.001-0.04 and render as black
 without scaling. `SkyAtmosphereMesh.luminanceScale` (default 40) multiplies
 the SkyView sample at composite time. The standalone LUT debug pages
 (`examples/11`, `12`) apply the same 40× factor in their display shaders.
-This scale is currently tuned by eye; eventually it should be derived from
-a physical sun-illuminance constant.
+The LUT values themselves are physical: at `luminanceScale = 1` with
+Bruneton's solar spectrum the open sky matches his reference within ±5%
+(research/bruneton-audit-2026-09-26.md, finding 5). So 40 is a display
+convention, i.e. an exposure knob, not a missing physical constant; deriving it
+from ~120 000 lux would only move the scale into `toneMappingExposure`.
 
 ### Y-up world / Z-up LUT-frame coordinate dance
 

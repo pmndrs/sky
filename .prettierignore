@@ -13,3 +13,6 @@ examples/vanilla/sebh/generated/
 # PMREM lab: fetched three sources and sky captures.
 research/pmrem-lab/three/
 research/pmrem-lab/captures/
+
+# pmndrs/docs CLI output
+/out/

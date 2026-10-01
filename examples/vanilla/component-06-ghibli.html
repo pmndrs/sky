@@ -883,16 +883,22 @@
 
       // -----------------------------------------------------------------
       // Lighting — sun DirectionalLight tracking the sky's sun via SkySun,
-      // *scaled to zero below the horizon* (SkySun itself only points the
-      // light along the sun ray; it doesn't fade intensity, so left alone
-      // it keeps "shining" up through the ground at night). A weak cool
+      // *scaled to zero below the horizon* by a stylised ramp written to
+      // `sun.light.intensity` below (−2°..6°, wider than SkySun's own fade,
+      // which only covers the disc setting; `horizonFade: false` hands the
+      // intensity over to this ramp). A weak cool
       // moonlight + a small hemisphere fill take over once the sun fades,
       // so night reads as deep navy sky / silhouetted hills / dim blue
       // foliage rather than a fully black scene or a still-lit hero tree.
       // -----------------------------------------------------------------
 
       const SUN_BASE_INTENSITY = 3.4
-      const sun = sky.createSun({ intensity: SUN_BASE_INTENSITY, distance: 60000, castShadow: false })
+      const sun = sky.createSun({
+        intensity: SUN_BASE_INTENSITY,
+        horizonFade: false,
+        distance: 60000,
+        castShadow: false,
+      })
       sun.attach(scene)
 
       const moon = new THREE.DirectionalLight(0x8fa4d9, 0)

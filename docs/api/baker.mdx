@@ -220,6 +220,16 @@ clone if you keep it).
 `SkySun`/`SkyMoon` use this to keep their `DirectionalLight`s in lockstep
 without per-frame polling. Returns an unsubscribe function.
 
+### `addBakeListener(fn)`
+
+Subscribe to cube re-bakes — `fn()` fires at the end of every `update()`
+that re-baked the cube, i.e. after any change to what the sky shows: sun,
+atmosphere, exposure (`luminanceScale`, through `markCubeDirty`), sun colour,
+look, or a camera move large enough to change the baked sky (100 m, or 2 % of
+the altitude). Read whatever you need from the baker in the callback. A
+physical `SkySun` uses it to follow the exposure, atmosphere and altitude
+without per-frame work. Returns an unsubscribe function.
+
 ## Atmosphere
 
 ### `setAtmosphereParams(partial)`

@@ -24,6 +24,7 @@ import {
   materialColor,
 } from 'three/tsl'
 import { Sky } from '@pmndrs/sky'
+import { transmittanceToSun } from '@sky/core/sunTransmittance'
 import { SOLAR_IRRADIANCE, SOLAR_RADIANCE_G, BRUNETON_GROUND_ALBEDO } from './bruneton-side.js'
 
 const KM = 1000
@@ -32,39 +33,6 @@ export const TONE_MODES = { bruneton: 0, aces: 1, agx: 2, neutral: 3 }
 // Z-up (Bruneton's frame) → Y-up (three): (x, y, z) ↦ (x, z, −y). A proper
 // rotation, applied to camera, up vector and sun alike, so nothing is mirrored.
 export const zupToYup = ([x, y, z], s = 1) => new THREE.Vector3(x * s, z * s, -y * s)
-
-// CPU twin of the Transmittance LUT integration (40 steps, 0.3 offset) — sun-ray
-// transmittance from the surface, for the DirectionalLight tint.
-export function transmittanceToSun(altKm, cosZenith, p) {
-  const r0 = p.bottomRadius + altKm
-  const b = 2 * r0 * cosZenith
-  const discTop = b * b - 4 * (r0 * r0 - p.topRadius * p.topRadius)
-  if (discTop < 0) return [0, 0, 0]
-  const discGround = b * b - 4 * (r0 * r0 - p.bottomRadius * p.bottomRadius)
-  if (discGround >= 0 && (-b - Math.sqrt(discGround)) / 2 > 0) return [0, 0, 0]
-  const tTop = (-b + Math.sqrt(discTop)) / 2
-  const sinZ = Math.sqrt(Math.max(0, 1 - cosZenith * cosZenith))
-  const od = [0, 0, 0]
-  let tPrev = 0
-  for (let i = 0; i < 40; i++) {
-    const t = (tTop * (i + 0.3)) / 40
-    const dt = t - tPrev
-    tPrev = t
-    const h = Math.hypot(t * sinZ, r0 + t * cosZenith) - p.bottomRadius
-    const dm = Math.exp(p.mieDensityExpScale * h)
-    const dr = Math.exp(p.rayleighDensityExpScale * h)
-    const o =
-      h < p.absorptionDensity0LayerWidth
-        ? p.absorptionDensity0LinearTerm * h + p.absorptionDensity0ConstantTerm
-        : p.absorptionDensity1LinearTerm * h + p.absorptionDensity1ConstantTerm
-    const dz = Math.min(1, Math.max(0, o))
-    for (let k = 0; k < 3; k++) {
-      const key = 'xyz'[k]
-      od[k] += (p.mieExtinction[key] * dm + p.rayleighScattering[key] * dr + p.absorptionExtinction[key] * dz) * dt
-    }
-  }
-  return od.map((v) => Math.exp(-v))
-}
 
 /**
  * @param {THREE.WebGPURenderer} renderer initialised

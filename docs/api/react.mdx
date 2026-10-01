@@ -124,7 +124,7 @@ the other.
 
 | Prop                 | Type                                                               | Default     | Cost        | Notes                                                                                                                        |
 | -------------------- | ------------------------------------------------------------------ | ----------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `exposure`           | `number`                                                           | `40`        | Uniform     | Sky luminance scale; see the [`ILLUMINANCE_IS_ONE` note](./luts).                                                            |
+| `exposure`           | `number`                                                           | `40`        | Cube rebake | Sky luminance scale; see the [`ILLUMINANCE_IS_ONE` note](./luts).                                                            |
 | `sunDisc`            | `boolean`                                                          | `true`      | Uniform     | Show the in-shader sun disc.                                                                                                 |
 | `sunColor`           | `'neutral' \| 'bruneton' \| string \| Color \| Vector3 \| [r,g,b]` | `'neutral'` | Cube rebake | Colour of the sun as a light. Tints the sky, haze, sun disc and `createSun` lights. Hex strings are sRGB; arrays are linear. |
 | `skyLuminanceFactor` | `string \| Color \| Vector3 \| [r,g,b]`                            | white       | Cube rebake | Unreal `SkyLuminanceFactor`: per-channel grade on the sky after any look. Haze inherits it.                                  |

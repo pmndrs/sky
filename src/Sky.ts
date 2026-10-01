@@ -368,8 +368,15 @@ export class Sky {
     return this
   }
 
+  /**
+   * Sky luminance scale. The cube background and IBL bake the sky mesh with
+   * this uniform, so a change re-bakes them; the same value is free.
+   */
   setExposure(value: number) {
-    this.baker.sky.luminanceScale.value = value
+    const scale = this.baker.sky.luminanceScale
+    if (scale.value === value) return this
+    scale.value = value
+    this.baker.markCubeDirty()
     return this
   }
 

@@ -98,13 +98,13 @@ A change of `<Canvas>` renderer or scene also rebuilds.
 
 ### Time and place
 
-| Prop           | Type                           | Default | Cost       | Notes                                                                                              |
-| -------------- | ------------------------------ | ------- | ---------- | -------------------------------------------------------------------------------------------------- |
-| `timeOfDay`    | `number`                       | `12`    | Sun rebake | Hours, `0..24`. Sun position from NOAA solar math with `latitude` + `dayOfYear`.                   |
-| `latitude`     | `number`                       | `37.7`  | Sun rebake | Degrees.                                                                                           |
-| `dayOfYear`    | `number`                       | `172`   | Sun rebake | `1..365`.                                                                                          |
-| `sunDirection` | `{ elevation, azimuth, raw? }` | —       | Sun rebake | Degrees. Bypasses the solar-position math. `azimuth` is clockwise from `north` unless `raw: true`. |
-| `north`        | `'+X' \| '-X' \| '+Z' \| '-Z'` | `'+Z'`  | Sun rebake | World axis treated as geographic north.                                                            |
+| Prop           | Type                                      | Default | Cost       | Notes                                                                                              |
+| -------------- | ----------------------------------------- | ------- | ---------- | -------------------------------------------------------------------------------------------------- |
+| `timeOfDay`    | `number`                                  | `12`    | Sun rebake | Hours, `0..24`. Sun position from NOAA solar math with `latitude` + `dayOfYear`.                   |
+| `latitude`     | `number`                                  | `37.7`  | Sun rebake | Degrees.                                                                                           |
+| `dayOfYear`    | `number`                                  | `172`   | Sun rebake | `1..365`.                                                                                          |
+| `sunDirection` | `{ elevation, azimuth, raw? }`            | —       | Sun rebake | Degrees. Bypasses the solar-position math. `azimuth` is clockwise from `north` unless `raw: true`. |
+| `north`        | `'+X' \| '-X' \| '+Z' \| '-Z'` \| degrees | `'+Z'`  | Sun rebake | Where geographic north points: an axis, or a heading clockwise from +Z seen from above.            |
 
 `sunDirection` and the solar inputs both set the sun, and whichever changed
 last wins. On mount `sunDirection` wins; a later change to `timeOfDay`,

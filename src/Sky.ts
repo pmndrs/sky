@@ -8,6 +8,7 @@ import { SkyMoon } from './sky/SkyMoon'
 import { SkyNight } from './sky/SkyNight'
 import { celestialOrientation } from './sky/stars/celestial'
 import { SkySun } from './sky/SkySun'
+import { compassToTheta, northHeading } from './sky/compass'
 import { mergeAtmosphereParams } from './core/AtmosphereParams'
 import { LUT_RESOLUTIONS } from './core/resolutions'
 import { presets, resolvePreset } from './presets'
@@ -25,6 +26,9 @@ import { createFogState, updateFogState } from './sky/FogPostProcess'
 import type { FogOptions, FogState } from './sky/FogPostProcess'
 
 import type { SkyNightOptions } from './sky/SkyNight'
+import type { SkyNorth } from './sky/compass'
+
+export type { SkyNorth }
 
 /** Per-track scalar overrides for `Sky.setLookTrack`. */
 export interface LookTrackOverrides {
@@ -39,7 +43,7 @@ interface SkyOptions {
   cubeSize?: number
   atmosphere?: any
   exposure?: number
-  north?: string
+  north?: SkyNorth
   sunDisc?: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number }
   timeOfDay?: number
   latitude?: number
@@ -84,20 +88,6 @@ const QUALITY_PRESETS: Record<string, any> = {
   },
 }
 
-/**
- * North axis aliases. Each entry is the world-space direction the user wants
- * to be treated as "geographic north" — solar azimuth (CW-from-N) is rotated
- * onto that axis when computing the sun direction.
- */
-const NORTH_AXES: Record<string, { vector: Vector3; offsetDeg: number }> = {
-  '+X': { vector: new Vector3(1, 0, 0), offsetDeg: 90 },
-  '-X': { vector: new Vector3(-1, 0, 0), offsetDeg: -90 },
-  '+Z': { vector: new Vector3(0, 0, 1), offsetDeg: 0 },
-  // Three.js default. North = +Z means azimuth=0 (N) maps onto +Z; baker's
-  // `setSun(azimuth)` treats theta=0 as +Z (sphericalCoords convention).
-  '-Z': { vector: new Vector3(0, 0, -1), offsetDeg: 180 },
-}
-
 /** Lifecycle state. `detached` ⇄ `attached` while live; `disposed` is terminal. */
 export type SkyState = 'detached' | 'attached' | 'disposed'
 
@@ -118,7 +108,8 @@ export class Sky {
   _latitude: number
   _dayOfYear: number
   _turbidity: number
-  _northKey: string
+  /** Heading of geographic north, degrees clockwise from +Z seen from above. */
+  _north: number
   _elevation!: number
   _azimuth!: number
   /** Whether the last `setSunDirection` bypassed the north rotation. */
@@ -144,6 +135,8 @@ export class Sky {
   /** Height-fog knobs, created by `applyFog` or `setFog`. */
   _fog?: FogState
   _night?: SkyNight
+  /** Called after `setNorth` changes the heading (a manual `SkyMoon` re-places itself). */
+  _northListeners = new Set<() => void>()
 
   constructor(
     renderer: any,
@@ -198,7 +191,7 @@ export class Sky {
     this._latitude = latitude
     this._dayOfYear = dayOfYear
     this._turbidity = turbidity ?? 1.0
-    this._northKey = NORTH_AXES[north] ? north : '+Z'
+    this._north = northHeading(north) ?? 0
 
     this.setExposure(exposure)
     this.setSunDisc(sunDisc)
@@ -233,6 +226,11 @@ export class Sky {
 
   get sunAzimuth() {
     return this._azimuth
+  }
+
+  /** Heading of geographic north in degrees, clockwise from +Z seen from above (see `SkyNorth`). */
+  get north() {
+    return this._north
   }
 
   get state(): SkyState {
@@ -295,15 +293,16 @@ export class Sky {
    * Direct sun control. Bypasses solar-position math; useful for cinematic
    * lighting or alien-planet tuning where civil time is meaningless.
    *
-   * `azimuth` is degrees CW from the configured `north` axis. Pass
-   * `{ elevation, azimuth, raw: true }` to skip the north-rotation and
-   * feed the baker raw spherical-coord theta directly.
+   * `azimuth` is a compass azimuth: degrees clockwise from the configured
+   * `north` (90 = east). Pass `{ elevation, azimuth, raw: true }` to skip
+   * north and feed the baker's raw spherical-coord theta directly (degrees
+   * from +Z toward +X).
    */
   setSunDirection({ elevation, azimuth, raw = false }: { elevation: number; azimuth: number; raw?: boolean }) {
     this._elevation = elevation
     this._azimuth = azimuth
     this._sunRaw = raw
-    const theta = raw ? azimuth : azimuth + (NORTH_AXES[this._northKey]?.offsetDeg ?? 0)
+    const theta = raw ? azimuth : compassToTheta(azimuth, this._north)
     this.baker.setSun({ elevation, azimuth: theta })
     // Every sun path — setTimeOfDay, setLatitude, setDayOfYear, setNorth —
     // funnels through here, so this is the one place a track needs to
@@ -362,15 +361,23 @@ export class Sky {
     )
   }
 
-  setNorth(axis: string) {
-    if (NORTH_AXES[axis]) {
-      this._northKey = axis
-      // Re-emit the current azimuth through the new offset — unless the last
-      // sun was set `raw`, in which case there is no offset to apply.
-      this.setSunDirection({ elevation: this._elevation, azimuth: this._azimuth, raw: this._sunRaw })
-      this._refreshStarOrientation()
-    }
-
+  /**
+   * Where geographic north points in the world: `'+X' | '-X' | '+Z' | '-Z'`,
+   * or a heading in degrees clockwise from +Z seen from above (see
+   * `SkyNorth`). Turns the whole sky — the sun from `setTimeOfDay` or a
+   * compass `setSunDirection`, the stars, the Milky Way and a manually placed
+   * `SkyMoon` — so it can be set once to match a site plan. A `raw` sun
+   * direction stays where it is.
+   */
+  setNorth(north: SkyNorth) {
+    const heading = northHeading(north)
+    if (heading === null || heading === this._north) return this
+    this._north = heading
+    // Re-emit the current azimuth through the new heading — unless the last
+    // sun was set `raw`, in which case there is no north to apply.
+    this.setSunDirection({ elevation: this._elevation, azimuth: this._azimuth, raw: this._sunRaw })
+    this._refreshStarOrientation()
+    for (const fn of this._northListeners) fn()
     return this
   }
 
@@ -795,7 +802,7 @@ export class Sky {
       {
         latitude: this._latitude,
         siderealTime: localSiderealTime({ timeOfDay: this._timeOfDay, dayOfYear: this._dayOfYear }),
-        northOffsetDeg: NORTH_AXES[this._northKey]?.offsetDeg ?? 0,
+        northHeading: this._north,
       },
       _orientation,
     )
@@ -827,6 +834,7 @@ export class Sky {
     this._apDistanceScale = null
     this._hazeApplied = false
     this._fog = undefined
+    this._northListeners.clear()
   }
 
   _refreshSunFromTime() {

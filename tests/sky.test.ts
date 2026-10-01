@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { Color, Scene } from 'three/webgpu'
+import { Color, PerspectiveCamera, Scene, Vector3 } from 'three/webgpu'
 
 import { Sky } from '../src/Sky'
 import { looks } from '../src/looks'
@@ -112,6 +112,69 @@ describe('Sky', () => {
     expect(p.mieScattering.x).toBeCloseTo(0.008, 12)
     expect(p.mieExtinction.x).toBeCloseTo(ext * 2, 12)
     expect(p.mieAbsorption.x).toBeCloseTo(abs * 2, 12)
+    sky.dispose()
+  })
+
+  it('puts an east sun on the right of a camera facing north', () => {
+    const sky = new Sky(mockRenderer())
+    sky.setSunDirection({ elevation: 0, azimuth: 90 })
+    const camera = new PerspectiveCamera()
+    camera.lookAt(0, 0, 1) // default north is +Z
+    camera.updateMatrixWorld()
+    const right = new Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+    expect(sky.baker._sunVec.dot(right)).toBeCloseTo(1, 6)
+    // Morning sun is in the east, evening sun in the west.
+    sky.setTimeOfDay(8)
+    expect(sky.baker._sunVec.dot(right)).toBeGreaterThan(0.5)
+    sky.setTimeOfDay(16)
+    expect(sky.baker._sunVec.dot(right)).toBeLessThan(-0.5)
+    sky.dispose()
+  })
+
+  it('setNorth takes a heading in degrees, clockwise from +Z seen from above', () => {
+    const sky = new Sky(mockRenderer(), { timeOfDay: 15 })
+    const at0 = sky.baker._sunVec.clone()
+    sky.setNorth(30)
+    expect(sky.north).toBe(30)
+    // Clockwise seen from above is a negative rotation about +Y.
+    const expected = at0.clone().applyAxisAngle(new Vector3(0, 1, 0), (-30 * Math.PI) / 180)
+    expect(sky.baker._sunVec.distanceTo(expected)).toBeLessThan(1e-9)
+    // The axis aliases are the same headings.
+    const aliases: [string, number][] = [
+      ['-X', 90],
+      ['-Z', 180],
+      ['+X', 270],
+      ['+Z', 0],
+    ]
+    for (const [axis, heading] of aliases) {
+      sky.setNorth(axis as any)
+      const fromAxis = sky.baker._sunVec.clone()
+      sky.setNorth(heading)
+      expect(sky.baker._sunVec.distanceTo(fromAxis)).toBeLessThan(1e-9)
+    }
+    // Time of day keeps the heading: no re-application needed.
+    sky.setNorth(30)
+    sky.setTimeOfDay(9)
+    const at9 = new Sky(mockRenderer(), { timeOfDay: 9 })
+    const turned = at9.baker._sunVec.clone().applyAxisAngle(new Vector3(0, 1, 0), (-30 * Math.PI) / 180)
+    expect(sky.baker._sunVec.distanceTo(turned)).toBeLessThan(1e-9)
+    at9.dispose()
+    // Invalid values are ignored.
+    sky.setNorth(NaN)
+    sky.setNorth('north' as any)
+    expect(sky.north).toBe(30)
+    sky.dispose()
+  })
+
+  it('a manually placed moon uses compass azimuth and turns with north', () => {
+    const sky = new Sky(mockRenderer())
+    const moon = sky.createMoon()
+    moon.setDirection({ elevation: 0, azimuth: 90 })
+    expect(moon._moonVec.x).toBeCloseTo(-1, 9) // east, with north +Z
+    sky.setNorth('-X')
+    expect(moon._moonVec.z).toBeCloseTo(-1, 9) // east of a −X north is −Z
+    moon.dispose()
+    expect(sky._northListeners.size).toBe(0)
     sky.dispose()
   })
 

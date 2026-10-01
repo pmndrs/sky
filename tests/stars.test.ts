@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { DataUtils, Matrix3, PerspectiveCamera, Scene, Vector3 } from 'three/webgpu'
 
 import { Sky } from '../src/Sky'
+import { compassToTheta } from '../src/sky/compass'
 import { SkyStars } from '../src/sky/SkyStars'
 import { generateStarCatalog } from '../src/sky/stars/catalog'
 import {
@@ -36,10 +37,10 @@ function mockRenderer(): any {
   }
 }
 
-// The sun as the baker builds it: azimuth clockwise from north, rotated onto
-// the configured north axis.
-function sunWorld(elevation: number, azimuth: number, northOffsetDeg: number) {
-  return new Vector3().setFromSphericalCoords(1, (90 - elevation) * DEG, (azimuth + northOffsetDeg) * DEG)
+// The sun as Sky builds it: compass azimuth (clockwise from north) under a
+// north heading (clockwise from +Z).
+function sunWorld(elevation: number, azimuth: number, northHeading: number) {
+  return new Vector3().setFromSphericalCoords(1, (90 - elevation) * DEG, compassToTheta(azimuth, northHeading) * DEG)
 }
 
 describe('celestial frames', () => {
@@ -52,7 +53,7 @@ describe('celestial frames', () => {
   })
 
   it('worldToGalactic inverts the orientation for the galactic centre', () => {
-    const orientation = celestialOrientation({ latitude: 30, siderealTime: 1.3, northOffsetDeg: 90 })
+    const orientation = celestialOrientation({ latitude: 30, siderealTime: 1.3, northHeading: 90 })
     const centreWorld = galacticToEquatorial(0, 0).applyMatrix4(orientation)
     const g = centreWorld.applyMatrix3(worldToGalactic(orientation, new Matrix3()))
     expect(g.x).toBeCloseTo(1, 6)
@@ -69,6 +70,7 @@ describe('celestial frames', () => {
     { latitude: -33.9, dayOfYear: 300, timeOfDay: 17, north: 180 },
     { latitude: 64, dayOfYear: 355, timeOfDay: 12.5, north: 90 },
     { latitude: 5, dayOfYear: 80, timeOfDay: 6.2, north: -90 },
+    { latitude: 51.5, dayOfYear: 120, timeOfDay: 19.75, north: 37.5 },
   ]
   for (const c of cases) {
     it(`registers the sun (lat ${c.latitude}, day ${c.dayOfYear}, ${c.timeOfDay}h, north ${c.north})`, () => {
@@ -77,13 +79,41 @@ describe('celestial frames', () => {
       const orientation = celestialOrientation({
         latitude: c.latitude,
         siderealTime: localSiderealTime(c),
-        northOffsetDeg: c.north,
+        northHeading: c.north,
       })
       const fromStars = equatorialVector(rightAscension, declination).applyMatrix4(orientation)
       const errDeg = fromStars.angleTo(sunWorld(elevation, azimuth, c.north)) / DEG
       expect(errDeg).toBeLessThan(0.5)
     })
   }
+})
+
+describe('celestial handedness', () => {
+  // Facing north, east is on the right; for three's Y-up frame with north +Z
+  // that is −X. A mirrored frame passes the registration tests above (sun and
+  // stars mirrored together), so check rising and the pole explicitly.
+  it('a star on the celestial equator rises due east (−X with north +Z)', () => {
+    const siderealTime = 2.1
+    const orientation = celestialOrientation({ latitude: 40, siderealTime })
+    // Hour angle −6 h: α = θ + 90°.
+    const rising = equatorialVector(siderealTime + Math.PI / 2, 0).applyMatrix4(orientation)
+    expect(rising.x).toBeCloseTo(-1, 6)
+    expect(rising.y).toBeCloseTo(0, 6)
+    const setting = equatorialVector(siderealTime - Math.PI / 2, 0).applyMatrix4(orientation)
+    expect(setting.x).toBeCloseTo(1, 6)
+  })
+
+  it('puts the celestial pole due north at the latitude, and turns with the heading', () => {
+    const pole = new Vector3(0, 1, 0)
+    const p = pole.clone().applyMatrix4(celestialOrientation({ latitude: 40, siderealTime: 0.7 }))
+    expect(Math.asin(p.y) / DEG).toBeCloseTo(40, 6)
+    expect(p.x).toBeCloseTo(0, 6)
+    expect(p.z).toBeGreaterThan(0)
+    // Heading 90 (clockwise from +Z, seen from above) puts north on −X.
+    const q = pole.applyMatrix4(celestialOrientation({ latitude: 40, siderealTime: 0.7, northHeading: 90 }))
+    expect(q.x).toBeLessThan(0)
+    expect(q.z).toBeCloseTo(0, 6)
+  })
 })
 
 describe('star catalog', () => {

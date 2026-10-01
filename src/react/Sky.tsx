@@ -15,7 +15,7 @@ import { useFrame, useThree } from '@react-three/fiber/webgpu'
 import { Sky as VanillaSky } from '../Sky'
 import type { SkyPmremOptions } from '../sky/pmrem/SkyPmrem'
 import type { FogOptions } from '../sky/FogPostProcess'
-import type { LookTrackOverrides } from '../Sky'
+import type { LookTrackOverrides, SkyNorth } from '../Sky'
 import { SkyContext } from './SkyContext'
 import { useStableValue } from './useStableValue'
 
@@ -30,7 +30,8 @@ export interface SkyProps {
   pmrem?: SkyPmremOptions
   mirrorBelowHorizon?: boolean
   exposure?: number
-  north?: any
+  /** Where geographic north points: a world axis or a heading in degrees clockwise from +Z (see `SkyNorth`). */
+  north?: SkyNorth
   sunDisc?: boolean
   timeOfDay?: number
   latitude?: number

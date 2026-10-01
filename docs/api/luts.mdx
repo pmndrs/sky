@@ -76,6 +76,14 @@ storing accumulated in-scattered luminance (RGB) and transmittance (alpha).
 Consumed by the [haze post-process](../guides/haze), not by the sky mesh
 itself.
 
+The step count follows the slice, as in Hillaire's reference: `2 · (slice + 1)`
+steps, so 2 for the nearest slice and 64 for the farthest. The steps are equal
+segments covering the whole froxel ray. Hillaire's uniform stepping ends at
+its last sample, so it integrates only `(N − 0.7)/N` of the ray: at 2 steps
+that drops 35 % of the nearest slice. Against a 2048-step integral, the
+volume's mean in-scatter error is about 0.5 %; the fixed 30 uniform steps it
+replaced read about 2–3 % low in every slice and up to 5–7 % in the far ones.
+
 Re-renders every frame (`baker.updateAerialPerspective()`) — its content is
 camera-transform-dependent, so it sits outside the dirty-flag system that
 governs the other three LUTs.

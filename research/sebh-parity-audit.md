@@ -16,18 +16,18 @@ that SebH's depth gate excludes.
 
 ## Stage-by-stage comparison
 
-| Stage                                        | SebH reference                                                                                                                                                                                         | Ours                                                                                               | Verdict                                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transmittance LUT                            | 256×64, 40 samples (`RenderTransmittanceLutPS`, RenderSkyRayMarching.hlsl:563)                                                                                                                         | 256×64, 40 samples                                                                                 | ✅ parity                                                                                                                                                         |
-| MultiScatter LUT                             | 32×32, 8² = 64 directions × 20-sample march, groupshared reduction (`NewMultiScattCS`, :438-470)                                                                                                       | 32×32, 8² × 20                                                                                     | ✅ parity (we loop 64 dirs per thread instead of a 64-thread reduction — irrelevant, rebuilt only on atmosphere change)                                           |
-| Sky-View LUT                                 | 192×108, **variable SPP**: `lerp(RayMarchMinMaxSPP.x, .y, saturate(tMax*0.01))`, demo defaults **4–14** (Game.h:341) — the `SampleCountIni = 30` at :626 is overridden by `VariableSampleCount = true` | 192×108, **fixed 30**                                                                              | ⚠️ we use 2–7× more samples than the reference. Quality headroom, small absolute cost (20k texels; and post-`01cfac1` only rebuilt when height/sun-frame changes) |
-| AP froxel volume                             | 32×32×32, per-slice SPP = `max(1, 2·(slice+1))` → 2…64, mean ≈ 33 (:707)                                                                                                                               | 32×32×32, fixed 30                                                                                 | ✅ rough parity on mean; his near slices are cheaper, far slices costlier. Optional refinement: scale SPP with `fz`                                               |
-| Sky pixels (fast path)                       | `FASTSKY`: depth == 1 → single Sky-View LUT sample, early return (:318-341)                                                                                                                            | Sky mesh samples Sky-View LUT per pixel; haze pass passes sky through (isSky gate since `01cfac1`) | ✅ parity                                                                                                                                                         |
-| Geometry haze (fast path)                    | `FASTAERIALPERSPECTIVE`: one AP volume sample, `w = sqrt(slice/32)` (:345-373)                                                                                                                         | Same LUT sample + `.level(0)` (needed on WebGPU, see CLAUDE.md)                                    | ✅ parity                                                                                                                                                         |
-| Per-pixel raymarch (ground truth / fallback) | Variable **4–14 SPP** + per-pixel noise                                                                                                                                                                | **64 fixed** + uv-hash jitter (haze fallback); 30 fixed (mesh space-view fallback)                 | ⚠️ we spend 4–16× the reference. Deliberate (kills banding on 1000 km grazing rays at 1024 km coverage vs his 128 km) — now tunable via `raymarchSampleCount`     |
-| Transmittance in composite                   | Mean (scalar alpha) in fast path; per-channel behind `COLORED_TRANSMITTANCE` (off by default)                                                                                                          | Mean (scalar alpha)                                                                                | ✅ parity with his shipping config                                                                                                                                |
-| Underground froxel correction                | Yes (:668-680)                                                                                                                                                                                         | Yes (ported)                                                                                       | ✅                                                                                                                                                                |
-| Illuminance                                  | `globalL = 1` in LUTs, scaled at composite                                                                                                                                                             | Same (`luminanceScale`, default 40, eye-tuned)                                                     | ✅ structural parity; deriving from a physical sun-illuminance constant is still an open polish task                                                              |
+| Stage                                        | SebH reference                                                                                                                                                                                         | Ours                                                                                               | Verdict                                                                                                                                                                                                                                       |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transmittance LUT                            | 256×64, 40 samples (`RenderTransmittanceLutPS`, RenderSkyRayMarching.hlsl:563)                                                                                                                         | 256×64, 40 samples                                                                                 | ✅ parity                                                                                                                                                                                                                                     |
+| MultiScatter LUT                             | 32×32, 8² = 64 directions × 20-sample march, groupshared reduction (`NewMultiScattCS`, :438-470)                                                                                                       | 32×32, 8² × 20                                                                                     | ✅ parity (we loop 64 dirs per thread instead of a 64-thread reduction — irrelevant, rebuilt only on atmosphere change)                                                                                                                       |
+| Sky-View LUT                                 | 192×108, **variable SPP**: `lerp(RayMarchMinMaxSPP.x, .y, saturate(tMax*0.01))`, demo defaults **4–14** (Game.h:341) — the `SampleCountIni = 30` at :626 is overridden by `VariableSampleCount = true` | 192×108, **fixed 30**                                                                              | ⚠️ we use 2–7× more samples than the reference. Quality headroom, small absolute cost (20k texels; and post-`01cfac1` only rebuilt when height/sun-frame changes)                                                                             |
+| AP froxel volume                             | 32×32×32, per-slice SPP = `max(1, 2·(slice+1))` → 2…64, mean ≈ 33 (:707)                                                                                                                               | 32×32×32, per-slice `2·(slice+1)` as equal segments over the whole ray (2026-10-01; was fixed 30)  | ✅ his counts; his uniform stepping integrates only (N − 0.7)/N of each ray (35 % short at slice 0), so ours spans the full ray. See "Sample counts revisited"                                                                                |
+| Sky pixels (fast path)                       | `FASTSKY`: depth == 1 → single Sky-View LUT sample, early return (:318-341)                                                                                                                            | Sky mesh samples Sky-View LUT per pixel; haze pass passes sky through (isSky gate since `01cfac1`) | ✅ parity                                                                                                                                                                                                                                     |
+| Geometry haze (fast path)                    | `FASTAERIALPERSPECTIVE`: one AP volume sample, `w = sqrt(slice/32)` (:345-373)                                                                                                                         | Same LUT sample + `.level(0)` (needed on WebGPU, see CLAUDE.md)                                    | ✅ parity                                                                                                                                                                                                                                     |
+| Per-pixel raymarch (ground truth / fallback) | Variable **4–14 SPP** + per-pixel noise                                                                                                                                                                | **64 fixed** + uv-hash jitter (haze fallback); 30 fixed (mesh space-view fallback)                 | ⚠️ we spend 4–16× the reference. Deliberate (kills banding on 1000 km grazing rays at 1024 km coverage vs his 128 km) — now tunable via `raymarchSampleCount`. Variable SPP measured and declined (2026-10-01): see "Sample counts revisited" |
+| Transmittance in composite                   | Mean (scalar alpha) in fast path; per-channel behind `COLORED_TRANSMITTANCE` (off by default)                                                                                                          | Mean (scalar alpha)                                                                                | ✅ parity with his shipping config                                                                                                                                                                                                            |
+| Underground froxel correction                | Yes (:668-680)                                                                                                                                                                                         | Yes (ported)                                                                                       | ✅                                                                                                                                                                                                                                            |
+| Illuminance                                  | `globalL = 1` in LUTs, scaled at composite                                                                                                                                                             | Same (`luminanceScale`, default 40, eye-tuned)                                                     | ✅ structural parity; deriving from a physical sun-illuminance constant is still an open polish task                                                                                                                                          |
 
 ### Take-aways
 
@@ -36,13 +36,62 @@ that SebH's depth gate excludes.
    or better sample counts.
 2. **The cheap wins are all about scaling counts down, not up**:
    - Variable SPP in the haze raymarch fallback (`lerp(min, max,
-saturate(distKm/100))`) is SebH's exact trick and would cut the
-     worst-case fallback cost ~4× at short range with zero quality loss.
-     Candidate follow-up; `raymarchSampleCount` (2026-08-10) is the manual
-     version.
+saturate(distKm/100))`) is SebH's exact trick. Measured 2026-10-01 and
+     not adopted: it only pays on rays under 100 km, which the default
+     policies never raymarch, and costs ~5 % where they do (see "Sample
+     counts revisited"). `raymarchSampleCount` (2026-08-10) stays the
+     manual knob.
    - Sky-View LUT could take variable SPP too (4–14) if its rebuild ever
      shows up in a profile — post-`01cfac1` it usually doesn't rebuild at
      all in static scenes.
+
+## Sample counts revisited (2026-10-01, issues #1 and #2)
+
+Measured headless on an Apple M-series GPU (Chrome, WebGPU), with other GPU
+work running on the machine: timings are paired, interleaved bursts (min and
+median of 7–31 rounds), quality is against converged references (AP: a
+2048-step build of the same froxels, read back as floats; haze: the same
+raymarch at 512 steps, 8-bit screenshots at 1920×1080).
+
+**AP froxels (#2): adopted, as a quality fix.** Mean relative in-scatter
+error over the 32³ volume, ground camera:
+
+| build                                           | 8 km/slice: mean / max | 32 km/slice: mean / max | slice 0 / 1 / 2 (8 km) | slice 31 (8 km) |
+| ----------------------------------------------- | ---------------------- | ----------------------- | ---------------------- | --------------- |
+| fixed 30, SebH uniform stepping (before)        | 3.1 % / 15.7 %         | 4.8 % / 15.7 %          | 1.1 / 2.7 / 2.4 %      | 5.3 %           |
+| `2·(slice+1)`, SebH uniform stepping (verbatim) | 4.8 % / 34.8 %         | 6.2 % / 36.8 %          | 34.2 / 17.7 / 11.7 %   | 2.6 %           |
+| fixed 30, full-ray segments                     | 0.74 % / 7.1 %         | 1.6 % / 7.1 %           | 1.3 / 0.35 / 0.09 %    | 1.9 %           |
+| **`2·(slice+1)`, full-ray segments (now)**      | **0.55 % / 4.0 %**     | **1.3 % / 7.1 %**       | 1.3 / 0.31 / 0.14 %    | **0.95 %**      |
+
+His uniform stepping puts each step's end at its sample, `(s + 0.3)/N`, so
+the last 0.7/N of the ray is never integrated: 2.3 % at 30 steps, 35 % at
+his 2-step nearest slice. Mean alpha error drops 4.6× (7.8e-3 → 1.7e-3).
+Final frames move by at most 2–3/255 (mean 0.1–0.4) in C2, C3, 03, 05 and
+22; the `ap-alpha` views by up to 13/255, smooth with depth, no slice
+banding. Cost: the 32³ build is ~0.04–0.1 ms; per-slice counts add 10–15 %
+of that (mean 33 steps vs 30, plus the runtime loop bound) once the dispatch
+is `[64]` workgroups. With three's `[4, 4, 4]` the per-slice counts diverged
+inside SIMD groups (+50 %).
+
+**Haze raymarch fallback (#1): not adopted.** SebH's
+`lerp(min, max, saturate(tMax·0.01))` with our 64 as the max, whole-frame
+time relative to fixed 64 (paired median):
+
+| case (1920×1080)              | min 4      | min 16 | quality vs 512 steps (min 4 / fixed 64)       |
+| ----------------------------- | ---------- | ------ | --------------------------------------------- |
+| ground, `policy: 'raymarch'`  | 0.21×      | 0.38×  | ≤ 1/255 / ≤ 1/255                             |
+| 10 km altitude, `'raymarch'`  | 0.54×      | 0.64×  | max 5/255, 17 % of px > 2 (grain) / max 1/255 |
+| ground, `'auto'` (default)    | 1.0×       | 1.0×   | identical (only rays > 128 km are raymarched) |
+| 60 / 80 km altitude, `'auto'` | 1.02–1.07× | —      | unchanged                                     |
+
+The default policies only raymarch past AP coverage (rays > 128 km) or above
+50 km altitude, where nearly every ray is longer than 100 km and gets the
+max anyway. There it costs 2–7 %: the same 64 steps with only the loop bound
+made a runtime value measured +4–7 %, so the bound itself is the cost (a
+constant bound with `Break` and a per-ray reciprocal did not recover it).
+The real savings are confined to `policy: 'raymarch'` at short range, which
+also shows per-pixel grain at low counts because the uv-hash jitter is no
+longer averaged out.
 
 ## Architecture: cube-bake + haze post vs SebH's single pass
 
@@ -66,7 +115,7 @@ Cost delta per frame, honestly separated:
 | Sky pixels              | SkyView LUT sample in post                                                       | cube sample (baked bg) or LUT sample (live mesh) | ≈ 0, slightly in our favor with the baked cube              |
 | Geometry haze           | AP sample, hw blend                                                              | AP sample in post                                | ≈ 0                                                         |
 | Scene→texture roundtrip | not needed (blend over scene buffer, depth prepass already exists in his engine) | required (post pass samples scene color)         | **one full-res RT write + read — the real structural cost** |
-| AP LUT build            | per frame, 32³, SPP 2–64                                                         | per frame, 32³×30                                | ≈ 0 (both ≪ 1 ms)                                           |
+| AP LUT build            | per frame, 32³, SPP 2–64                                                         | per frame, 32³, SPP 2–64                         | ≈ 0 (both ≪ 1 ms)                                           |
 | Cube + PMREM            | n/a                                                                              | on sun/atmos/sun-frame change only               | amortized; buys IBL his demo doesn't have                   |
 
 **Can we offer his single-pass form?** Not literally, and it wouldn't pay:

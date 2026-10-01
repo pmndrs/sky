@@ -309,6 +309,16 @@ export class AerialPerspectiveLUT {
       const startPos = moved.newPos.toVar()
 
       // --- integrate (with multi-scatter feedback this time) ---
+      // Per-slice step count, SebH's `SampleCountIni = max(1, 2·(sliceId + 1))`
+      // (RenderSkyRayMarching.hlsl:707): 2 steps for the nearest slice, 64 for
+      // the farthest at 32 slices — a runtime `Loop` bound. The steps are
+      // equal segments over the whole froxel ray ('uniformSegments'), not his
+      // uniform stepping, which stops at the last sample and so integrates
+      // only (N − 0.7)/N of the ray: 65 % of slice 0, 82 % of slice 1. Against
+      // a 2048-step integral that bias put the near slices 35 / 18 / 12 % low;
+      // with full segments the mean in-scatter error is 0.5 % (3 % for the old
+      // fixed 30 uniform steps, which lost 2.3 % of every ray).
+      const sliceSampleCount = fz.add(1.0).mul(2.0)
       const result = integrateScatteredLuminance({
         worldPos: startPos,
         worldDir: worldDirV,
@@ -316,7 +326,8 @@ export class AerialPerspectiveLUT {
         params: params,
         transmittanceLUT: transmittanceTex,
         multiScatterLUT: multiScatterTex,
-        sampleCount: 30,
+        sampleCount: sliceSampleCount,
+        sampleDistribution: 'uniformSegments',
         ground: false,
         mieRayPhase: true,
         tMaxOverride: tMax,
@@ -334,6 +345,10 @@ export class AerialPerspectiveLUT {
       textureStore(tex, ivec3(int(x), int(y), int(z)), vec4(result.L.mul(validF), alpha.mul(validF)))
     })
 
-    return fn().compute(total, [4, 4, 4])
+    // 1-D workgroups: consecutive invocations are consecutive texels of one
+    // slice, so a SIMD group shares one step count. three linearises a 3-D
+    // workgroup size [4, 4, 4] across slices z, z+2, … z+14, and the per-slice
+    // counts then diverge inside each group (measured +50 % vs +15 %).
+    return fn().compute(total, [64])
   }
 }

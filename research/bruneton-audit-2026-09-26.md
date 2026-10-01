@@ -268,7 +268,9 @@ through to the haze pass; `?dbg=depthenc` gives an exact depth readback;
    `luminanceScale · T(sun)` (finding 5).
 2. Retune the demos' exposure (0.3, or `exposure: 24`) and decide whether the
    spectral sun tint should be the default look.
-3. Per-slice sample counts in the AP LUT (`2·(slice+1)`, SebH) — uniform 30
-   is right but wasteful in the near slices.
+3. ~~Per-slice sample counts in the AP LUT (`2·(slice+1)`, SebH) — uniform 30
+   is right but wasteful in the near slices.~~ Done 2026-10-01, as full-ray
+   segments: the uniform 30 was not right, it integrated only 29.3/30 of
+   every froxel ray (see `research/sebh-parity-audit.md`).
 4. A twilight reference (path tracer) to settle finding 6; Bruneton is not
    ground truth there.

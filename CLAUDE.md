@@ -298,11 +298,12 @@ the 2026-09-30 stopgap, and a shader depth write disables early-Z and Apple's
 hidden-surface removal for the whole draw, so a sky hidden behind geometry is
 shaded anyway. `scripts/bench-sky-draw.mjs` (`17-sky-draw-bench.html`) at
 3200×1800 on an M-series Mac: camera in a closed room at 300 km, where the sky
-raymarches, 3.1–5.2 ms/frame with the depth write vs 0.5–0.75 drawn after
-opaques; indoors at ground level 0.8 vs 0.5. Drawing it _first_ without a
-depth write measures the same as _after_ there, because Apple's HSR ignores
-draw order; on desktop (immediate-mode) GPUs only the after-opaques order lets
-early-Z skip the hidden sky.
+raymarches, 3.1–5.2 ms/frame with the fragment depth write vs 0.5–0.75 drawn
+after opaques; indoors at ground level 0.8 vs 0.5. The pre-2026-09-30 setup
+(drawn _first_, writing its plain `z = w` depth, no `depthNode`) measures the
+same as _after_ there, because Apple's HSR ignores draw order; on desktop
+(immediate-mode) GPUs only the after-opaques order lets early-Z skip the
+hidden sky.
 
 ### Never inverse-project a far-plane point for a ray direction (2026-09-26)
 

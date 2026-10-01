@@ -104,10 +104,10 @@ Two things change for aerial-perspective haze at planet scale:
    rely on the automatic `camera.far > 1e6` heuristic) — see
    [Haze: `logarithmicDepthBuffer` and `useCameraFar`](../guides/haze#logarithmicdepthbuffer-and-usecamerafar).
 
-> **Warning:**
-> There's a known concentric-banding artifact in the AP LUT specifically at 50–100 km camera altitude — see [Haze: known
-> issue](../guides/haze#known-issue-concentric-banding-at-50100-km-altitude-ap-lut-only) for the workaround
-> (`sky.setHazePolicy('raymarch')`).
+> **Note:**
+> Above about 1 km camera altitude the AP haze refines its depth-slice lookup per pixel, which removes the concentric
+> bands the slices used to leave on the ground seen from above — see [Haze seen from
+> altitude](../guides/haze#haze-seen-from-altitude-slice-refinement) (`apRefineSteps`).
 
 ## Camera controls: `PlanetFlightControls`
 

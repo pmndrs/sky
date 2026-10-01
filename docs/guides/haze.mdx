@@ -1,6 +1,6 @@
 ---
 title: Aerial-perspective haze
-description: applyHaze, the AP LUT vs raymarch policies, light shafts from the sun's shadow map, and the known altitude-banding issue.
+description: applyHaze, the AP LUT vs raymarch policies, light shafts from the sun's shadow map, and the slice refinement that keeps AP haze band-free at altitude.
 ---
 
 Aerial-perspective ("AP") haze is what makes distant geometry desaturate
@@ -257,35 +257,53 @@ state is exported:
 | `createHazeShadowState(options)`        | Uniform bundle for one light; pass it as `createHazeOutputNode({ shadow })`. |
 | `updateHazeShadowState(state, options)` | Applies a partial options object live — what `sky.setHazeShadows` calls.     |
 
-## Known issue: concentric banding at 50–100 km altitude (AP LUT only)
+## Haze seen from altitude (slice refinement)
 
-> **Warning:**
-> **D4 (open, deferred).** From roughly 50–100 km camera altitude, the
-> `'ap'`/`'auto'` policy can show smooth concentric arcs (iso-distance
-> contours around the nadir) in the haze over the planet surface. Confirmed
-> clean at ground level and clean above `blendEndKm` (pure raymarch). The
-> bands live specifically in the **AP-LUT branch** — `hazeMode: 'raymarch'`
-> is unaffected, and lowering `blendEndKm` (which hands off to raymarch
-> earlier) directly reduces band visibility.
->
-> Root cause is still open. A dither/jitter fix attempt (adding sub-texel
-> noise to the LUT's W sample and per-voxel jitter during the LUT build) was
-> tried and reverted — it didn't remove the bands and made the haze visibly
-> noisier. That result rules out a simple W-interpolation-kink explanation;
-> current suspects are the 32×32 screen-space XY interpolation (froxel rays
-> diverge strongly at altitude, and neighbouring texels can end up storing
-> integrals of meaningfully different ray directions once the
-> underground-froxel correction rewrites a voxel's ray) or banding baked
-> into the stored values by that same correction. See `ROADMAP.md`'s "D4"
-> entry for the full bisection notes if you're picking this up.
->
-> **Workaround today:** force raymarch at altitude —
->
-> ```js
-> sky.setHazePolicy('raymarch')
-> // or, staying in 'auto' but handing off to raymarch earlier:
-> sky.setHazeAltitudeBlend({ endKm: 40 })
-> ```
+**In short:** above about 1 km, each geometry pixel fixes up its own haze so
+the ground doesn't show faint rings. It's on by default, costs nothing at
+ground level and about half a millisecond per frame at altitude, and you can
+turn it off.
+
+**Why it's needed.** The aerial-perspective volume stores haze at a set of
+distances from the camera ("slices"), and each pixel blends between the two
+slices nearest its surface. That's accurate at ground level, where haze
+builds up gradually along a view ray. Seen from high up it isn't: almost all
+of the haze a ray collects sits in its last few kilometres, close to the
+ground, and that happens in the gap between two slices that may be tens of
+kilometres apart. Blending between them gets the haze slightly wrong, by an
+amount that repeats from one slice to the next, so a planet seen from above
+showed faint concentric rings around the point below the camera, and the
+haze read 5–13 % too light on average.
+
+**What it does.** Above about 1 km camera altitude (fading in by 3 km), each
+pixel on the aerial-perspective path takes the volume's value at the slice
+just before its surface and works out the remaining stretch of its own ray
+with a couple of short marches. The rings disappear and the haze matches a
+full per-pixel calculation to within about 1 %.
+
+**What it costs.** At 1920×1080 with the ground filling the screen:
+
+| Camera                       | Extra time per frame         |
+| ---------------------------- | ---------------------------- |
+| On the ground (below 1 km)   | nothing measurable (skipped) |
+| 25 km (an airliner and up)   | about 0.55 ms                |
+| 75 km (near space, `'auto'`) | about 1–2 ms                 |
+
+**Turning it off.** If your camera flies high and the frame budget matters
+more than the rings, pass `apRefineSteps: 0`; the refinement is then left
+out of the shader entirely:
+
+```js
+sky.applyHaze(sceneColor, { scenePass, apRefineSteps: 0 })
+```
+
+```jsx
+<AutoHaze apRefineSteps={0} />
+```
+
+| `applyHaze` option | Default | Notes                                                                                                                              |
+| ------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `apRefineSteps`    | `4`     | Steps in each of the two short marches. `0` turns the refinement off. Needs `raymarchFallback` (on by default). Set when building. |
 
 ## Debugging
 

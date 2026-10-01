@@ -16,6 +16,8 @@ export type { MilkyWayTextureOptions } from './sky/stars/milkyWay'
 export { generateStarCatalog } from './sky/stars/catalog'
 export type { StarCatalog, StarCatalogOptions } from './sky/stars/catalog'
 export { applyHaze } from './applyHaze'
+export { applyFog } from './applyFog'
+export type { ApplyFogOptions } from './applyFog'
 export { presets, resolvePreset } from './presets'
 export {
   looks,
@@ -56,6 +58,15 @@ export type { PmremSchedulerOptions } from './sky/PmremScheduler'
 export { SkyPmrem, skyPmremPlan } from './sky/pmrem/SkyPmrem'
 export type { SkyPmremOptions } from './sky/pmrem/SkyPmrem'
 export { createHazeOutputNode } from './sky/HazePostProcess'
+export {
+  createFogOutputNode,
+  createFogState,
+  updateFogState,
+  fogOpticalDepth,
+  fogOpacity,
+  FOG_DEFAULTS,
+} from './sky/FogPostProcess'
+export type { FogOptions, FogState, FogRay } from './sky/FogPostProcess'
 export { createHazeShadowState, updateHazeShadowState, HAZE_SHADOW_DEFAULTS } from './sky/hazeShadows'
 export type { HazeShadowOptions, HazeShadowState } from './sky/hazeShadows'
 export { LUT_RESOLUTIONS } from './core/resolutions'

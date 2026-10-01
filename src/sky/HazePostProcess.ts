@@ -31,7 +31,7 @@ import {
   raySphereIntersectNearest,
 } from '../backends/tsl/atmosphere.tsl'
 import { applyLook } from '../backends/tsl/look.tsl'
-import { createHazeDepthNodes } from './hazeScenePassDepth'
+import { createHazeDepthNodes, distanceAlongViewRay, rawDepthIsSky, viewRayFromUv } from './hazeScenePassDepth'
 import { createShadowDeficitPass, upsampleShadowDeficit } from './hazeShadows'
 import type { HazeShadowState } from './hazeShadows'
 
@@ -321,15 +321,12 @@ export function createHazeOutputNode({
         buildRay: () => {
           const u = uv()
           const { viewZNode: vz, linearDepthNode: ld } = createHazeDepthNodes(scenePass, logarithmicDepthBuffer)
-          const ndc = vec2(u.x.mul(2.0).sub(1.0), float(1.0).sub(u.y.mul(2.0)))
-          const viewMid = invProjUniform.mul(vec4(ndc.x, ndc.y, float(0.5), float(1.0)))
-          const dirView = viewMid.xyz.div(viewMid.w)
+          const dirView = viewRayFromUv(u, invProjUniform)
           const rayDir = tslNormalize(cameraWorldUniform.mul(vec4(dirView, float(0.0))).xyz)
-          const distanceM = abs(vz).div(max(abs(dirView.normalize().z), float(1e-6)))
-          const rawDepth = scenePass.getTextureNode('depth').x
-          const isSky = rawDepth
-            .greaterThanEqual(float(1.0).sub(skyDepthEpsilon))
-            .or(cameraFarUniform ? vz.lessThan(cameraFarUniform.mul(-0.999)) : ld.greaterThan(float(0.999)))
+          const distanceM = distanceAlongViewRay(vz, dirView)
+          const isSky = rawDepthIsSky(scenePass, skyDepthEpsilon).or(
+            cameraFarUniform ? vz.lessThan(cameraFarUniform.mul(-0.999)) : ld.greaterThan(float(0.999)),
+          )
           return { rayDir, distanceM, isSky }
         },
         luminanceScale,
@@ -375,7 +372,7 @@ export function createHazeOutputNode({
     // gradient that overlays the sky-mesh's correct gradient. (The slice-W
     // distance computation above is unaffected because it only uses the
     // magnitude / cos-from-axis of the ray, both of which are sign-symmetric.)
-    const ndc2 = vec2(u.x.mul(2.0).sub(1.0), float(1.0).sub(u.y.mul(2.0)))
+    //
     // Any clip-space point on the pixel's ray gives its direction, so pick a
     // well-conditioned one. The far plane (clip z = 1) is NOT: with the far/near
     // ratios planet-scale scenes use (far 4e7 m, near < 1 m), the inverse
@@ -384,10 +381,8 @@ export function createHazeOutputNode({
     // geometry pixel samples the deepest AP slice and renders black. Measured
     // 2026-09-26: fine at near 0.9 m, black at near 0.7 m with far 4e7. Mid
     // depth (0.5) is what the AP LUT build uses for the same reconstruction,
-    // so build and sample now agree by construction.
-    const clipMid = vec4(ndc2.x, ndc2.y, float(0.5), float(1.0))
-    const viewMid = invProjUniform.mul(clipMid)
-    const rayDirView = viewMid.xyz.div(viewMid.w)
+    // so build and sample now agree by construction (`viewRayFromUv`).
+    const rayDirView = viewRayFromUv(u, invProjUniform)
     // World-space ray direction, reconstructed once and shared by the raymarch
     // fallback, the look retint and the sky-cube shim (TSL does not CSE
     // distinct node instances). w = 0 so the camera translation is ignored.
@@ -395,8 +390,7 @@ export function createHazeOutputNode({
     const worldRayDir = cameraWorldUniform
       ? tslNormalize(cameraWorldUniform.mul(vec4(rayDirView, float(0.0))).xyz).toVar()
       : null
-    const cosFromAxis = max(abs(rayDirView.normalize().z), float(1e-6))
-    const distAlongRayM = abs(viewZ).div(cosFromAxis)
+    const distAlongRayM = distanceAlongViewRay(viewZ, rayDirView)
     // `apDistanceScale` (Unreal AerialPerspectiveViewDistanceScale) stretches
     // the optical path at sample time. Applied here so slice lookup, coverage
     // test and the raymarch fallback's tMax all see the same scaled distance.
@@ -435,8 +429,7 @@ export function createHazeOutputNode({
     // the Sky-View LUT (measured +40% sky luminance against Bruneton's
     // reference, 2026-09-26). The `viewZ`/`linearDepth` tests still hold for
     // small far planes (≤ ~2 km) where one depth ulp is negligible.
-    const rawDepth = scenePass.getTextureNode('depth').x
-    const isSkyRaw = rawDepth.greaterThanEqual(float(1.0).sub(skyDepthEpsilon))
+    const isSkyRaw = rawDepthIsSky(scenePass, skyDepthEpsilon)
     const isSkyLegacy = cameraFarUniform
       ? viewZ.lessThan(cameraFarUniform.mul(-0.999))
       : linearDepthNode.greaterThan(float(0.999))

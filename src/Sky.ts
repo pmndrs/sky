@@ -19,6 +19,10 @@ import { applyHaze, policyToHazeMode } from './applyHaze'
 import { createHazeShadowState, disposeHazeShadowState, updateHazeShadowState } from './sky/hazeShadows'
 import type { HazeShadowOptions, HazeShadowState } from './sky/hazeShadows'
 import { localSiderealTime, solarPosition } from './solarPosition'
+import { applyFog } from './applyFog'
+import type { ApplyFogOptions } from './applyFog'
+import { createFogState, updateFogState } from './sky/FogPostProcess'
+import type { FogOptions, FogState } from './sky/FogPostProcess'
 
 import type { SkyNightOptions } from './sky/SkyNight'
 
@@ -137,6 +141,8 @@ export class Sky {
   /** Set by `applyHaze` — signals that the AP LUT has a consumer and needs
    *  its per-frame `updateAerialPerspective()` refresh. */
   _hazeApplied?: boolean
+  /** Height-fog knobs, created by `applyFog` or `setFog`. */
+  _fog?: FogState
   _night?: SkyNight
 
   constructor(
@@ -683,6 +689,28 @@ export class Sky {
   }
 
   /**
+   * Sky-coloured exponential height fog over `sceneColorNode`: the budget
+   * alternative to `applyHaze`, with no per-frame LUT (works with
+   * `enableAerialPerspective: false`). Geometry fades toward the baked sky cube
+   * along the view ray. Returns a `vec4` node. See `applyFog`.
+   */
+  applyFog(sceneColorNode: any, options: Omit<ApplyFogOptions, 'sky'> = {}) {
+    return applyFog(sceneColorNode, { ...options, sky: this })
+  }
+
+  /**
+   * Live height-fog knobs: `{ density, heightFalloff, baseHeight, maxOpacity }`
+   * (per km, metres, metres, 0..1); omitted fields are left as is. Works before
+   * or after `applyFog`: the uniforms are created here if needed and
+   * `applyFog` adopts them (only an option passed to it overrides).
+   */
+  setFog(options: FogOptions) {
+    if (!this._fog) this._fog = createFogState(options)
+    else updateFogState(this._fog, options)
+    return this
+  }
+
+  /**
    * Convenience: build a `SkySun` bound to this Sky. The returned instance
    * owns a `THREE.DirectionalLight` that auto-tracks every `setSunDirection`
    * / `baker.setSun` via the baker's listener hook. Call `sun.attach(scene)`.
@@ -798,6 +826,7 @@ export class Sky {
     this._hazeShadow = undefined
     this._apDistanceScale = null
     this._hazeApplied = false
+    this._fog = undefined
   }
 
   _refreshSunFromTime() {

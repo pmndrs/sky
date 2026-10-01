@@ -34,6 +34,7 @@ import {
   FROM_SUB_UVS_TO_UNIT,
   UV_TO_SKYVIEW_PARAMS,
   SKYVIEW_PARAMS_TO_UV,
+  MULTISCATTER_PARAMS_TO_UV,
 } from '../../core/wgsl/atmosphere.wgsl.js'
 
 // --- shared leaf helpers, wrapped once and threaded via `includes` ---
@@ -56,13 +57,17 @@ export const hgPhase = /*@__PURE__*/ wgslFn(HG_PHASE)
 export const getSphericalDir = /*@__PURE__*/ wgslFn(SPHERICAL_DIR)
 
 /**
- * `{ viewHeight: f32, bottomRadius: f32, uv: vec2 }` →
+ * `{ viewHeight: f32, bottomRadius: f32, uv: vec2, lutSize: vec2 }` →
  * `vec2(viewZenithCosAngle, lightViewCosAngle)`. Depends on `fromSubUvsToUnit`.
  */
 export const uvToSkyViewLutParams = /*@__PURE__*/ wgslFn(UV_TO_SKYVIEW_PARAMS, [fromSubUvsToUnit])
 
 /**
  * `{ intersectsGround: f32, viewZenithCosAngle: f32, lightViewCosAngle: f32,
- * viewHeight: f32, bottomRadius: f32 }` → `vec2` UV. Depends on `fromUnitToSubUvs`.
+ * viewHeight: f32, bottomRadius: f32, lutSize: vec2 }` → `vec2` UV. Depends on
+ * `fromUnitToSubUvs`.
  */
 export const skyViewLutParamsToUv = /*@__PURE__*/ wgslFn(SKYVIEW_PARAMS_TO_UV, [fromUnitToSubUvs])
+
+/** `{ sunZenithCos: f32, altitude01: f32, lutSize: vec2 }` → `vec2` Multi-Scatter LUT UV. */
+export const multiScatterLutParamsToUv = /*@__PURE__*/ wgslFn(MULTISCATTER_PARAMS_TO_UV)

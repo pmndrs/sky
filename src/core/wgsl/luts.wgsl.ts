@@ -109,11 +109,17 @@ fn transmittanceLutPixel(
  * extinction) and the Multi-Scatter LUT (higher-order bounces) per step.
  *
  * Everything is inlined (medium sample, uvToSkyViewLutParams, moveToTopAtmosphere,
- * transmittanceLutParamsToUv, the MS sub-UV correction) because none of those can
- * be `wgslFn` helpers — struct returns don't survive, and inlining keeps them in
- * one module scope. Includes are only the scalar/vector helpers:
- * `raySphereIntersectNearest` (f32), `rayleighPhase` (f32), `hgPhase` (f32),
- * `bilinearSample2D` (vec3).
+ * transmittanceLutParamsToUv) because none of those can be `wgslFn` helpers —
+ * struct returns don't survive, and inlining keeps them in one module scope.
+ * Includes are only the scalar/vector helpers: `raySphereIntersectNearest`
+ * (f32), `rayleighPhase` (f32), `hgPhase` (f32), `bilinearSample2D` (vec3),
+ * `multiScatterLutParamsToUv` (vec2).
+ *
+ * Sizes are args, never constants (issue #13): `lutSize` is this LUT's own
+ * (width, height), used to un-map the texel's UV; `multiScatterLutSize` is the
+ * sampled Multi-Scatter LUT's, used for its sub-UV lookup. Both are build-time
+ * constants supplied by `skyViewLutColorNode`. (wgslFn binds args by name; a
+ * key the wrapper forgets only logs "Input '…' not found" and binds 0.)
  *
  * LUT sampling is manual bilinear (three's wgslFn gives no sampler), matching the
  * TSL twin's hardware sampling to ~1e-3 — visually identical. The native baker
@@ -144,7 +150,9 @@ fn skyViewLutPixel(
   absorptionExtinction: vec3<f32>,
   miePhaseG: f32,
   groundAlbedo: vec3<f32>,
-  multiScatteringFactor: f32
+  multiScatteringFactor: f32,
+  lutSize: vec2<f32>,
+  multiScatterLutSize: vec2<f32>
 ) -> vec3<f32> {
   let PI = 3.1415926535897932;
   let OFFSET = 0.01;
@@ -154,8 +162,8 @@ fn skyViewLutPixel(
   let earthO = vec3<f32>(0.0, 0.0, 0.0);
 
   // --- unmap uv -> (viewZenithCosAngle, lightViewCosAngle) [uvToSkyViewLutParams] ---
-  let resX = 192.0;
-  let resY = 108.0;
+  let resX = lutSize.x;
+  let resY = lutSize.y;
   let uCorr = (uv.x - 0.5 / resX) * (resX / (resX - 1.0));
   let vCorr = (uv.y - 0.5 / resY) * (resY / (resY - 1.0));
   let vHorizon = sqrt(max(viewHeight * viewHeight - botR2, 0.0));
@@ -273,12 +281,10 @@ fn skyViewLutPixel(
 
     let directInScatter = earthShadow * transmittanceToSun * phaseTimesScattering;
 
-    // multi-scatter LUT feedback (sub-UV corrected, 32x32)
+    // multi-scatter LUT feedback (sub-UV corrected at the MS LUT's own size)
     let altitude01 = saturate(altitude / max(atmosphereThickness, 1e-6));
-    let msRes = 32.0;
-    let msUvX = (sunZenithCos * 0.5 + 0.5 + 0.5 / msRes) * (msRes / (msRes + 1.0));
-    let msUvY = (altitude01 + 0.5 / msRes) * (msRes / (msRes + 1.0));
-    let multiScatteredLuminance = bilinearSample2D(multiScatterLut, vec2<f32>(msUvX, msUvY));
+    let msUv = multiScatterLutParamsToUv(sunZenithCos, altitude01, multiScatterLutSize);
+    let multiScatteredLuminance = bilinearSample2D(multiScatterLut, msUv);
 
     // multiScatteringFactor: Unreal's artistic gain on the MS term, 1 = physical.
     // Mirrors the TSL twin in backends/tsl/atmosphere.tsl.ts.
@@ -325,6 +331,10 @@ fn skyViewLutPixel(
  *
  * Nested `for` loops (64×20) — trivial in real WGSL; this is precisely the shape
  * that would detonate as a JS-unrolled `.toVar()` graph (CLAUDE.md).
+ *
+ * `lutSize` is this LUT's own (width, height) for the texel un-map — a
+ * build-time constant from `multiScatterLutColorNode`, never a hard-coded 32
+ * (issue #13: at other sizes the TSL twin and this one used to disagree).
  */
 export const MULTISCATTER_LUT_PIXEL = /* wgsl */ `
 fn multiScatterLutPixel(
@@ -343,7 +353,8 @@ fn multiScatterLutPixel(
   mieExtinction: vec3<f32>,
   rayleighScattering: vec3<f32>,
   absorptionExtinction: vec3<f32>,
-  groundAlbedo: vec3<f32>
+  groundAlbedo: vec3<f32>,
+  lutSize: vec2<f32>
 ) -> vec3<f32> {
   let PI = 3.1415926535897932;
   let OFFSET = 0.01;
@@ -352,10 +363,9 @@ fn multiScatterLutPixel(
   let H = sqrt(max(0.0, topR2 - botR2));
   let earthO = vec3<f32>(0.0, 0.0, 0.0);
 
-  // sub-UV correct (32x32).
-  let res = 32.0;
-  let corrU = (uv.x - 0.5 / res) * (res / (res - 1.0));
-  let corrV = (uv.y - 0.5 / res) * (res / (res - 1.0));
+  // sub-UV correct at this LUT's own size.
+  let corrU = (uv.x - 0.5 / lutSize.x) * (lutSize.x / (lutSize.x - 1.0));
+  let corrV = (uv.y - 0.5 / lutSize.y) * (lutSize.y / (lutSize.y - 1.0));
 
   let cosSunZenith = corrU * 2.0 - 1.0;
   let sunDir = vec3<f32>(0.0, sqrt(saturate(1.0 - cosSunZenith * cosSunZenith)), cosSunZenith);

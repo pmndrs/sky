@@ -24,7 +24,7 @@
         border-radius: 4px;
         font-size: 12px;
         line-height: 1.5;
-        max-width: 600px;
+        max-width: 640px;
         pointer-events: none;
         z-index: 10;
       }
@@ -34,6 +34,7 @@
       #verdict {
         font-size: 14px;
         font-weight: bold;
+        white-space: pre-line;
       }
       canvas {
         display: block;
@@ -43,10 +44,14 @@
   <body>
     <div id="info">
       <b>Parity — UV maps &amp; spherical dir</b><br />
-      Three bands (bottom→top): <b>uvToSkyViewLutParams</b>, <b>skyViewLutParamsToUv</b>, <b>getSphericalDir</b>. This
-      also exercises the two mechanisms the leaf test didn't: <b>single-source</b> (each wrapper is
-      <code>wgslFn(CHUNK)</code> importing the core string) and <b>includes</b> (the Sky-View maps pull the sub-UV
-      helper through the <code>includes</code> array).<br />
+      Four bands (bottom→top): <b>uvToSkyViewLutParams</b>, <b>skyViewLutParamsToUv</b>, <b>getSphericalDir</b>,
+      <b>multiScatterLutParamsToUv</b>. This also exercises the two mechanisms the leaf test didn't:
+      <b>single-source</b> (each wrapper is <code>wgslFn(CHUNK)</code> importing the core string) and
+      <b>includes</b> (the Sky-View maps pull the sub-UV helper through the <code>includes</code> array).<br />
+      The LUT maps take the LUT size, so the diff runs at each <code>quality</code> tier's size (issue #13), and an
+      absolute check pins both twins: rendered at exactly the LUT's size, the first/last texel centres must un-map to
+      the domain ends (view-zenith cos ±1, light-view cos ±1), and the forward maps must land the domain ends on
+      Hillaire's sub-UVs for that size. A remap built for another size fails it even when both twins agree.<br />
       <b>Green</b> = value (liveness). <b>Red</b> = |WGSL − TSL| × 500. Correct = green gradients, zero red.<br />
       <span id="verdict">running…</span>
     </div>
@@ -61,6 +66,7 @@
       import {
         uvToSkyViewLutParams as uvToParamsTSL,
         skyViewLutParamsToUv as paramsToUvTSL,
+        multiScatterLutParamsToUv as msUvTSL,
         getSphericalDir as sphericalTSL,
       } from '@sky/backends/tsl/atmosphere.tsl'
 
@@ -68,26 +74,41 @@
       import {
         uvToSkyViewLutParams as uvToParamsWGSL,
         skyViewLutParamsToUv as paramsToUvWGSL,
+        multiScatterLutParamsToUv as msUvWGSL,
         getSphericalDir as sphericalWGSL,
       } from '@sky/backends/wgsl/atmosphere'
+
+      // One entry per `quality` tier: Sky-View LUT size + Multi-Scatter LUT size.
+      const CONFIGS = [
+        { name: 'medium', sv: { width: 192, height: 108 }, ms: { width: 32, height: 32 } },
+        { name: 'low', sv: { width: 96, height: 54 }, ms: { width: 16, height: 16 } },
+        { name: 'high', sv: { width: 256, height: 144 }, ms: { width: 64, height: 64 } },
+      ]
+      const BANDS = 4
+      const DIFF_THRESH = 1e-4
+      // Endpoints are exact in the math (texel centre → 0/1 → cos 0/π); the
+      // slack only covers f32 rounding. A remap for another tier's size misses
+      // by 1e-4 (view zenith, low) to 1e-2 (light view, low).
+      const END_THRESH = 2e-5
+
+      const atmosphere = createAtmosphereUniforms(EARTH)
+      const bottomRadius = float(EARTH.bottomRadius)
+      const viewHeight = float(EARTH.bottomRadius + 0.5)
+      const v2 = (s) => vec2(float(s.width), float(s.height))
 
       let renderer, displayScene, displayCam
 
       init()
 
-      function buildParityNode() {
-        const atmosphere = createAtmosphereUniforms(EARTH)
-        const bottomRadius = float(EARTH.bottomRadius)
-        const viewHeight = float(EARTH.bottomRadius + 0.5)
-
+      function buildParityNode({ sv, ms }) {
         return Fn(() => {
           const u = uv()
-          const band = floor(u.y.mul(3.0))
-          const localY = fract(u.y.mul(3.0))
+          const band = floor(u.y.mul(BANDS))
+          const localY = fract(u.y.mul(BANDS))
 
           // --- band 0: uvToSkyViewLutParams (needs fromSubUvsToUnit include) ---
-          const p0W = uvToParamsWGSL({ viewHeight, bottomRadius, uv: u }) // vec2(vzca, lvca)
-          const p0T = uvToParamsTSL(atmosphere, viewHeight, u) // { viewZenithCosAngle, lightViewCosAngle }
+          const p0W = uvToParamsWGSL({ viewHeight, bottomRadius, uv: u, lutSize: v2(sv) }) // vec2(vzca, lvca)
+          const p0T = uvToParamsTSL(atmosphere, viewHeight, u, sv) // { viewZenithCosAngle, lightViewCosAngle }
           const d0 = p0W.x.sub(p0T.viewZenithCosAngle).abs().add(p0W.y.sub(p0T.lightViewCosAngle).abs())
           const v0 = p0W.x.mul(0.5).add(0.5)
 
@@ -100,8 +121,9 @@
             lightViewCosAngle: lvca,
             viewHeight,
             bottomRadius,
+            lutSize: v2(sv),
           }) // vec2 uv
-          const p1T = paramsToUvTSL(atmosphere, bool(false), vzca, lvca, viewHeight) // vec2
+          const p1T = paramsToUvTSL(atmosphere, bool(false), vzca, lvca, viewHeight, sv) // vec2
           const d1 = p1W.x.sub(p1T.x).abs().add(p1W.y.sub(p1T.y).abs())
           const v1 = p1W.x
 
@@ -113,14 +135,153 @@
           const s2T = sphericalTSL(iph, jph, sqrtN) // vec3
           const dv = s2W.sub(s2T).abs()
           const d2 = dv.x.add(dv.y).add(dv.z)
-          const v2 = s2W.z.mul(0.5).add(0.5)
+          const v2v = s2W.z.mul(0.5).add(0.5)
 
-          const diff = select(band.lessThan(1.0), d0, select(band.lessThan(2.0), d1, d2))
-          const valNorm = select(band.lessThan(1.0), v0, select(band.lessThan(2.0), v1, v2))
+          // --- band 3: multiScatterLutParamsToUv ---
+          const p3W = msUvWGSL({ sunZenithCos: vzca, altitude01: localY, lutSize: v2(ms) })
+          const p3T = msUvTSL(vzca, localY, ms)
+          const d3 = p3W.x.sub(p3T.x).abs().add(p3W.y.sub(p3T.y).abs())
+          const v3 = p3W.x
+
+          const diff = select(
+            band.lessThan(1.0),
+            d0,
+            select(band.lessThan(2.0), d1, select(band.lessThan(3.0), d2, d3)),
+          )
+          const valNorm = select(
+            band.lessThan(1.0),
+            v0,
+            select(band.lessThan(2.0), v1, select(band.lessThan(3.0), v2v, v3)),
+          )
 
           const red = diff.mul(500.0).clamp(0.0, 1.0)
           return vec4(red, valNorm, diff, 1.0) // blue = raw diff for readback
         })()
+      }
+
+      // The endpoint nodes return one twin's pair in .xy, encoded as v·0.5 + 0.5:
+      // the output stage clamps negatives to 0 (and an opaque material writes
+      // alpha 1 whatever the node says), and the cosines here span [-1, 1].
+
+      // Inverse map at the LUT's own texel centres: (vz, lv).
+      function buildInverseNode({ sv }, twin) {
+        return Fn(() => {
+          const u = uv()
+          if (twin === 'wgsl') {
+            const w = uvToParamsWGSL({ viewHeight, bottomRadius, uv: u, lutSize: v2(sv) })
+            return vec4(w.mul(0.5).add(0.5), 0.0, 1.0)
+          }
+          const t = uvToParamsTSL(atmosphere, viewHeight, u, sv)
+          return vec4(vec2(t.viewZenithCosAngle, t.lightViewCosAngle).mul(0.5).add(0.5), 0.0, 1.0)
+        })()
+      }
+
+      // Forward maps at the domain ends. Quarter 0: zenith, sun azimuth (sky
+      // branch); quarter 1: nadir, anti-sun azimuth (ground branch); quarters
+      // 2/3: the Multi-Scatter lookup at (cos −1, alt 0) / (cos 1, alt 1).
+      function buildForwardNode({ sv, ms }, twin) {
+        return Fn(() => {
+          const x = floor(uv().x.mul(4.0))
+          const first = x.lessThan(0.5)
+          const isSv = x.lessThan(1.5)
+          const firstMs = x.lessThan(2.5)
+          const vz = select(first, float(1.0), float(-1.0))
+          const ground = select(first, float(0.0), float(1.0))
+          const w = paramsToUvWGSL({
+            intersectsGround: ground,
+            viewZenithCosAngle: vz,
+            lightViewCosAngle: vz,
+            viewHeight,
+            bottomRadius,
+            lutSize: v2(sv),
+          })
+          const t = paramsToUvTSL(atmosphere, ground.greaterThan(0.5), vz, vz, viewHeight, sv)
+          const c = select(firstMs, float(-1.0), float(1.0))
+          const a = select(firstMs, float(0.0), float(1.0))
+          const mw = msUvWGSL({ sunZenithCos: c, altitude01: a, lutSize: v2(ms) })
+          const mt = msUvTSL(c, a, ms)
+          const pair = twin === 'wgsl' ? select(isSv, w, mw) : select(isSv, t, mt)
+          return vec4(pair.mul(0.5).add(0.5), 0.0, 1.0)
+        })()
+      }
+
+      function renderToFloat(colorNode, W, H) {
+        const mat = new THREE.NodeMaterial()
+        mat.colorNode = colorNode
+        const rt = new THREE.RenderTarget(W, H, {
+          type: THREE.FloatType,
+          minFilter: THREE.NearestFilter,
+          magFilter: THREE.NearestFilter,
+          depthBuffer: false,
+        })
+        const quad = new THREE.QuadMesh(mat)
+        renderer.setRenderTarget(rt)
+        quad.render(renderer)
+        renderer.setRenderTarget(null)
+        return rt
+      }
+
+      // Read a float RT as rows of W texels (rows come back padded to 256 bytes).
+      // `signed` undoes the endpoint nodes' v·0.5 + 0.5 encoding.
+      async function readRows(rt, W, H, signed = false) {
+        const buf = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H)
+        const stride = buf.length / H
+        rt.dispose()
+        const at = (x, y, c) => buf[y * stride + x * 4 + c]
+        return signed ? (x, y, c) => at(x, y, c) * 2 - 1 : at
+      }
+
+      async function diffParity(cfg) {
+        const W = 256
+        const H = 256
+        const px = await readRows(renderToFloat(buildParityNode(cfg), W, H), W, H)
+        let maxDiff = 0
+        let maxBand = 0
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            const d = px(x, y, 2)
+            if (d > maxDiff) {
+              maxDiff = d
+              maxBand = Math.min(BANDS - 1, Math.floor((y / H) * BANDS))
+            }
+          }
+        return { maxDiff, maxBand }
+      }
+
+      async function endpointCheck(cfg) {
+        const { sv, ms } = cfg
+        const errs = []
+        // Inverse map: rows 0 / H-1 → vz ±1 (whichever way the RT is flipped),
+        // columns 0 / W-1 → lv ±1.
+        const midX = sv.width >> 1
+        const midY = sv.height >> 1
+        for (const twin of ['wgsl', 'tsl']) {
+          const node = buildInverseNode(cfg, twin)
+          const px = await readRows(renderToFloat(node, sv.width, sv.height), sv.width, sv.height, true)
+          const ends = [px(midX, 0, 0), px(midX, sv.height - 1, 0)].sort((a, b) => a - b)
+          errs.push([`${twin} vz rows`, Math.max(Math.abs(ends[0] + 1), Math.abs(ends[1] - 1))])
+          const lends = [px(0, midY, 1), px(sv.width - 1, midY, 1)].sort((a, b) => a - b)
+          errs.push([`${twin} lv cols`, Math.max(Math.abs(lends[0] + 1), Math.abs(lends[1] - 1))])
+        }
+        // Forward maps vs Hillaire's fromUnitToSubUvs at this size.
+        const sub = (u, n) => (u + 0.5 / n) * (n / (n + 1))
+        const want = [
+          [sub(0, sv.width), sub(0, sv.height)],
+          [sub(1, sv.width), sub(1, sv.height)],
+          [sub(0, ms.width), sub(0, ms.height)],
+          [sub(1, ms.width), sub(1, ms.height)],
+        ]
+        for (const twin of ['wgsl', 'tsl']) {
+          const fx = await readRows(renderToFloat(buildForwardNode(cfg, twin), 64, 1), 64, 1, true)
+          for (let i = 0; i < 4; i++) {
+            // Texel centre of quarter i in a 64-wide target.
+            const x = i * 16 + 8
+            const e = Math.max(Math.abs(fx(x, 0, 0) - want[i][0]), Math.abs(fx(x, 0, 1) - want[i][1]))
+            errs.push([`${twin} ${i < 2 ? 'sv' : 'ms'} fwd ${i % 2 ? 'end' : 'start'}`, e])
+          }
+        }
+        const worst = errs.reduce((a, b) => (b[1] > a[1] ? b : a))
+        return { worst: worst[1], where: worst[0] }
       }
 
       async function init() {
@@ -132,57 +293,36 @@
         document.body.appendChild(renderer.domElement)
         await renderer.init()
 
-        const mat = new THREE.NodeMaterial()
-        mat.colorNode = buildParityNode()
+        const names = ['uvToSkyViewLutParams', 'skyViewLutParamsToUv', 'getSphericalDir', 'multiScatterLutParamsToUv']
+        const lines = []
+        let pass = true
+        for (const cfg of CONFIGS) {
+          const d = await diffParity(cfg)
+          const e = await endpointCheck(cfg)
+          const ok = d.maxDiff <= DIFF_THRESH && e.worst <= END_THRESH
+          pass = pass && ok
+          const tag = `${cfg.name} sv ${cfg.sv.width}×${cfg.sv.height} ms ${cfg.ms.width}×${cfg.ms.height}`
+          lines.push(
+            `${ok ? 'ok  ' : 'FAIL'} ${tag}: twin maxDiff=${d.maxDiff.toExponential(2)} (${names[d.maxBand]}), ` +
+              `endpoint err=${e.worst.toExponential(2)} (${e.where})`,
+          )
+        }
+        const msg =
+          `PARITY ${pass ? 'PASS' : 'FAIL'} — twin diff ≤ ${DIFF_THRESH.toExponential(0)}, ` +
+          `endpoints ≤ ${END_THRESH.toExponential(0)} | ${lines.join(' | ')}`
+        console.log(`[parity] ${msg}`)
+        const el = document.getElementById('verdict')
+        el.textContent = [`PARITY ${pass ? 'PASS' : 'FAIL'}`, ...lines].join('\n')
+        el.style.color = pass ? '#7f7' : '#f77'
 
+        const mat = new THREE.NodeMaterial()
+        mat.colorNode = buildParityNode(CONFIGS[0])
         displayScene = new THREE.Scene()
         displayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
         displayScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat))
 
-        await runParityReadback(mat)
-
         window.addEventListener('resize', onResize)
         renderer.setAnimationLoop(() => renderer.render(displayScene, displayCam))
-      }
-
-      async function runParityReadback(mat) {
-        const W = 256
-        const H = 256
-        const rt = new THREE.RenderTarget(W, H, {
-          type: THREE.FloatType,
-          minFilter: THREE.NearestFilter,
-          magFilter: THREE.NearestFilter,
-          depthBuffer: false,
-        })
-        const scene = new THREE.Scene()
-        const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
-        scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat))
-
-        renderer.setRenderTarget(rt)
-        renderer.render(scene, cam)
-        renderer.setRenderTarget(null)
-
-        const buf = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H)
-        let maxDiff = 0
-        let maxAt = 0
-        for (let i = 2; i < buf.length; i += 4) {
-          const d = buf[i] // blue = raw diff
-          if (d > maxDiff) {
-            maxDiff = d
-            maxAt = (i - 2) / 4
-          }
-        }
-        const py = Math.floor(maxAt / W)
-        const bandIdx = Math.min(2, Math.floor((py / H) * 3))
-        const names = ['uvToSkyViewLutParams', 'skyViewLutParamsToUv', 'getSphericalDir']
-        const THRESH = 1e-4
-        const pass = maxDiff <= THRESH
-        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — maxDiff=${maxDiff.toExponential(3)} (thresh ${THRESH.toExponential(0)}), worst band=${names[bandIdx]}`
-        console.log(`[parity] ${msg}`)
-        const el = document.getElementById('verdict')
-        el.textContent = msg
-        el.style.color = pass ? '#7f7' : '#f77'
-        rt.dispose()
       }
 
       function onResize() {

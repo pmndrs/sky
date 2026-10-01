@@ -71,6 +71,7 @@ import {
   skyViewLutParamsToUv,
   transmittanceLutParamsToUv,
 } from '../backends/tsl/atmosphere.tsl'
+import { lutTextureSize } from '../core/resolutions'
 import { generateStarCatalog } from './stars/catalog'
 
 import type { StarCatalog } from './stars/catalog'
@@ -170,6 +171,7 @@ export class SkyStars extends Group {
     // --- per-star (vertex-stage) terms ---
     const params = baker.atmosphereUniforms
     const sky = baker.sky
+    const skyViewSize = lutTextureSize(baker.skyViewLUT.texture)
     const dirEq = instancedBufferAttribute(dirAttr) as any
     const trait = instancedBufferAttribute(traitAttr) as any
     const flux = trait.x
@@ -193,7 +195,7 @@ export class SkyStars extends Group {
 
       const T = texture(baker.transmittanceLUT.texture, transmittanceLutParamsToUv(viewHeight, cz, params)).level(0).rgb
       const lightViewCos = computeLightViewCosAngle(dir, up, normalize(sky.sunDirection))
-      const skyUv = skyViewLutParamsToUv(params, hitsGround, cz, lightViewCos, viewHeight)
+      const skyUv = skyViewLutParamsToUv(params, hitsGround, cz, lightViewCos, viewHeight, skyViewSize)
       const skyL = luminance(texture(baker.skyViewLUT.texture, skyUv).level(0).rgb.mul(sky.luminanceScale))
 
       const S = pow(flux, u.magnitudeContrast).mul(u.intensity).mul(ENERGY_SCALE)

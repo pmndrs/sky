@@ -47,8 +47,10 @@ interface SkyViewLUTOptions {
 /**
  * Hillaire Sky-View LUT.
  *
- * 192×108 RGBA16F. Pre-integrated view-ray radiance from the camera, indexed by
- * the horizon-packed (azimuth, zenith) parameterization from RenderSkyCommon.hlsl:122.
+ * 192×108 RGBA16F by default (`resolution`, or `quality` on `Sky`). Pre-integrated
+ * view-ray radiance from the camera, indexed by the horizon-packed (azimuth,
+ * zenith) parameterization from RenderSkyCommon.hlsl:122. The UV un-map uses the
+ * real resolution on both backends, and consumers read it back from `texture`.
  *
  * Port of `SkyViewLutPS` in RenderSkyRayMarching.hlsl:581-635. Reads the
  * Transmittance LUT for sun-direction extinction and the Multi-Scatter LUT for
@@ -175,7 +177,7 @@ export class SkyViewLUT {
     const useWGSL = this.backend === 'wgsl' || (this.backend === 'auto' && isWebGPU)
     if (useWGSL) {
       return vec4(
-        skyViewLutColorNode(uv(), params, transmittanceTex, multiScatterTex, sunDirU, viewHeightU),
+        skyViewLutColorNode(uv(), params, transmittanceTex, multiScatterTex, sunDirU, viewHeightU, this.resolution),
         float(1.0),
       )
     }
@@ -191,7 +193,7 @@ export class SkyViewLUT {
       const viewHeight = max(viewHeightU, params.bottomRadius.add(float(0.01)))
 
       // Un-map UV → view angles using the Hillaire horizon-packed scheme.
-      const { viewZenithCosAngle, lightViewCosAngle } = uvToSkyViewLutParams(params, viewHeight, lutUv)
+      const { viewZenithCosAngle, lightViewCosAngle } = uvToSkyViewLutParams(params, viewHeight, lutUv, this.resolution)
 
       // Reconstruct the sun direction relative to the camera's up (Z-up
       // in this LUT's local frame, matching HLSL:600-605). The actual sun

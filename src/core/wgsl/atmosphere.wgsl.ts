@@ -192,15 +192,16 @@ fn getSphericalDir(iPlusHalf: f32, jPlusHalf: f32, sqrtSampleCount: f32) -> vec3
  * includes). Takes `bottomRadius` flat rather than the full params struct —
  * it's the only field this map uses.
  *
- * The 192/108 constants are the SkyView LUT resolution; today they're hard-coded
- * in BOTH cores (see WGSL_CORE_PLAN.md — the fragility this whole effort kills).
+ * `lutSize` is the Sky-View LUT's texel size (width, height). The sub-UV
+ * correction depends on it, so it must be the size of the LUT being built or
+ * sampled — with another size the first/last texel centres miss the domain
+ * ends (zenith/nadir, sun/anti-sun azimuth) (issue #13). Callers pass it as a
+ * build-time constant.
  */
 export const UV_TO_SKYVIEW_PARAMS = /* wgsl */ `
-fn uvToSkyViewLutParams(viewHeight: f32, bottomRadius: f32, uv: vec2<f32>) -> vec2<f32> {
-  let resX = 192.0;
-  let resY = 108.0;
-  let uCorr = fromSubUvsToUnit(uv.x, resX);
-  let vCorr = fromSubUvsToUnit(uv.y, resY);
+fn uvToSkyViewLutParams(viewHeight: f32, bottomRadius: f32, uv: vec2<f32>, lutSize: vec2<f32>) -> vec2<f32> {
+  let uCorr = fromSubUvsToUnit(uv.x, lutSize.x);
+  let vCorr = fromSubUvsToUnit(uv.y, lutSize.y);
 
   let botR2 = bottomRadius * bottomRadius;
   let vh2 = viewHeight * viewHeight;
@@ -229,11 +230,12 @@ fn uvToSkyViewLutParams(viewHeight: f32, bottomRadius: f32, uv: vec2<f32>) -> ve
 
 /**
  * Forward map `SkyViewLutParamsToUv` → `vec2` UV. `intersectsGround` is an f32
- * flag (0/1) to keep the wgslFn arg list bool-free. Depends on
- * `fromUnitToSubUvs` (pass via includes).
+ * flag (0/1) to keep the wgslFn arg list bool-free. `lutSize` is the sampled
+ * LUT's (width, height), as for the inverse map. Depends on `fromUnitToSubUvs`
+ * (pass via includes).
  */
 export const SKYVIEW_PARAMS_TO_UV = /* wgsl */ `
-fn skyViewLutParamsToUv(intersectsGround: f32, viewZenithCosAngle: f32, lightViewCosAngle: f32, viewHeight: f32, bottomRadius: f32) -> vec2<f32> {
+fn skyViewLutParamsToUv(intersectsGround: f32, viewZenithCosAngle: f32, lightViewCosAngle: f32, viewHeight: f32, bottomRadius: f32, lutSize: vec2<f32>) -> vec2<f32> {
   let botR2 = bottomRadius * bottomRadius;
   let vh2 = viewHeight * viewHeight;
   let vHorizon = sqrt(max(vh2 - botR2, 0.0));
@@ -255,9 +257,24 @@ fn skyViewLutParamsToUv(intersectsGround: f32, viewZenithCosAngle: f32, lightVie
   let uvY = select(uvYSky, uvYGnd, intersectsGround > 0.5);
 
   let uvXraw = sqrt(saturate(-lightViewCosAngle * 0.5 + 0.5));
-  let resX = 192.0;
-  let resY = 108.0;
-  return vec2<f32>(fromUnitToSubUvs(uvXraw, resX), fromUnitToSubUvs(uvY, resY));
+  return vec2<f32>(fromUnitToSubUvs(uvXraw, lutSize.x), fromUnitToSubUvs(uvY, lutSize.y));
+}
+`
+
+/**
+ * Multi-Scatter LUT lookup UV: (cosSunZenith, altitude01) → sub-UV corrected
+ * UV. Port of the sample in `GetMultipleScattering` (RenderSkyCommon.hlsl),
+ * where `MultiScatteringLUTRes` is a compile-time constant; here `lutSize` is
+ * the sampled LUT's (width, height). Self-contained (the sub-UV formula is
+ * inlined) so it can be a `wgslFn` include of the LUT pixels.
+ */
+export const MULTISCATTER_PARAMS_TO_UV = /* wgsl */ `
+fn multiScatterLutParamsToUv(sunZenithCos: f32, altitude01: f32, lutSize: vec2<f32>) -> vec2<f32> {
+  let u = sunZenithCos * 0.5 + 0.5;
+  return vec2<f32>(
+    (u + 0.5 / lutSize.x) * (lutSize.x / (lutSize.x + 1.0)),
+    (altitude01 + 0.5 / lutSize.y) * (lutSize.y / (lutSize.y + 1.0))
+  );
 }
 `
 
@@ -387,6 +404,7 @@ export const ATMOSPHERE_WGSL = [
   SPHERICAL_DIR,
   UV_TO_SKYVIEW_PARAMS,
   SKYVIEW_PARAMS_TO_UV,
+  MULTISCATTER_PARAMS_TO_UV,
   COMPUTE_SCATTERING_ABSORPTION,
   UV_TO_TRANSMITTANCE,
   TRANSMITTANCE_PARAMS_TO_UV,

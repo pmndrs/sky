@@ -39,6 +39,8 @@ import {
   select,
 } from 'three/tsl'
 
+import { lutTextureSize, type LutSize2D } from '../../core/resolutions'
+
 /**
  * Bruneton/Hillaire's UV correction helpers — account for linear-filter bias so
  * the first/last texel centres land exactly on the unit-interval endpoints.
@@ -301,14 +303,16 @@ export function transmittanceLutParamsToUv(viewHeight: any, viewZenithCosAngle: 
  * @param {object}     atmosphere     atmosphere-uniform bundle
  * @param {THREE.Node} viewHeight     float — length of ray origin from planet centre
  * @param {THREE.Node} uvNode         vec2 — the raw [0,1] UV being un-mapped
+ * @param {LutSize2D}  lutSize        texel size of the Sky-View LUT being built
  * @returns {{ viewZenithCosAngle: THREE.Node, lightViewCosAngle: THREE.Node }}
  */
-export function uvToSkyViewLutParams(atmosphere: any, viewHeight: any, uvNode: any) {
-  // Sub-UV correction (HLSL:125). Width/height hard-coded to 192/108 to match
-  // the LUT_RESOLUTIONS.skyView defaults. If the LUT resolution is changed at
-  // construction time, these constants need to follow — flagged in SkyViewLUT.js.
-  const resX = float(192.0)
-  const resY = float(108.0)
+export function uvToSkyViewLutParams(atmosphere: any, viewHeight: any, uvNode: any, lutSize: LutSize2D) {
+  // Sub-UV correction (HLSL:125, where SebH hard-codes 192/108). Uses the
+  // LUT's real size, baked in as constants: with any other size the first and
+  // last texel centres miss the domain ends (zenith/nadir, sun/anti-sun
+  // azimuth) and the lookups clamp short of them (issue #13).
+  const resX = float(lutSize.width)
+  const resY = float(lutSize.height)
   const uCorr = fromSubUvsToUnit(uvNode.x, resX)
   const vCorr = fromSubUvsToUnit(uvNode.y, resY)
 
@@ -349,6 +353,8 @@ export function uvToSkyViewLutParams(atmosphere: any, viewHeight: any, uvNode: a
  *
  * Inputs are TSL nodes for the three scalars plus a bool node (`intersectsGround`)
  * the caller computes by testing whether the view ray hits the planet.
+ * `lutSize` is the texel size of the LUT being sampled — pass
+ * `lutTextureSize(skyViewLUT.texture)`, never a default (issue #13).
  */
 export function skyViewLutParamsToUv(
   atmosphere: any,
@@ -356,6 +362,7 @@ export function skyViewLutParamsToUv(
   viewZenithCosAngle: any,
   lightViewCosAngle: any,
   viewHeight: any,
+  lutSize: LutSize2D,
 ) {
   const botR2 = atmosphere.bottomRadius.mul(atmosphere.bottomRadius)
   const vh2 = viewHeight.mul(viewHeight)
@@ -383,11 +390,28 @@ export function skyViewLutParamsToUv(
   // X: sqrt((−lightView + 1)/2) (HLSL:183-186).
   const uvXraw = sqrt(saturate(lightViewCosAngle.negate().mul(0.5).add(0.5)))
 
-  // Sub-UV correction.
-  const resX = float(192.0)
-  const resY = float(108.0)
+  // Sub-UV correction at the sampled LUT's size.
+  const resX = float(lutSize.width)
+  const resY = float(lutSize.height)
   const uv = vec2(fromUnitToSubUvs(uvXraw, resX), fromUnitToSubUvs(uvY, resY))
   return uv
+}
+
+/**
+ * (cosSunZenith, altitude01) → Multi-Scatter LUT UV, sub-UV corrected at the
+ * sampled LUT's size. Port of the lookup in `GetMultipleScattering`
+ * (RenderSkyCommon.hlsl:410-417), where `MultiScatteringLUTRes` is a
+ * compile-time constant. WGSL twin: `multiScatterLutParamsToUv` in
+ * `core/wgsl/atmosphere.wgsl.ts`.
+ *
+ * @param {THREE.Node} sunZenithCos  float in [-1, 1]
+ * @param {THREE.Node} altitude01    float in [0, 1] — altitude / atmosphere thickness
+ * @param {LutSize2D}  lutSize       texel size of the sampled LUT
+ */
+export function multiScatterLutParamsToUv(sunZenithCos: any, altitude01: any, lutSize: LutSize2D) {
+  const resX = float(lutSize.width)
+  const resY = float(lutSize.height)
+  return vec2(fromUnitToSubUvs(sunZenithCos.mul(0.5).add(0.5), resX), fromUnitToSubUvs(altitude01, resY))
 }
 
 /**
@@ -449,8 +473,9 @@ export const getSphericalDir = /*@__PURE__*/ Fn(([iPlusHalf, jPlusHalf, sqrtSamp
  * @param {number}     [args.sampleCount=20]  number of ray-march steps
  * @param {boolean}    [args.ground=true]     add ground-albedo bounce at tBottom
  * @param {boolean}    [args.mieRayPhase=false] use Mie+Rayleigh phases vs. isotropic
- * @param {THREE.Node} [args.multiScatterLUT] texture node of the Multi-Scatter LUT.
- *        When provided the per-step in-scatter picks up the
+ * @param {THREE.Node} [args.multiScatterLUT] the Multi-Scatter LUT texture.
+ *        Its size is read from the texture (`lutTextureSize`) for the sub-UV
+ *        lookup. When provided the per-step in-scatter picks up the
  *        `multiScatteredLuminance * medium.scattering` term (MULTISCATAPPROX_ENABLED
  *        branch in `RenderSkyRayMarching.hlsl:187-197`). When omitted, the
  *        MS-LUT-independent build is used — preserves the Transmittance/MS LUT
@@ -528,6 +553,9 @@ export function integrateScatteredLuminance({
   const tMaxClipped = tBottom.lessThan(0.0).select(tMaxIfNoBottom, tMaxIfBoth)
   const tMax = (tMaxOverride ? min(tMaxClipped, tMaxOverride) : tMaxClipped).toVar()
 
+  // The Multi-Scatter LUT's real size, for its sub-UV lookup (a constant).
+  const multiScatterSize = multiScatterLUT ? lutTextureSize(multiScatterLUT) : null
+
   // ---- phase functions (constant per ray) ----
   const uniformPhase = float(1.0).div(float(4.0).mul(PI))
   const cosTheta = dot(sunDir, worldDir)
@@ -603,12 +631,8 @@ export function integrateScatteredLuminance({
     if (multiScatterLUT) {
       const atmosphereThickness = params.topRadius.sub(params.bottomRadius)
       const altitude01 = saturate(altitude.div(max(atmosphereThickness, float(1e-6))))
-      const msUvRaw = vec2(sunZenithCos.mul(0.5).add(0.5), altitude01)
-      // fromUnitToSubUvs with 32×32 — matches HLSL's sample in GetMultipleScattering.
-      const msRes = float(32.0)
-      const msUvX = msUvRaw.x.add(float(0.5).div(msRes)).mul(msRes.div(msRes.add(float(1.0))))
-      const msUvY = msUvRaw.y.add(float(0.5).div(msRes)).mul(msRes.div(msRes.add(float(1.0))))
-      const multiScatteredLuminance = texture(multiScatterLUT, vec2(msUvX, msUvY)).rgb
+      const msUv = multiScatterLutParamsToUv(sunZenithCos, altitude01, multiScatterSize as LutSize2D)
+      const multiScatteredLuminance = texture(multiScatterLUT, msUv).rgb
       // `multiScatteringFactor` is Unreal's artistic gain on this term; 1 is
       // physical. Scaling at the sample site covers every consumer of the MS
       // LUT (SkyView, AP, both raymarch fallbacks) with one multiply.

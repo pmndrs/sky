@@ -98,9 +98,24 @@ import { LUT_RESOLUTIONS } from '@pmndrs/sky'
 Override per-baker via `new SkyAtmosphereBaker(renderer, { lutResolutions })`
 (applies to Transmittance/MultiScatter/SkyView) and
 `{ apResolution, apKmPerSlice }` (Aerial Perspective). `Sky`'s `quality`
-option (`'low' | 'medium' | 'high'`) is a convenience wrapper around three
-preset `lutResolutions` bundles — see `src/Sky.ts`'s `QUALITY_PRESETS` if
-you want the exact numbers for `'low'`/`'high'`.
+option is a convenience wrapper around three preset `lutResolutions` bundles
+(the Aerial Perspective volume is not part of a tier):
+
+| `quality`  | Transmittance | MultiScatter | SkyView |
+| ---------- | ------------- | ------------ | ------- |
+| `'low'`    | 128×32        | 16×16        | 96×54   |
+| `'medium'` | 256×64        | 32×32        | 192×108 |
+| `'high'`   | 512×128       | 64×64        | 256×144 |
+
+Any size works end to end, on both shader backends: each LUT un-maps its
+texels with its own size, and every MultiScatter and SkyView lookup (sky
+mesh, stars, the Sky-View and Aerial Perspective integrators, the raymarch
+fallbacks, haze light shafts) applies Hillaire's sub-texel UV correction
+with the size of the texture it samples. (The Transmittance LUT has no
+such correction, in his code or here, so its size never entered the maps.) Before 0.4.0 the MultiScatter and SkyView sizes
+were fixed at 32 and 192×108 in the UV maps, so other sizes were sampled
+slightly off their texel centres. If you sample a LUT in your own shader,
+do the same: take the size from the texture, not from `LUT_RESOLUTIONS`.
 
 ## The `ILLUMINANCE_IS_ONE` contract
 

@@ -46,8 +46,10 @@
       Two <code>SkyViewLUT</code> instances (<code>backend:'wgsl'</code> / <code>'tsl'</code>) sharing one Transmittance
       + Multi-Scatter LUT, each rendered to a float target and diffed. This exercises the whole integrator in WGSL —
       medium sample, sun-transmittance (manual bilinear), earth shadow, MS-LUT feedback, power-series in-scatter, ground
-      bounce. Values are tiny (per-unit-sun radiance, ~0.001–0.04), so relative diff is reported too. The canvas shows
-      the WGSL SkyView LUT (×40).<br />
+      bounce. Values are tiny (per-unit-sun radiance, ~0.001–0.04), so relative diff is reported too. Runs once per
+      <code>quality</code> tier (its Transmittance, Multi-Scatter and Sky-View sizes): the Sky-View un-map and the
+      Multi-Scatter lookup take the real LUT sizes on both twins (issue #13). The canvas shows the WGSL SkyView LUT
+      (×40).<br />
       <span id="verdict">running…</span>
     </div>
     <script type="module">
@@ -74,31 +76,58 @@
         await renderer.init()
 
         const au = createAtmosphereUniforms(EARTH)
-        const tLut = new TransmittanceLUT(renderer, { atmosphereUniforms: au })
-        const msLut = new MultiScatterLUT(renderer, { atmosphereUniforms: au, transmittanceLUT: tLut })
-        tLut.render()
-        msLut.render()
 
-        const svW = new SkyViewLUT(renderer, {
-          atmosphereUniforms: au,
-          transmittanceLUT: tLut,
-          multiScatterLUT: msLut,
-          backend: 'wgsl',
-        })
-        const svT = new SkyViewLUT(renderer, {
-          atmosphereUniforms: au,
-          transmittanceLUT: tLut,
-          multiScatterLUT: msLut,
-          backend: 'tsl',
-        })
+        // Sky's QUALITY_PRESETS (src/Sky.ts): medium, low, high.
+        const TIERS = [
+          {
+            name: 'medium',
+            transmittance: { width: 256, height: 64 },
+            multiScatter: { width: 32, height: 32 },
+            skyView: { width: 192, height: 108 },
+          },
+          {
+            name: 'low',
+            transmittance: { width: 128, height: 32 },
+            multiScatter: { width: 16, height: 16 },
+            skyView: { width: 96, height: 54 },
+          },
+          {
+            name: 'high',
+            transmittance: { width: 512, height: 128 },
+            multiScatter: { width: 64, height: 64 },
+            skyView: { width: 256, height: 144 },
+          },
+        ]
 
         // A typical low sun (elevation ~20°) in the LUT's Z-up frame: (cosE, 0, sinE).
         const e = 0.35
         const sun = new THREE.Vector3(Math.cos(e), 0, Math.sin(e))
-        svW.sunDirection = sun
-        svT.sunDirection = sun
 
-        await runParity(svW, svT)
+        const results = []
+        let svW
+        for (const tier of TIERS) {
+          const tLut = new TransmittanceLUT(renderer, { atmosphereUniforms: au, resolution: tier.transmittance })
+          const msLut = new MultiScatterLUT(renderer, {
+            atmosphereUniforms: au,
+            transmittanceLUT: tLut,
+            resolution: tier.multiScatter,
+          })
+          tLut.render()
+          msLut.render()
+          const opts = {
+            atmosphereUniforms: au,
+            transmittanceLUT: tLut,
+            multiScatterLUT: msLut,
+            resolution: tier.skyView,
+          }
+          const w = new SkyViewLUT(renderer, { ...opts, backend: 'wgsl' })
+          const t = new SkyViewLUT(renderer, { ...opts, backend: 'tsl' })
+          w.sunDirection = sun
+          t.sunDirection = sun
+          results.push({ tier, ...(await runParity(w, t)) })
+          if (!svW) svW = w
+        }
+        report(results)
 
         // preview: WGSL SkyView ×40
         const mat = new THREE.NodeMaterial()
@@ -145,15 +174,25 @@
           const rel = a / (Math.abs(bufT[i]) + 1e-4)
           if (rel > maxRel) maxRel = rel
         }
+        rtW.dispose()
+        rtT.dispose()
         // Manual-bilinear vs hardware sampling → expect small but nonzero.
-        const pass = maxRel <= 0.02 || maxAbs <= 5e-5
-        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — maxAbs=${maxAbs.toExponential(3)}, maxRel=${(maxRel * 100).toFixed(2)}% (peak L≈${maxVal.toExponential(2)})`
+        return { pass: maxRel <= 0.02 || maxAbs <= 5e-5, maxAbs, maxRel, maxVal }
+      }
+
+      function report(results) {
+        const pass = results.every((r) => r.pass)
+        const parts = results.map(
+          (r) =>
+            `${r.pass ? 'ok' : 'FAIL'} ${r.tier.name} (sv ${r.tier.skyView.width}×${r.tier.skyView.height}, ` +
+            `ms ${r.tier.multiScatter.width}): maxAbs=${r.maxAbs.toExponential(3)}, ` +
+            `maxRel=${(r.maxRel * 100).toFixed(2)}% (peak L≈${r.maxVal.toExponential(2)})`,
+        )
+        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — ${parts.join(' | ')}`
         console.log(`[parity] ${msg}`)
         const el = document.getElementById('verdict')
         el.textContent = msg
         el.style.color = pass ? '#7f7' : '#f77'
-        rtW.dispose()
-        rtT.dispose()
       }
     </script>
   </body>

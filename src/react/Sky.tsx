@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 // The WebGPU entry, not the root one. This package is WebGPU-only, and R3F's
 // root entry is a separate ~670 KB bundle that imports three's WebGL build for
 // `WebGLRenderer` / `WebGLCubeRenderTarget`. Importing it here dragged the whole
@@ -14,6 +14,7 @@ import { useFrame, useThree } from '@react-three/fiber/webgpu'
 
 import { Sky as VanillaSky } from '../Sky'
 import type { SkyPmremOptions } from '../sky/pmrem/SkyPmrem'
+import type { LookTrackOverrides } from '../Sky'
 import { SkyContext } from './SkyContext'
 import { useStableValue } from './useStableValue'
 
@@ -43,6 +44,11 @@ export interface SkyProps {
   look?: string | Record<string, any> | null
   /** Keyframed look that follows sun elevation (e.g. `'ghibli'`). Overrides `look` while set. */
   lookTrack?: string | any[] | null
+  /**
+   * Pins `chroma` / `value` / `intensity` across the whole `lookTrack`. Omit to keep
+   * overrides set on the instance; `null` clears them.
+   */
+  lookTrackOverrides?: LookTrackOverrides | null
   /** Unreal `SkyLuminanceFactor`: per-channel grade after the look. Hex string, Color, Vector3 or [r,g,b]. */
   skyLuminanceFactor?: any
   /** Colour of the sun as a light: tints sky, haze, sun disc and `createSun` lights. `'neutral'`, `'bruneton'`, hex string, Color, Vector3 or [r,g,b]. */
@@ -100,8 +106,8 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  *   `timeOfDay`, `latitude`, `dayOfYear`, `sunDirection`, `north`,
  *   `exposure`, `sunDisc`, `turbidity`, `groundAlbedo`, `atmosphere`,
  *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `mirrorBelowHorizon`,
- *   `look`, `lookTrack`, `skyLuminanceFactor`, `sunColor`, `apDistanceScale`,
- *   `multiScatteringFactor`
+ *   `look`, `lookTrack`, `lookTrackOverrides`, `skyLuminanceFactor`, `sunColor`,
+ *   `apDistanceScale`, `multiScatteringFactor`
  *
  * Aerial-perspective haze post-process: render an `<AutoHaze />` child
  * (imported from `@pmndrs/sky/react/auto-haze`). It calls `useRenderPipeline`
@@ -209,6 +215,7 @@ function SkyController({
   hazeAltitudeBlend: hazeAltitudeBlendProp,
   look: lookProp,
   lookTrack: lookTrackProp,
+  lookTrackOverrides: lookTrackOverridesProp,
   skyLuminanceFactor: skyLuminanceFactorProp,
   sunColor: sunColorProp,
   apDistanceScale,
@@ -226,6 +233,7 @@ function SkyController({
   const atmosphere = useStableValue(atmosphereProp)
   const look = useStableValue(lookProp)
   const lookTrack = useStableValue(lookTrackProp)
+  const lookTrackOverrides = useStableValue(lookTrackOverridesProp)
   const skyLuminanceFactor = useStableValue(skyLuminanceFactorProp)
   const sunColor = useStableValue(sunColorProp)
   const hazeAltitudeBlend = useStableValue(hazeAltitudeBlendProp)
@@ -259,16 +267,19 @@ function SkyController({
   }, [sky, north])
 
   useEffect(() => {
-    if (typeof turbidity === 'number') sky.setTurbidity(turbidity)
-  }, [sky, turbidity])
-
-  useEffect(() => {
     if (groundAlbedo != null) sky.setGroundAlbedo(groundAlbedo)
   }, [sky, groundAlbedo])
 
   useEffect(() => {
     if (atmosphere) sky.setAtmosphere(atmosphere)
   }, [sky, atmosphere])
+
+  // After `atmosphere`, and re-run when it changes: Mie fields in
+  // `setAtmosphere` reset the turbidity-1 baseline (and turbidity to 1), so
+  // turbidity has to be re-applied on top whichever prop changed.
+  useEffect(() => {
+    if (typeof turbidity === 'number') sky.setTurbidity(turbidity)
+  }, [sky, turbidity, atmosphere])
 
   useEffect(() => {
     sky.setMirrorBelowHorizon(!!mirrorBelowHorizon)
@@ -282,12 +293,24 @@ function SkyController({
     if (hazePolicy) sky.setHazePolicy(hazePolicy)
   }, [sky, hazePolicy])
 
-  // A track wins over a single look while set; clearing the track falls back
-  // to whatever `look` says (setLook(undefined) is skipped, null = physical).
+  // A track wins over a single look while set. Removing `lookTrack` falls back
+  // to `look`, or to the physical sky when `look` is unset. An absent
+  // `lookTrackOverrides` keeps the instance's own (`useSky().setLookTrack(t, o)`);
+  // removing the prop clears the overrides it had set.
+  const lookPropsSet = useRef({ track: false, overrides: false })
   useEffect(() => {
-    if (lookTrack != null) sky.setLookTrack(lookTrack)
-    else if (look !== undefined) sky.setLook(look)
-  }, [sky, look, lookTrack])
+    const prev = lookPropsSet.current
+    if (lookTrack != null) {
+      const overrides =
+        lookTrackOverrides !== undefined ? lookTrackOverrides : prev.overrides ? null : sky._lookTrackOverrides
+      sky.setLookTrack(lookTrack, overrides)
+    } else if (look !== undefined) {
+      sky.setLook(look)
+    } else if (prev.track) {
+      sky.setLookTrack(null)
+    }
+    lookPropsSet.current = { track: lookTrack != null, overrides: lookTrackOverrides != null }
+  }, [sky, look, lookTrack, lookTrackOverrides])
 
   useEffect(() => {
     if (skyLuminanceFactor != null) sky.setSkyLuminanceFactor(skyLuminanceFactor)

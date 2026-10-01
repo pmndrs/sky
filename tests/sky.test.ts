@@ -95,6 +95,26 @@ describe('Sky', () => {
     sky.dispose()
   })
 
+  it('setAtmosphere with partial Mie values rebases on turbidity 1, so setTurbidity scales once', () => {
+    const sky = new Sky(mockRenderer(), { atmosphere: { mieScattering: [0.004, 0.004, 0.004] }, turbidity: 2 })
+    const earth = new Sky(mockRenderer())
+    const ext = earth.baker.atmosphereParams.mieExtinction.x
+    const abs = earth.baker.atmosphereParams.mieAbsorption.x
+    earth.dispose()
+
+    // The order the React binding applies them in: atmosphere, then turbidity.
+    sky.setAtmosphere({ mieScattering: [0.004, 0.004, 0.004] })
+    expect(sky._turbidity).toBe(1)
+    // Fields the partial omits come from the turbidity-1 baseline, not the 2x live values.
+    expect(sky.baker.atmosphereParams.mieExtinction.x).toBeCloseTo(ext, 12)
+    sky.setTurbidity(2)
+    const p = sky.baker.atmosphereParams
+    expect(p.mieScattering.x).toBeCloseTo(0.008, 12)
+    expect(p.mieExtinction.x).toBeCloseTo(ext * 2, 12)
+    expect(p.mieAbsorption.x).toBeCloseTo(abs * 2, 12)
+    sky.dispose()
+  })
+
   it('setNorth keeps a raw sun direction raw', () => {
     const sky = new Sky(mockRenderer())
     sky.setSunDirection({ elevation: 20, azimuth: 45, raw: true })

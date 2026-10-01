@@ -145,6 +145,9 @@ the three Mie fields, so repeated calls don't compound and `0` can be undone.
 The baseline is the preset (plus any `atmosphere` Mie override) at
 construction; `setPreset` resets it to the new preset's Mie and turbidity
 to 1, and so does a `setAtmosphere` call that sets any of the Mie fields.
+Mie fields that call leaves out keep their turbidity-1 values, so
+`setAtmosphere({ mieScattering })` followed by `setTurbidity(2)` doubles all
+three once.
 
 ### `groundAlbedo`
 

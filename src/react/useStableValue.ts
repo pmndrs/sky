@@ -10,7 +10,7 @@ import { useRef } from 'react'
  *
  * Comparison is `JSON.stringify` equality, not deep-equality in general:
  * good enough for the plain-data shapes this is used for (`sunDirection`,
- * `groundAlbedo`, `atmosphere`, `look`, `lookTrack`, `skyLuminanceFactor`, `sunColor`,
+ * `groundAlbedo`, `atmosphere`, `look`, `lookTrack`, `lookTrackOverrides`, `skyLuminanceFactor`, `sunColor`,
  * `hazeAltitudeBlend`). `three.js` `Vector3` / `Color` instances serialize
  * fine this way — their public fields (`x/y/z` or `r/g/b`) are exactly what
  * `JSON.stringify` picks up — and primitives / `null` / `undefined` compare

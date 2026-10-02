@@ -115,6 +115,7 @@ export class SkyAtmosphereBaker {
    */
   skyDepthEpsilon: any
   _sunColorListeners: Set<(sunColor: Vector3) => void>
+  _bakeListeners: Set<() => void>
   _camera: PerspectiveCamera | null
   _cameraPositionKm: Vector3
   _cameraUp: Vector3
@@ -262,6 +263,7 @@ export class SkyAtmosphereBaker {
     this._sunListeners = new Set()
     this.skyDepthEpsilon = uniform(0)
     this._sunColorListeners = new Set()
+    this._bakeListeners = new Set()
 
     // Camera handle, set by setCamera(). Used to refresh per-frame uniforms
     // (viewHeight on SkyView/mesh; matrices on AP LUT).
@@ -719,6 +721,23 @@ export class SkyAtmosphereBaker {
     this.atmosDirty = false
     this.cubeDirty = false
     this.cameraDirty = false
+
+    if (skyContentChanged) for (const fn of this._bakeListeners) fn()
+  }
+
+  /**
+   * Subscribe to cube re-bakes. The listener fires at the end of every
+   * `update()` that re-baked the cube, i.e. after any change to what the sky
+   * shows: sun, atmosphere, exposure (`luminanceScale`), sun colour, look, or
+   * a camera move large enough to change the baked sky (100 m, or 2 % of the
+   * altitude). A physical `SkySun` uses it to follow the exposure, the
+   * atmosphere and the camera's altitude without per-frame work.
+   *
+   * @returns unsubscribe function
+   */
+  addBakeListener(fn: () => void): () => void {
+    this._bakeListeners.add(fn)
+    return () => this._bakeListeners.delete(fn)
   }
 
   /**
@@ -798,5 +817,6 @@ export class SkyAtmosphereBaker {
     // keep them (and whatever they capture) alive.
     this._sunListeners.clear()
     this._sunColorListeners.clear()
+    this._bakeListeners.clear()
   }
 }

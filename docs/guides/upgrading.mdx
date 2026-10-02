@@ -24,6 +24,31 @@ noon whiteout some scenes had is gone.
 - To keep the old ground bounce, pass it explicitly:
   `new Sky(renderer, { groundAlbedo: 0.3 })`.
 
+## `SkySun` goes dark when the sun sets
+
+A `createSun()` light used to keep its full intensity with the sun below the
+horizon, lighting the scene from underneath at night. It now fades with the
+fraction of the sun's disc above the horizon, over one disc diameter (~0.53°),
+and is off once the disc has set. Every sun path applies it: `setTimeOfDay`,
+`setSunDirection`, latitude, date and north, and a light created at night
+starts dark.
+
+`sun.intensity` is now the **requested** daytime intensity and stays at what
+you set, at night too; `sun.light.intensity` is the effective value. So:
+
+- Delete any workaround that scaled `sun.light.intensity` by the sun's
+  elevation; set `sun.intensity` (or `sun.setIntensity(v)`) once.
+- Code that read `sun.intensity` to get the scene's current light value
+  should read `sun.light.intensity`.
+- Values written straight to `sun.light.intensity` last only until the next
+  sun change. To drive the intensity yourself (a wider, stylised ramp, or
+  deliberate light from below the horizon), pass `horizonFade: false` or call
+  `sun.setHorizonFade(false)`.
+
+New and opt-in: `createSun({ physical: true })` derives the light's intensity
+and colour from the sky (`exposure × T(sun)`), which is about 9× brighter than
+the default `4` at noon; see [`createSun`](../api/sky#skysun).
+
 ## Reflections update every frame (and look slightly different on three r185/r186)
 
 On the WebGPU backend, the environment map (`sky.environmentTexture`, the
@@ -101,7 +126,8 @@ the sky, haze, sun disc and `createSun()` lights together. The default is a
 white sun, as before.
 
 A `SkySun` light's colour is now `baseColor × the sky's sun colour`, so the
-next `setSunColor` overwrites anything assigned to `sun.light.color` directly.
+next `setSunColor` (or sun move) overwrites anything assigned to
+`sun.light.color` directly.
 Set your colour with `sun.setColor(...)` instead.
 
 ## Haze setters work before `applyHaze`

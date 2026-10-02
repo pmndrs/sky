@@ -167,6 +167,63 @@ Each factory returns a standalone helper bound to this `Sky` — call
 | `enableStars(opts?)` (async)              | Creates/updates the night sky (star sprites + Milky Way); returns the `SkyNight`. See [Night sky](../guides/night-sky). |
 | `disableStars()` / `setStarsIntensity(v)` | Hide the night sky / scale the stars once created (see `sky.stars`).                                                    |
 
+### `SkySun`
+
+```js
+const sun = sky.createSun({ intensity: 4, castShadow: true }).attach(scene)
+sun.fitShadowToObject(scene)
+```
+
+| Option          | Default            | Notes                                                                                                                                 |
+| --------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `intensity`     | `4` (physical `1`) | Requested daytime intensity. With `physical: true`, a multiplier on the sky-derived illuminance.                                      |
+| `horizonFade`   | `true`             | Fade the light with the fraction of the sun's disc above the horizon. `false` keeps it on below the horizon (cinematic lighting).     |
+| `physical`      | `false`            | Derive intensity and tint from the sky: `intensity × exposure × T(sun)`. See below.                                                   |
+| `color`         | `0xffffff`         | Base colour, multiplied by the sky's [sun colour](../guides/tuning-atmosphere#sun-colour).                                            |
+| `distance`      | `50000`            | Light distance along the sun ray (metres), for the shadow camera.                                                                     |
+| `target`        | new `Object3D`     | The light's target.                                                                                                                   |
+| `castShadow`, … | `true`, …          | `shadowMapSize` (2048), `shadowBias`, `shadowNormalBias`, `shadowRadius`, `shadowCamera` (`{ left, right, top, bottom, near, far }`). |
+
+`sun.intensity` is the **requested** intensity and `sun.light.intensity` the
+**effective** one. The light is re-synced on every sun change
+(`setTimeOfDay`, `setSunDirection`, latitude, date, north), sun-colour change
+and intensity edit, so set intensity and colour through `sun.intensity` /
+`setIntensity(v)` and `setColor(c)`: a value written straight to
+`sun.light.intensity` or `sun.light.color` is overwritten by the next sync.
+Other setters: `setHorizonFade(bool)`, `setPhysical(bool)` (also the
+`horizonFade` / `physical` properties), `setDistance`, `fitShadowToBox`,
+`fitShadowToObject`, `attach`, `detach`, `dispose`.
+
+**Horizon fade.** The light scales with the visible fraction of the sun's
+disc: full while the whole disc is up, half with its centre on the horizon,
+off once it has set. The band is one disc diameter (~0.53°, or whatever
+`setSunDisc({ angularDiameter })` set), so the light goes out when the
+visible sun does. The horizon is the flat world's (elevation 0 against world
++Y), like `SkyMoon`'s; it does not follow the camera around a planet in
+planet mode.
+
+**Physical mode.** `createSun({ physical: true })` sets the light to
+`intensity × luminanceScale × T(sun)`: the sky's exposure times the
+transmittance from the top of the atmosphere to the camera's altitude along
+the sun direction, tinted by `T` and the sun colour. The LUTs hold sky
+radiance for a sun of illuminance 1 at the top of the atmosphere, so in the
+sky's units the sunlight's illuminance is exactly that, with no extra
+constant. `T` comes from a CPU twin of the Transmittance LUT (it matches the
+GPU LUT to half-float precision), so the light dims and reddens toward the
+horizon like the sun disc, and goes dark when the planet hides the sun. At
+the defaults (exposure 40, noon in late June at 37.7° N) the light's
+luminance is ~35.5, about 9× the default constant `4`: a white Lambertian
+surface in full sun reads ~11, 13–16× the open sky, as in daylight. Lower
+`toneMappingExposure` accordingly when switching an existing scene over.
+
+It follows the sun immediately, and `setExposure`, atmosphere changes and the
+camera's altitude on the next `sky.update()` (through
+[`baker.addBakeListener`](./baker#addbakelistenerfn); nothing runs on frames
+where the sky did not change). With `horizonFade` on, the flat-world horizon
+decides when the disc has set; with it off, the planet's true horizon from
+the camera's altitude does. The transmittance already dims a low sun, so
+there is no second ramp.
+
 ## `presets`
 
 `import { presets } from '@pmndrs/sky'` re-exports the same

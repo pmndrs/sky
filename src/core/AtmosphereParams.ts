@@ -61,8 +61,10 @@ export interface AtmosphereParams {
   // Sun
   sunAngularRadius: number
   /**
-   * Accepted for forward compatibility but not yet read by any shader.
-   * See issue #4 for tracking uniform sun illuminance support.
+   * Accepted for forward compatibility but not read by any shader. The LUTs
+   * are per unit sun illuminance and `luminanceScale` (the sky's exposure)
+   * scales them; `createSun({ physical: true })` lights the scene in the same
+   * units (#4).
    * @deprecated
    */
   sunIlluminance: Vector3

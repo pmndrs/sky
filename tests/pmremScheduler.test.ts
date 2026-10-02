@@ -8,10 +8,17 @@ function fakeRenderer() {
   return {
     autoClear: true,
     copies: 0,
+    mrt: null as any,
     getRenderTarget: () => null,
     getActiveCubeFace: () => 0,
     getActiveMipmapLevel: () => 0,
     setRenderTarget: vi.fn(),
+    getMRT() {
+      return this.mrt
+    },
+    setMRT(mrt: any) {
+      this.mrt = mrt
+    },
     copyTextureToTexture() {
       this.copies++
     },
@@ -108,6 +115,46 @@ describe('PmremScheduler', () => {
     expect(gen.filtered).toHaveLength(LEVELS)
     expect(renderer.copies).toBe(1)
     expect(gen.whole).toBe(2) // the pending change was baked whole
+  })
+
+  it('filters with the caller MRT cleared and restores it (issue #36)', () => {
+    const { s, gen, renderer } = make({ minInterval: 0, levelsPerFrame: 1 })
+    const callerMRT = { isMRTNode: true }
+    renderer.mrt = callerMRT
+    const seen: any[] = []
+    gen.fromCubemap.mockImplementation(() => {
+      seen.push(renderer.mrt)
+      return { width: 768, height: 1024, texture: {}, dispose() {} }
+    })
+    gen._applyGGXFilter = () => seen.push(renderer.mrt)
+    s.markDirty()
+    s.tick(0) // whole first bake
+    s.markDirty()
+    s.tick(1) // one slice
+    expect(seen).toEqual([null, null])
+    expect(renderer.mrt).toBe(callerMRT)
+  })
+
+  it('a throwing slice restores the renderer and restarts the refresh', () => {
+    const { s, gen, renderer } = make({ minInterval: 0, levelsPerFrame: 1 })
+    const callerMRT = { isMRTNode: true }
+    renderer.mrt = callerMRT
+    s.markDirty()
+    s.tick(0)
+    s.markDirty()
+    s.tick(1) // level 1
+    const filter = gen._applyGGXFilter
+    gen._applyGGXFilter = () => {
+      throw new Error('lost')
+    }
+    expect(() => s.tick(2)).toThrow('lost')
+    expect(renderer.mrt).toBe(callerMRT)
+    expect(renderer.autoClear).toBe(true)
+    gen._applyGGXFilter = filter
+    gen.filtered.length = 0
+    for (let f = 3; f <= 3 + LEVELS; f++) s.tick(f)
+    expect(gen.filtered).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) // from level 1 again
+    expect(renderer.copies).toBe(1)
   })
 
   it('falls back to whole bakes when generator internals are missing', () => {

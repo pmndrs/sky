@@ -77,6 +77,20 @@ zenith drift only happens in planet mode (local up tilts as you move).
 every frame is cheap once the sun/atmosphere have settled — most frames it's
 just a camera-height comparison.
 
+### Renderer state
+
+`update()` and `flushPmrem()` leave the renderer as they found it, so they can
+be called in the middle of your own frame, with an MRT still active from a
+G-buffer pass (`renderer.setMRT(mrt({ output, normal: normalView }))`). Every
+internal draw (the LUT passes, the cube capture, three's PMREM generator)
+runs with the MRT cleared, and your MRT, render target, active cube face and
+mip level are restored afterwards. That holds when a draw throws, too: the
+error propagates, the baker stays dirty so the next `update()` retries the
+bake, and the sky-mesh uniforms the bake overrides (`showSunDisc`,
+`showMoonDisc`, `mirrorBelowHorizon`) are put back. An idle `update()`
+touches no renderer state. `updateAerialPerspective()` is a compute dispatch
+and doesn't depend on any of it.
+
 > **Note:**
 > `updateAerialPerspective()` is **not** part of the dirty-flag system — the AP LUT's froxels are camera-relative, so it
 > must re-render every frame the camera moves, regardless of any other dirty state. Call it explicitly each frame if

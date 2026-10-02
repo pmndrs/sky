@@ -167,14 +167,17 @@ export class TransmittanceLUT {
    */
   render() {
     const renderer = this.renderer
+    // Resets the caller's MRT (a single-output pass under a multi-attachment
+    // MRT fails WebGPU validation); restored even if the pass throws.
     _rendererState = RendererUtils.resetRendererState(renderer, _rendererState)
-
-    renderer.setRenderTarget(this.renderTarget)
-    _quadMesh.material = this.material
-    _quadMesh.name = 'TransmittanceLUT'
-    _quadMesh.render(renderer)
-
-    RendererUtils.restoreRendererState(renderer, _rendererState)
+    try {
+      renderer.setRenderTarget(this.renderTarget)
+      _quadMesh.material = this.material
+      _quadMesh.name = 'TransmittanceLUT'
+      _quadMesh.render(renderer)
+    } finally {
+      RendererUtils.restoreRendererState(renderer, _rendererState)
+    }
   }
 
   dispose() {

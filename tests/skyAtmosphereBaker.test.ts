@@ -5,13 +5,27 @@ import { SkyAtmosphereBaker } from '../src/sky/SkyAtmosphereBaker'
 // Minimal renderer surface for constructing a baker in node — mirrors the
 // helper in tests/sky.test.ts (the same shape already proven sufficient to
 // construct `Sky`, which constructs the same `SkyAtmosphereBaker`).
+// Stateful for the MRT / render-target bookkeeping the internal draws do.
 function mockRenderer(): any {
-  return {
+  const r = {
+    mrt: null as any,
+    target: null as any,
+    face: 0,
+    mip: 0,
+    xr: { enabled: true },
     compile() {},
-    setRenderTarget() {},
-    getRenderTarget() {
-      return null
-    },
+    setRenderTarget: vi.fn((target: any, face = 0, mip = 0) => {
+      r.target = target
+      r.face = face
+      r.mip = mip
+    }),
+    getRenderTarget: () => r.target,
+    getActiveCubeFace: () => r.face,
+    getActiveMipmapLevel: () => r.mip,
+    setMRT: vi.fn((mrt: any) => {
+      r.mrt = mrt
+    }),
+    getMRT: () => r.mrt,
     render() {},
     compute() {},
     backend: {},
@@ -19,6 +33,7 @@ function mockRenderer(): any {
       return true
     },
   }
+  return r
 }
 
 /**
@@ -116,5 +131,115 @@ describe('SkyAtmosphereBaker structural early-outs (issue #12)', () => {
 
     expect(baker.atmosDirty).toBe(true)
     expect(baker.cubeDirty).toBe(true)
+  })
+})
+
+describe('SkyAtmosphereBaker renderer-state isolation (issue #36)', () => {
+  // Stand-ins for a caller mid-frame: a G-buffer MRT and its own target.
+  const callerMRT = { isMRTNode: true, name: 'beauty+normal' }
+  const callerTarget = { name: 'caller target' }
+
+  function bakerUnderCallerState() {
+    const renderer = mockRenderer()
+    const baker = new SkyAtmosphereBaker(renderer)
+    stubRenderStages(baker)
+    renderer.setMRT(callerMRT)
+    renderer.setRenderTarget(callerTarget, 2, 1)
+    renderer.setMRT.mockClear()
+    renderer.setRenderTarget.mockClear()
+    return { renderer, baker }
+  }
+
+  function expectCallerStateRestored(renderer: any) {
+    expect(renderer.getMRT()).toBe(callerMRT)
+    expect(renderer.getRenderTarget()).toBe(callerTarget)
+    expect(renderer.getActiveCubeFace()).toBe(2)
+    expect(renderer.getActiveMipmapLevel()).toBe(1)
+  }
+
+  it('a dirty update captures the cube and filters the PMREM with no MRT, then restores the caller state', () => {
+    const { renderer, baker } = bakerUnderCallerState()
+    const seen: Record<string, any> = {}
+    vi.mocked(baker.cubeCamera.update).mockImplementation(() => {
+      seen.cubeMRT = renderer.getMRT()
+      renderer.setRenderTarget(baker.cubeRenderTarget, 5, 0) // as a capture leaves it mid-way
+    })
+    vi.mocked(baker.pmremGenerator.fromCubemap).mockImplementation(() => {
+      seen.pmremMRT = renderer.getMRT()
+      return { texture: {}, dispose() {} } as any
+    })
+
+    baker.setSun({ elevation: 30, azimuth: 120 })
+    baker.update()
+
+    expect(baker.cubeCamera.update).toHaveBeenCalledTimes(1)
+    expect(baker.pmremGenerator.fromCubemap).toHaveBeenCalledTimes(1)
+    expect(seen.cubeMRT).toBeNull()
+    expect(seen.pmremMRT).toBeNull()
+    expectCallerStateRestored(renderer)
+    expect(baker.cubeDirty).toBe(false)
+  })
+
+  it('an idle update leaves the caller MRT and render target untouched', () => {
+    const { renderer, baker } = bakerUnderCallerState()
+    baker.update() // construction-time bake
+    renderer.setMRT.mockClear()
+    renderer.setRenderTarget.mockClear()
+    vi.mocked(baker.cubeCamera.update).mockClear()
+
+    baker.update()
+
+    expect(baker.cubeCamera.update).not.toHaveBeenCalled()
+    expect(renderer.setMRT).not.toHaveBeenCalled()
+    expect(renderer.setRenderTarget).not.toHaveBeenCalled()
+    expectCallerStateRestored(renderer)
+  })
+
+  it('a throwing cube capture restores renderer state and sky uniforms, stays dirty, and retries', () => {
+    const { renderer, baker } = bakerUnderCallerState()
+    baker.update() // construction-time bake
+
+    const sky = baker.sky
+    sky.showSunDisc.value = 1
+    sky.showMoonDisc.value = 1
+    sky.mirrorBelowHorizon.value = 0
+    baker.setMirrorBelowHorizon(true)
+    baker.setSun({ elevation: 10, azimuth: 200 })
+
+    const capture = vi.mocked(baker.cubeCamera.update)
+    capture.mockImplementationOnce(() => {
+      // What a CubeCamera.update that throws on its fourth face leaves behind.
+      renderer.xr.enabled = false
+      baker.cubeRenderTarget.texture.generateMipmaps = false
+      renderer.setRenderTarget(baker.cubeRenderTarget, 3, 0)
+      throw new Error('device lost')
+    })
+
+    expect(() => baker.update()).toThrow('device lost')
+
+    expectCallerStateRestored(renderer)
+    expect(renderer.xr.enabled).toBe(true)
+    expect(baker.cubeRenderTarget.texture.generateMipmaps).toBe(true)
+    expect(sky.showSunDisc.value).toBe(1)
+    expect(sky.showMoonDisc.value).toBe(1)
+    expect(sky.mirrorBelowHorizon.value).toBe(0)
+    expect(baker.sunDirty).toBe(true)
+    expect(baker.cubeDirty).toBe(true)
+
+    // The retry runs the capture again, with the bake-only overrides in force.
+    let bakeState: number[] = []
+    capture.mockImplementation(() => {
+      bakeState = [sky.showSunDisc.value, sky.showMoonDisc.value, sky.mirrorBelowHorizon.value]
+    })
+    capture.mockClear()
+
+    baker.update()
+
+    expect(capture).toHaveBeenCalledTimes(1)
+    expect(bakeState).toEqual([0, 0, 1])
+    expect(baker.sunDirty).toBe(false)
+    expect(baker.cubeDirty).toBe(false)
+    expectCallerStateRestored(renderer)
+    expect(sky.showSunDisc.value).toBe(1)
   })
 })

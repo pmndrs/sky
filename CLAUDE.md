@@ -161,6 +161,20 @@ Then pass the corrected `worldDir` and `tMax` into both
 applied, the AP / Sky-View boundary matches well enough that the
 sky-fallback blend below becomes unnecessary in canonical mode.
 
+Above the atmosphere, also shorten the march by the distance
+`moveToTopAtmosphere` skipped (his `tMaxMax -= LengthToAtmosphere`,
+:685-701), and store no haze when the voxel ends before the ray enters
+(he returns opacity 1 there, which would black out geometry in front of the
+atmosphere). Until 2026-10-02 each voxel marched its full camera distance
+from the entry point, so every slice past the entry held roughly the
+whole-path value. That over-hazed `'ap'` above 100 km (mean 8-bit error vs the
+raymarch 15–31) but flattened each froxel ray's profile, which hid the D4
+slice bands there. With the correct profile the refinement brings the error
+to 2–6, but slice bands of 0.009–0.014 in alpha remain at 300 km (four
+uniform steps under-sample the dense end of each descending segment);
+without the refinement (`apRefineSteps: 0`) `'ap'` above 100 km reads worse
+than before (3 → 9). `'auto'` raymarches up there and never reads the AP.
+
 ### AP coverage limit vs sky integration — sky-fallback blend (legacy / opt-in)
 
 Historical context: before the underground-froxel correction was ported,

@@ -21,6 +21,7 @@ import {
   normalize,
   length,
   select,
+  max,
 } from 'three/tsl'
 
 import { integrateScatteredLuminance, moveToTopAtmosphere } from '../../backends/tsl/atmosphere.tsl'
@@ -304,9 +305,25 @@ export class AerialPerspectiveLUT {
       worldDirV.assign(select(belowGround, correctedDir, worldDirV))
       tMax.assign(select(belowGround, correctedT, tMax))
 
-      // --- move ray-march start onto atmosphere boundary if camera is in space ---
+      // --- camera above the atmosphere: start the march where the ray enters
+      // it, and shorten the froxel's march by that distance, as
+      // RenderCameraVolumePS does (RenderSkyRayMarching.hlsl:685-701):
+      //   LengthToAtmosphere = length(prevWorldPos - WorldPos)
+      //   if (tMaxMax < LengthToAtmosphere) → empty voxel
+      //   tMaxMax = max(0, tMaxMax - LengthToAtmosphere)
+      // Without the shortening the froxel ray ran its full camera distance
+      // from the entry point, so voxels still in vacuum stored haze and the
+      // ones inside stored a longer path than their depth. Inside the
+      // atmosphere `newPos` is the camera itself, the length is exactly 0 and
+      // nothing changes. His early-outs return (0, 0, 0, 1), i.e. opacity 1,
+      // which with his premultiplied blend would black out anything in front
+      // of the atmosphere; we store "no haze" (0, 0, 0, 0) as for a ray that
+      // misses the atmosphere. ---
       const moved = moveToTopAtmosphere(camPosKm, worldDirV, params)
       const startPos = moved.newPos.toVar()
+      const lengthToAtmosphere = length(startPos.sub(camPosKm))
+      const reachesAtmosphere = lengthToAtmosphere.lessThanEqual(tMax)
+      const tMaxMax = max(tMax.sub(lengthToAtmosphere), float(0.0))
 
       // --- integrate (with multi-scatter feedback this time) ---
       // Per-slice step count, SebH's `SampleCountIni = max(1, 2·(sliceId + 1))`
@@ -330,7 +347,7 @@ export class AerialPerspectiveLUT {
         sampleDistribution: 'uniformSegments',
         ground: false,
         mieRayPhase: true,
-        tMaxOverride: tMax,
+        tMaxOverride: tMaxMax,
       })
 
       // Mean transmittance (HLSL line 714) → alpha = 1 - meanT so consumer
@@ -339,8 +356,9 @@ export class AerialPerspectiveLUT {
       const alpha = float(1.0).sub(meanT)
 
       // If the ray missed the atmosphere entirely (possible at very high
-      // altitudes), zero out — the consumer treats alpha=0 as "no haze".
-      const validF = moved.valid.select(float(1.0), float(0.0))
+      // altitudes), or this voxel ends before the ray enters it, zero out —
+      // the consumer treats alpha=0 as "no haze".
+      const validF = moved.valid.and(reachesAtmosphere).select(float(1.0), float(0.0))
 
       textureStore(tex, ivec3(int(x), int(y), int(z)), vec4(result.L.mul(validF), alpha.mul(validF)))
     })

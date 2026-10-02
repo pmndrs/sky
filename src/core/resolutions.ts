@@ -21,3 +21,35 @@ export const LUT_RESOLUTIONS: LutResolutions = {
   // fringe at distant silhouettes.
   aerialPerspective: { x: 32, y: 32, z: 32, kmPerSlice: 8.0 },
 }
+
+/** Texel size of a 2D LUT. */
+export interface LutSize2D {
+  width: number
+  height: number
+}
+
+/**
+ * Texel size of a 2D LUT texture — a three `Texture` (render-target textures
+ * carry `image.width/height`) or a texture node holding one — read when a
+ * shader graph is built.
+ *
+ * Every LUT lookup applies Hillaire's sub-UV correction, which depends on the
+ * resolution of the texture being sampled. The consumers take it from the
+ * texture they are handed rather than from a separate number or a default, so
+ * a `quality` tier or a custom `lutResolutions` can't be sampled with another
+ * size's remap (issue #13). LUT render targets are never resized after
+ * construction, so the value is a constant for the life of the material.
+ */
+export function lutTextureSize(tex: any): LutSize2D {
+  const t = tex?.isTextureNode ? tex.value : tex
+  const width = t?.image?.width
+  const height = t?.image?.height
+  // > 1: the inverse sub-UV map divides by (resolution - 1).
+  if (!(width > 1 && height > 1)) {
+    throw new Error(
+      `lutTextureSize: ${t?.name || 'texture'} has no usable size (${width}×${height}); ` +
+        'LUT lookups need the resolution of the texture they sample',
+    )
+  }
+  return { width, height }
+}

@@ -65,7 +65,8 @@ interface MultiScatterLUTOptions {
 /**
  * Hillaire Multiple-Scattering LUT.
  *
- * 32×32 RGBA16F. Parameterised by (cosSunZenith, viewHeight). Each texel
+ * 32×32 RGBA16F by default (`resolution`, or `quality` on `Sky`; both backends
+ * un-map texels with the real size). Parameterised by (cosSunZenith, viewHeight). Each texel
  * integrates over 64 stratified spherical directions, for each direction
  * ray-marches 20 steps through the atmosphere reading the Transmittance LUT,
  * then finalises via Hillaire's closed-form geometric-series sum
@@ -151,7 +152,7 @@ export class MultiScatterLUT {
     const isWebGPU = (this.renderer as any).backend?.isWebGPUBackend === true
     const useWGSL = !debugMode && (this.backend === 'wgsl' || (this.backend === 'auto' && isWebGPU))
     if (useWGSL) {
-      return vec4(multiScatterLutColorNode(uv(), params, transmittanceTex), float(1.0))
+      return vec4(multiScatterLutColorNode(uv(), params, transmittanceTex, this.resolution), float(1.0))
     }
 
     return Fn(() => {

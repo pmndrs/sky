@@ -59,10 +59,12 @@ import {
 import {
   computeScatteringAbsorption,
   hgPhase,
+  multiScatterLutParamsToUv,
   rayleighPhase,
   raySphereIntersectNearest,
   transmittanceLutParamsToUv,
 } from '../backends/tsl/atmosphere.tsl'
+import { lutTextureSize } from '../core/resolutions'
 
 /** Anything with a three `DirectionalLight` shadow: the light itself or a `SkySun`. */
 export type HazeShadowLightInput = any
@@ -480,17 +482,15 @@ export function buildFullPathInscatter({
   apDistanceScale?: any
 }): any {
   const ctx = makeRayContext(cameraPositionKm, rayDir, sunDirection, params, transmittanceLUT, apDistanceScale)
+  const multiScatterSize = lutTextureSize(multiScatterLUT)
   const integrand = (tM: any) => {
     const sp = samplePath(ctx, tM)
     const sun = sunLightAt(ctx, sp.pKm, sp.radius)
     // Multi-scatter LUT lookup, as in `integrateScatteredLuminance`
-    // (32×32, sub-texel corrected).
+    // (sub-texel corrected at the LUT's own size).
     const atmosphereThickness = params.topRadius.sub(params.bottomRadius)
     const altitude01 = clamp(sp.altitude.div(max(atmosphereThickness, float(1e-6))), float(0.0), float(1.0))
-    const msRes = float(32.0)
-    const msUv = vec2(sun.sunCos.mul(0.5).add(0.5), altitude01)
-      .add(float(0.5).div(msRes))
-      .mul(msRes.div(msRes.add(1.0)))
+    const msUv = multiScatterLutParamsToUv(sun.sunCos, altitude01, multiScatterSize)
     const ms = texture(multiScatterLUT, msUv).level(0).rgb
     const single = sp.phaseTimesScattering.mul(sun.light)
     const multiple = ms.mul(sp.medium.scattering).mul(params.multiScatteringFactor)

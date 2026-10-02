@@ -11,7 +11,7 @@
  * arg names so the call sites stay readable.
  */
 
-import { float, texture, wgslFn } from 'three/tsl'
+import { float, texture, vec2, wgslFn } from 'three/tsl'
 
 import {
   RAY_SPHERE,
@@ -20,7 +20,9 @@ import {
   HG_PHASE,
   BILINEAR_SAMPLE_2D,
   SPHERICAL_DIR,
+  MULTISCATTER_PARAMS_TO_UV,
 } from '../../core/wgsl/atmosphere.wgsl.js'
+import { lutTextureSize, type LutSize2D } from '../../core/resolutions.js'
 import { TRANSMITTANCE_LUT_PIXEL, SKYVIEW_LUT_PIXEL, MULTISCATTER_LUT_PIXEL } from '../../core/wgsl/luts.wgsl.js'
 
 // Helper nodes, wrapped once and threaded through `includes`. Only helpers with
@@ -32,6 +34,7 @@ const uvToTransmittanceLutParamsFn = /*@__PURE__*/ wgslFn(UV_TO_TRANSMITTANCE)
 const rayleighPhaseFn = /*@__PURE__*/ wgslFn(RAYLEIGH_PHASE)
 const hgPhaseFn = /*@__PURE__*/ wgslFn(HG_PHASE)
 const bilinearSample2DFn = /*@__PURE__*/ wgslFn(BILINEAR_SAMPLE_2D)
+const multiScatterLutParamsToUvFn = /*@__PURE__*/ wgslFn(MULTISCATTER_PARAMS_TO_UV)
 
 const transmittanceLutPixelFn = /*@__PURE__*/ wgslFn(TRANSMITTANCE_LUT_PIXEL, [
   raySphereFn,
@@ -45,6 +48,7 @@ const skyViewLutPixelFn = /*@__PURE__*/ wgslFn(SKYVIEW_LUT_PIXEL, [
   rayleighPhaseFn,
   hgPhaseFn,
   bilinearSample2DFn,
+  multiScatterLutParamsToUvFn,
 ])
 
 const multiScatterLutPixelFn = /*@__PURE__*/ wgslFn(MULTISCATTER_LUT_PIXEL, [
@@ -52,6 +56,11 @@ const multiScatterLutPixelFn = /*@__PURE__*/ wgslFn(MULTISCATTER_LUT_PIXEL, [
   raySphereFn,
   bilinearSample2DFn,
 ])
+
+/** A LUT size as a `vec2(width, height)` constant node for the WGSL `lutSize` args. */
+function sizeNode(size: LutSize2D) {
+  return vec2(float(size.width), float(size.height))
+}
 
 /**
  * Density-scalar medium args shared by every LUT pixel that samples the medium.
@@ -91,6 +100,9 @@ export function transmittanceLutColorNode(uvNode: any, params: any) {
  * Sky-View LUT colour (vec3 radiance) for a UV node, uniform bundle, the
  * Transmittance + Multi-Scatter LUT textures, and the sun-direction / view-height
  * uniform nodes. Wrap in `vec4(..., 1.0)` at the material.
+ *
+ * `lutSize` is the size of the Sky-View LUT being rendered; the Multi-Scatter
+ * LUT's size is read from `multiScatterTex`. Both become shader constants.
  */
 export function skyViewLutColorNode(
   uvNode: any,
@@ -99,6 +111,7 @@ export function skyViewLutColorNode(
   multiScatterTex: any,
   sunDirNode: any,
   viewHeightNode: any,
+  lutSize: LutSize2D,
 ) {
   return skyViewLutPixelFn({
     uv: uvNode,
@@ -117,14 +130,17 @@ export function skyViewLutColorNode(
     groundAlbedo: params.groundAlbedo,
     // Bundles that predate the field (older parity pages) fall back to physical.
     multiScatteringFactor: params.multiScatteringFactor ?? float(1.0),
+    lutSize: sizeNode(lutSize),
+    multiScatterLutSize: sizeNode(lutTextureSize(multiScatterTex)),
   })
 }
 
 /**
  * Multi-Scatter LUT colour (vec3) for a UV node, uniform bundle, and the
  * Transmittance LUT texture. Wrap in `vec4(..., 1.0)` at the material.
+ * `lutSize` is the size of the Multi-Scatter LUT being rendered (a constant).
  */
-export function multiScatterLutColorNode(uvNode: any, params: any, transmittanceTex: any) {
+export function multiScatterLutColorNode(uvNode: any, params: any, transmittanceTex: any, lutSize: LutSize2D) {
   return multiScatterLutPixelFn({
     uv: uvNode,
     transmittanceLut: texture(transmittanceTex),
@@ -136,5 +152,6 @@ export function multiScatterLutColorNode(uvNode: any, params: any, transmittance
     rayleighScattering: params.rayleighScattering,
     absorptionExtinction: params.absorptionExtinction,
     groundAlbedo: params.groundAlbedo,
+    lutSize: sizeNode(lutSize),
   })
 }

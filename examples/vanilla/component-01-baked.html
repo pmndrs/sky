@@ -50,9 +50,13 @@
 
       await renderer.init()
 
+      // `?quality=low|medium|high` picks the LUT resolution tier (construction-only).
+      const quality = new URLSearchParams(location.search).get('quality') ?? 'medium'
+
       // One line of public API — pick a preset, attach to a scene.
       const sky = new Sky(renderer, {
         preset: 'earth',
+        quality,
         timeOfDay: 14.5,
         latitude: 37.7,
         exposure: 40,
@@ -161,6 +165,8 @@
       // Exposed for scripted verification / console poking (SKY_LOOKS_PLAN.md §1).
       window.__sky = sky
       window.__renderer = renderer
+      window.__camera = camera
+      window.__controls = controls
 
       renderer.setAnimationLoop(() => {
         sky.update(camera)

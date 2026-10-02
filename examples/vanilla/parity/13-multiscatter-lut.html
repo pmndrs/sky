@@ -45,7 +45,8 @@
       <b>Multi-Scatter LUT: WGSL vs TSL</b><br />
       Two <code>MultiScatterLUT</code> instances (<code>backend:'wgsl'</code> / <code>'tsl'</code>) sharing one
       Transmittance LUT — the 64-direction × 20-step nested integrator + geometric-series finalization. Rendered to
-      float targets and diffed (relative, values are tiny). Canvas shows the WGSL MS LUT (×40).<br />
+      float targets and diffed (relative, values are tiny), at every <code>quality</code> tier's size plus a non-square
+      one: the texel un-map takes the LUT size on both twins (issue #13). Canvas shows the WGSL MS LUT (×40).<br />
       <span id="verdict">running…</span>
     </div>
     <script type="module">
@@ -74,10 +75,23 @@
         const tLut = new TransmittanceLUT(renderer, { atmosphereUniforms: au })
         tLut.render()
 
-        const msW = new MultiScatterLUT(renderer, { atmosphereUniforms: au, transmittanceLUT: tLut, backend: 'wgsl' })
-        const msT = new MultiScatterLUT(renderer, { atmosphereUniforms: au, transmittanceLUT: tLut, backend: 'tsl' })
-
-        await runParity(msW, msT)
+        // medium (default), low, high, and a non-square size.
+        const SIZES = [
+          { width: 32, height: 32 },
+          { width: 16, height: 16 },
+          { width: 64, height: 64 },
+          { width: 32, height: 16 },
+        ]
+        const results = []
+        let msW
+        for (const resolution of SIZES) {
+          const opts = { atmosphereUniforms: au, transmittanceLUT: tLut, resolution }
+          const w = new MultiScatterLUT(renderer, { ...opts, backend: 'wgsl' })
+          const t = new MultiScatterLUT(renderer, { ...opts, backend: 'tsl' })
+          results.push({ resolution, ...(await runParity(w, t)) })
+          if (!msW) msW = w
+        }
+        report(results)
 
         const mat = new THREE.NodeMaterial()
         mat.colorNode = Fn(() => vec4(texture(msW.texture, uv()).rgb.mul(40.0), 1.0))()
@@ -121,14 +135,23 @@
           const rel = a / (Math.abs(bufT[i]) + 1e-4)
           if (rel > maxRel) maxRel = rel
         }
-        const pass = maxRel <= 0.02 || maxAbs <= 5e-5
-        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — maxAbs=${maxAbs.toExponential(3)}, maxRel=${(maxRel * 100).toFixed(2)}% (peak≈${maxVal.toExponential(2)})`
+        rtW.dispose()
+        rtT.dispose()
+        return { pass: maxRel <= 0.02 || maxAbs <= 5e-5, maxAbs, maxRel, maxVal }
+      }
+
+      function report(results) {
+        const pass = results.every((r) => r.pass)
+        const parts = results.map(
+          (r) =>
+            `${r.pass ? 'ok' : 'FAIL'} ${r.resolution.width}×${r.resolution.height}: maxAbs=${r.maxAbs.toExponential(3)}, ` +
+            `maxRel=${(r.maxRel * 100).toFixed(2)}% (peak≈${r.maxVal.toExponential(2)})`,
+        )
+        const msg = `PARITY ${pass ? 'PASS' : 'FAIL'} — ${parts.join(' | ')}`
         console.log(`[parity] ${msg}`)
         const el = document.getElementById('verdict')
         el.textContent = msg
         el.style.color = pass ? '#7f7' : '#f77'
-        rtW.dispose()
-        rtT.dispose()
       }
     </script>
   </body>

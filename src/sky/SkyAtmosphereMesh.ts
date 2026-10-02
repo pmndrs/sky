@@ -44,6 +44,7 @@ import {
   transmittanceLutParamsToUv,
 } from '../backends/tsl/atmosphere.tsl'
 import { applyLook } from '../backends/tsl/look.tsl'
+import { lutTextureSize } from '../core/resolutions'
 import { clearLookUniforms, createLookUniforms, updateLookUniforms } from './LookUniforms'
 
 import type { Look } from '../looks'
@@ -477,6 +478,8 @@ export class SkyAtmosphereMesh extends Mesh {
   _buildColorNode(): any {
     const params = this.atmosphereUniforms
     const skyViewTex = this.skyViewLUT.texture
+    // Sampled with the sub-UV remap of its real size (issue #13).
+    const skyViewSize = lutTextureSize(skyViewTex)
     const transmittanceTex = this.transmittanceLUT ? this.transmittanceLUT.texture : null
     const multiScatterTex = this.multiScatterLUT ? this.multiScatterLUT.texture : null
     const enableSpaceFallback = transmittanceTex !== null && multiScatterTex !== null
@@ -558,7 +561,14 @@ export class SkyAtmosphereMesh extends Mesh {
         const blendEnd = params.topRadius.add(BLEND_HALF_WIDTH_KM)
 
         // LUT path always runs — it's a single texture sample, near-free.
-        const lutUv = skyViewLutParamsToUv(params, intersectsGround, viewZenithCosAngle, lightViewCosAngle, viewHeight)
+        const lutUv = skyViewLutParamsToUv(
+          params,
+          intersectsGround,
+          viewZenithCosAngle,
+          lightViewCosAngle,
+          viewHeight,
+          skyViewSize,
+        )
         const lutColor = texture(skyViewTex, lutUv).rgb.mul(luminanceScaleU)
 
         // Raymarch only when needed: above blendStart. Low-altitude users
@@ -594,7 +604,14 @@ export class SkyAtmosphereMesh extends Mesh {
         skyColor.assign(mix(lutColor, rayColor, blendT))
       } else {
         // No fallback wired — pure SkyView LUT path (Phase 1b behaviour).
-        const lutUv = skyViewLutParamsToUv(params, intersectsGround, viewZenithCosAngle, lightViewCosAngle, viewHeight)
+        const lutUv = skyViewLutParamsToUv(
+          params,
+          intersectsGround,
+          viewZenithCosAngle,
+          lightViewCosAngle,
+          viewHeight,
+          skyViewSize,
+        )
         skyColor.assign(texture(skyViewTex, lutUv).rgb.mul(luminanceScaleU))
       }
 

@@ -528,6 +528,10 @@ export function integrateScatteredLuminance({
   //   'quadratic' — segment ends at `(s/N)²·tMax` (SebH `VariableSampleCount =
   //                 true`; the Sky-View LUT and the per-pixel raymarch). Packs
   //                 samples where the medium is dense, near the ray origin.
+  //   'quadraticEnd' — the mirror image, segment ends at `(1 − (1 − s/N)²)·tMax`:
+  //                 packs samples at the far end. For a segment that ends on
+  //                 the ground seen from above, where the dense air is (the AP
+  //                 slice refinement in HazePostProcess).
   // Measured against Bruneton's reference (research/bruneton-audit-2026-09-26.md):
   // uniform spacing under-integrates the sky by ~15 % everywhere and ~40 %
   // within a few degrees of a low sun; quadratic lands within ±3 %.
@@ -545,7 +549,7 @@ export function integrateScatteredLuminance({
   tMaxOverride?: any
   sampleJitter?: any
   extEpsNode?: any
-  sampleDistribution?: 'uniform' | 'uniformSegments' | 'quadratic'
+  sampleDistribution?: 'uniform' | 'uniformSegments' | 'quadratic' | 'quadraticEnd'
 }) {
   const earthO = vec3(0.0, 0.0, 0.0)
   const SAMPLE_SEGMENT_T = 0.3
@@ -601,6 +605,13 @@ export function integrateScatteredLuminance({
       const t1 = float(i).add(1.0).div(countF)
       const t0q = t0.mul(t0)
       const t1q = t1.mul(t1)
+      newT = tMax.mul(t0q.add(t1q.sub(t0q).mul(segmentT)))
+      dt = tMax.mul(t1q.sub(t0q))
+    } else if (sampleDistribution === 'quadraticEnd') {
+      const r0 = float(1.0).sub(float(i).div(countF))
+      const r1 = float(1.0).sub(float(i).add(1.0).div(countF))
+      const t0q = float(1.0).sub(r0.mul(r0))
+      const t1q = float(1.0).sub(r1.mul(r1))
       newT = tMax.mul(t0q.add(t1q.sub(t0q).mul(segmentT)))
       dt = tMax.mul(t1q.sub(t0q))
     } else if (segmentDt) {

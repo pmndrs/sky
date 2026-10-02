@@ -530,8 +530,12 @@ export function createHazeOutputNode({
             return zi.greaterThanEqual(float(0.0)).select(t, vec4(0.0, 0.0, 0.0, 0.0))
           }
           // Inscatter (rgb) and mean transmittance (a) of the pixel ray over
-          // [fromKm, fromKm + lenKm]. Uniform segments: the dense air sits at the
-          // end of a descending segment, where quadratic spacing is sparsest.
+          // [fromKm, fromKm + lenKm]. Steps packed toward the far end
+          // ('quadraticEnd'): seen from above, the dense air sits at the end of
+          // the segment, by the surface. Against equal steps at 4 steps, the
+          // slice-locked error drops from 0.009 to 0.0076 (150 km) and 0.014
+          // to 0.011 (300 km) in AP alpha, same cost; 10–75 km is unchanged
+          // or slightly better.
           const march = (fromKm: any, lenKm: any) => {
             const p0 = camPos.add(worldRayDir.mul(fromKm))
             const moved = moveToTopAtmosphere(p0, worldRayDir, atmosphereUniforms)
@@ -544,7 +548,7 @@ export function createHazeOutputNode({
               transmittanceLUT,
               multiScatterLUT,
               sampleCount: refineSteps,
-              sampleDistribution: 'uniformSegments',
+              sampleDistribution: 'quadraticEnd',
               ground: false,
               mieRayPhase: true,
               tMaxOverride: max(lenKm.sub(length(startPos.sub(p0))), float(0.0)),

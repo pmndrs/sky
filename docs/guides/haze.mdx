@@ -284,6 +284,13 @@ just before its surface and works out the remaining stretch of its own ray
 with a couple of short marches. The rings disappear and the haze matches a
 full per-pixel calculation to within about 1 %.
 
+**From space.** Above the atmosphere (100 km and up), the default `'auto'`
+policy doesn't use the volume at all; it calculates every pixel's haze
+directly. If you force `policy: 'ap'` up there, faint rings come back: about
+0.8 % in haze strength at 150 km and 1.1 % at 300 km. Raising
+`apRefineSteps` to 8 roughly halves them, at about twice the refinement's
+cost (an extra 0.5 ms per frame at 300 km).
+
 **What it costs.** At 1920×1080 with the ground filling the screen:
 
 | Camera                       | Extra time per frame         |

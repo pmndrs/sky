@@ -26,7 +26,8 @@ The night sky is split by frequency, because a point of light and a diffuse
 glow need opposite treatment:
 
 - **Stars** are drawn as sprites in _your_ scene (`SkyStars`, added by
-  `attach()`). Each is a small energy-normalised Gaussian, so it stays sharp
+  `attach()`, also when it claims only the background or only the
+  environment). Each is a small energy-normalised Gaussian, so it stays sharp
   at any resolution, doesn't shimmer as the camera turns, and faint stars are
   faint rather than tiny. About 9,000 stars — roughly what the eye sees on a
   dark night — with the brightest ones at their real positions.

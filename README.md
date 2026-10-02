@@ -52,7 +52,7 @@ const sky = new Sky(renderer, {
 })
 
 const scene = new THREE.Scene()
-sky.attach(scene) // sets scene.environment + scene.background
+sky.attach(scene) // sets scene.environment + scene.background ({ environment: false } keeps your own IBL)
 
 renderer.setAnimationLoop(() => {
   sky.update(camera)
@@ -176,7 +176,7 @@ A condensed method table for the `Sky` facade:
 | `applyFog(sceneColorNode, options)` / `setFog(opts)`                                         | Sky-coloured height fog (no per-frame LUT) and its live knobs                                                                  |
 | `createSun(opts)` / `createGround(opts)` / `createGroundedSkybox(opts)` / `createMoon(opts)` | Factories for the optional helper objects                                                                                      |
 | `enableStars(opts)` / `disableStars()`                                                       | Night sky: star sprites + Milky Way (async on first enable)                                                                    |
-| `attach(scene)` / `detach()` / `dispose()`                                                   | Lifecycle                                                                                                                      |
+| `attach(scene, { background?, environment? })` / `detach()` / `dispose()`                    | Lifecycle; `attach` claims both scene slots unless told otherwise                                                              |
 
 The `pmrem` constructor option picks the IBL prefilter: by default
 `environmentTexture` is re-filtered on every sky change with WebGPU compute

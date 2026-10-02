@@ -29,6 +29,10 @@ export interface SkyProps {
   /** IBL prefilter options (`generator`, `quality`, `minInterval`, `levelsPerFrame`). Construction-only: a change (by value) rebuilds. */
   pmrem?: SkyPmremOptions
   mirrorBelowHorizon?: boolean
+  /** Claim `scene.background` (the raw sky cube). Default `true`. See `Sky.attach`. */
+  background?: boolean
+  /** Claim `scene.environment` (the PMREM-filtered IBL). `false` keeps your own environment map. Default `true`. */
+  environment?: boolean
   exposure?: number
   /** Where geographic north points: a world axis or a heading in degrees clockwise from +Z (see `SkyNorth`). */
   north?: SkyNorth
@@ -111,6 +115,7 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  *   `pmrem` (compared by value)
  *
  * Imperative props (applied via setters; no rebuild):
+ *   `background`, `environment` (attach roles; see `Sky.attach`),
  *   `timeOfDay`, `latitude`, `dayOfYear`, `sunDirection`, `north`,
  *   `exposure`, `sunDisc`, `turbidity`, `groundAlbedo`, `atmosphere`,
  *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `fog`, `mirrorBelowHorizon`,
@@ -134,6 +139,8 @@ export function Sky(props: SkyProps) {
     enableAerialPerspective = true,
     apKmPerSlice = 8.0,
     mirrorBelowHorizon = false,
+    background = true,
+    environment = true,
     exposure = 40,
     north = '+Z',
     sunDisc = true,
@@ -176,7 +183,9 @@ export function Sky(props: SkyProps) {
       turbidity,
       groundAlbedo,
     })
-    sky.attach(scene)
+    // Attach with the current roles straight away: attaching with both and
+    // narrowing later would overwrite (and then clear) the caller's own slot.
+    sky.attach(scene, { background, environment })
     setResource({
       sky,
       config: { renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice, pmrem },
@@ -208,6 +217,8 @@ export function Sky(props: SkyProps) {
 function SkyController({
   sky,
   mirrorBelowHorizon = false,
+  background = true,
+  environment = true,
   exposure = 40,
   north = '+Z',
   sunDisc = true,
@@ -247,6 +258,16 @@ function SkyController({
   const sunColor = useStableValue(sunColorProp)
   const hazeAltitudeBlend = useStableValue(hazeAltitudeBlendProp)
   const fog = useStableValue(fogProp)
+
+  // Roles changed after mount: re-attach to the same scene, which releases a
+  // slot no longer requested and claims a new one. The mount already attached
+  // with the initial roles, so an unchanged pair is skipped.
+  useEffect(() => {
+    const scene = sky._scene
+    if (scene && (sky._ownsBackground !== background || sky._ownsEnvironment !== environment)) {
+      sky.attach(scene, { background, environment })
+    }
+  }, [sky, background, environment])
 
   useEffect(() => {
     if (typeof timeOfDay === 'number') sky.setTimeOfDay(timeOfDay)

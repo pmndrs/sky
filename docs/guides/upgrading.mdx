@@ -158,6 +158,19 @@ current values. Before, they were silently ignored until haze was wired, so
 code that set them first and wired haze later now gets the values it asked
 for.
 
+## `attach()` can leave `scene.environment` (or the background) alone
+
+`sky.attach(scene, { environment: false })` shows the sky as the background
+and keeps your own environment map; `{ background: false }` does the reverse.
+Stars attach either way. React has matching `background` / `environment`
+props. See [Attach roles](../api/sky#attach-roles).
+
+One change for the default `attach(scene)`: `update()` used to put the sky's
+IBL back into `scene.environment` every frame, overwriting anything assigned
+after `attach()`. It now only fills the slot while it is empty or still holds
+the sky's texture, so an environment you assign later stays. To hand the slot
+back to the sky, call `attach(scene)` again.
+
 ## React: object props compare by value
 
 `<Sky>` props such as `sunDirection`, `groundAlbedo` or colours are compared

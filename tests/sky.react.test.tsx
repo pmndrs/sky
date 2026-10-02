@@ -20,9 +20,18 @@ class FakeSky {
     this.options = options
     instances.push(this)
   }
-  attach(scene: any) {
+  attaches: any[] = []
+  _ownsBackground = false
+  _ownsEnvironment = false
+  get _scene() {
+    return this.scene
+  }
+  attach(scene: any, { background = true, environment = true }: any = {}) {
     if (this.disposed) throw new Error('attach() after dispose()')
     this.scene = scene
+    this._ownsBackground = background
+    this._ownsEnvironment = environment
+    this.attaches.push({ background, environment })
     return this
   }
   dispose() {
@@ -176,6 +185,42 @@ describe('<Sky>', () => {
     )
     expect(live()).toEqual([sky])
     expect(sky.calls).toContain('setTimeOfDay:[18]')
+  })
+
+  it('attaches with the background / environment roles and re-attaches the same instance when they change', () => {
+    render(
+      <StrictMode>
+        <Sky environment={false}>
+          <Probe />
+        </Sky>
+      </StrictMode>,
+    )
+    const [sky] = live()
+    // Attached once with the requested roles: never claims the environment first.
+    expect(sky.attaches).toEqual([{ background: true, environment: false }])
+
+    // An unchanged pair (every parent render) does not re-attach.
+    render(
+      <StrictMode>
+        <Sky environment={false}>
+          <Probe />
+        </Sky>
+      </StrictMode>,
+    )
+    expect(sky.attaches).toHaveLength(1)
+
+    const mountsBefore = probeMounts
+    render(
+      <StrictMode>
+        <Sky background={false}>
+          <Probe />
+        </Sky>
+      </StrictMode>,
+    )
+    expect(live()).toEqual([sky])
+    expect(probeMounts).toBe(mountsBefore)
+    expect(sky.attaches.at(-1)).toEqual({ background: false, environment: true })
+    expect(sky.scene).toBe(fakeScene)
   })
 
   it('rebuilds on a construction prop and remounts children against the new instance', () => {

@@ -324,8 +324,35 @@ the whole sky and 40 % in the sun's aureole; 90 uniform samples change
 nothing, so it is the distribution. Both twins now use quadratic spacing for
 the Sky-View LUT and the two per-pixel raymarch fallbacks
 (`sampleDistribution: 'quadratic'` on the TSL integrator); Transmittance,
-Multi-Scatter and AP LUTs stay uniform like the reference. Parity pages
-still pass. Numbers: `research/bruneton-audit-2026-09-26.md`.
+Multi-Scatter and AP LUTs stay uniform like the reference (the AP LUT as
+full-ray segments, see below). Parity pages still pass. Numbers:
+`research/bruneton-audit-2026-09-26.md`.
+
+### Per-slice AP steps: his uniform stepping drops 0.7/N of the ray (2026-10-01)
+
+SebH's AP volume marches `2·(slice+1)` steps (RenderSkyRayMarching.hlsl:707),
+and his uniform stepping (`VariableSampleCount = false`, :138-144) ends each
+step at its sample, `(s + 0.3)/N·tMax`, so only `(N − 0.7)/N` of the ray is
+integrated. At 30 steps that is a 2.3 % bias nobody noticed; with his 2-step
+nearest slice it is 35 %. A verbatim port measured 35 / 18 / 12 % low in
+slices 0–2 against a 2048-step integral. The AP LUT therefore runs his counts
+as equal segments over the whole ray (`sampleDistribution: 'uniformSegments'`):
+mean in-scatter error 0.5 % vs 3 % for the old fixed 30. The Transmittance
+and Multi-Scatter LUTs keep his stepping, which the reference gate checks
+texel for texel.
+
+Two more traps from the same change:
+
+- **three linearises a 3-D workgroup size across the whole dispatch.** With
+  `compute(total, [4, 4, 4])` and a flat `instanceIndex`, one SIMD group held
+  slices z, z+2, … z+14, so per-slice loop counts diverged inside it (+50 %
+  build time). `[64]` keeps a group on one slice (+15 %, ~+0.01 ms).
+- **A runtime `Loop` bound costs ~5 % by itself.** The same 64 steps with the
+  bound in a uniform instead of a JS constant measured +4–7 % on the haze
+  raymarch. That is why SebH's variable step count for the haze fallback
+  (#1) was not adopted: rays past 100 km always get the max, so the
+  planet-altitude case paid the 5 % for nothing (numbers in
+  `research/sebh-parity-audit.md`).
 
 ### Ground albedo feeds an isotropic bounce that glows the horizon
 

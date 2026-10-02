@@ -37,6 +37,7 @@ import {
   acos,
   texture,
   select,
+  int,
 } from 'three/tsl'
 
 import { lutTextureSize, type LutSize2D } from '../../core/resolutions'
@@ -470,7 +471,9 @@ export const getSphericalDir = /*@__PURE__*/ Fn(([iPlusHalf, jPlusHalf, sqrtSamp
  * @param {THREE.Node} args.sunDir         vec3 — normalized sun direction
  * @param {object}     args.params         atmosphere-uniform bundle
  * @param {THREE.Node} args.transmittanceLUT texture node of the Transmittance LUT
- * @param {number}     [args.sampleCount=20]  number of ray-march steps
+ * @param {number|THREE.Node} [args.sampleCount=20]  number of ray-march steps.
+ *        A JS number is a constant loop bound; a float node is a runtime bound
+ *        (the AP LUT's per-slice count).
  * @param {boolean}    [args.ground=true]     add ground-albedo bounce at tBottom
  * @param {boolean}    [args.mieRayPhase=false] use Mie+Rayleigh phases vs. isotropic
  * @param {THREE.Node} [args.multiScatterLUT] the Multi-Scatter LUT texture.
@@ -513,8 +516,15 @@ export function integrateScatteredLuminance({
   sampleJitter = null,
   extEpsNode = undefined,
   // How the `sampleCount` steps are spread along [0, tMax]:
-  //   'uniform'   — equal segments (SebH `VariableSampleCount = false`; what the
-  //                 Transmittance, Multi-Scatter and AP LUTs use).
+  //   'uniform'   — SebH `VariableSampleCount = false` verbatim: samples at
+  //                 `(s + 0.3)/N·tMax`, each step ending at its sample
+  //                 (RenderSkyRayMarching.hlsl:138-144), so the last 0.7/N of
+  //                 the ray is never integrated. What the Transmittance and
+  //                 Multi-Scatter LUTs use (and must, for texel parity).
+  //   'uniformSegments' — N equal segments covering all of [0, tMax], sampled
+  //                 `segmentT` into each. The AP LUT: with its per-slice count
+  //                 (2 steps for the nearest slice) 'uniform' would drop 35 %
+  //                 of that froxel's ray.
   //   'quadratic' — segment ends at `(s/N)²·tMax` (SebH `VariableSampleCount =
   //                 true`; the Sky-View LUT and the per-pixel raymarch). Packs
   //                 samples where the medium is dense, near the ray origin.
@@ -528,14 +538,14 @@ export function integrateScatteredLuminance({
   sunDir: any
   params: any
   transmittanceLUT: any
-  sampleCount?: number
+  sampleCount?: number | any
   ground?: boolean
   mieRayPhase?: boolean
   multiScatterLUT?: any
   tMaxOverride?: any
   sampleJitter?: any
   extEpsNode?: any
-  sampleDistribution?: 'uniform' | 'quadratic'
+  sampleDistribution?: 'uniform' | 'uniformSegments' | 'quadratic'
 }) {
   const earthO = vec3(0.0, 0.0, 0.0)
   const SAMPLE_SEGMENT_T = 0.3
@@ -570,24 +580,34 @@ export function integrateScatteredLuminance({
 
   const tPrev = float(0.0).toVar()
 
+  // A JS number keeps the loop bound a compile-time constant (those callers'
+  // shaders are unchanged); a node makes it a runtime bound.
+  const isConstCount = typeof sampleCount === 'number'
+  const countF = isConstCount ? float(sampleCount) : float(sampleCount).toVar()
+  const loopEnd = isConstCount ? sampleCount : int(countF)
+  const segmentDt = sampleDistribution === 'uniformSegments' ? tMax.div(countF).toVar() : null
+
   // Ray-march loop. Runs on-GPU via TSL Loop (not JS-unrolled) so that callers
   // doing per-pixel spherical integration (MS LUT: 64 directions) don't produce
   // catastrophically large shaders. Accumulators above use `.toVar()` and
   // therefore carry state across iterations.
-  Loop({ start: 0, end: sampleCount, type: 'int' }, ({ i }: any) => {
+  Loop({ start: 0, end: loopEnd, type: 'int' }, ({ i }: any) => {
     let newT: any
     let dt: any
     if (sampleDistribution === 'quadratic') {
       // RenderSkyRayMarching.hlsl:115-131 — t0/t1 are the squared normalised
       // segment bounds; the sample sits `segmentT` of the way into the segment.
-      const t0 = float(i).div(float(sampleCount))
-      const t1 = float(i).add(1.0).div(float(sampleCount))
+      const t0 = float(i).div(countF)
+      const t1 = float(i).add(1.0).div(countF)
       const t0q = t0.mul(t0)
       const t1q = t1.mul(t1)
       newT = tMax.mul(t0q.add(t1q.sub(t0q).mul(segmentT)))
       dt = tMax.mul(t1q.sub(t0q))
+    } else if (segmentDt) {
+      newT = float(i).add(segmentT).mul(segmentDt)
+      dt = segmentDt
     } else {
-      newT = tMax.mul(float(i).add(segmentT).div(float(sampleCount)))
+      newT = tMax.mul(float(i).add(segmentT).div(countF))
       dt = newT.sub(tPrev)
     }
 

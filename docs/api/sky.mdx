@@ -28,7 +28,7 @@ new Sky(renderer, options?)
 | `cubeSize`                | `256`       | Cube-render-target face size (px) used for the background/IBL bake.                                                                                                                                                                                                                                                                               |
 | `atmosphere`              | —           | Partial `AtmosphereParams`, merged onto the resolved preset. See [Tuning the atmosphere](../guides/tuning-atmosphere).                                                                                                                                                                                                                            |
 | `exposure`                | `40`        | Initial `luminanceScale` (see [LUTs](./luts) — the `ILLUMINANCE_IS_ONE` contract).                                                                                                                                                                                                                                                                |
-| `north`                   | `'+Z'`      | `'+X' \| '-X' \| '+Z' \| '-Z'` — which world axis is treated as geographic north for azimuth.                                                                                                                                                                                                                                                     |
+| `north`                   | `'+Z'`      | `'+X' \| '-X' \| '+Z' \| '-Z'`, or a heading in degrees clockwise from +Z seen from above (`90` = `'-X'`). Where geographic north points; see [Compass](#compass).                                                                                                                                                                                |
 | `sunDisc`                 | `true`      | `boolean` or `{ visible?, angularDiameter?, edgeSoftness? }` — see `setSunDisc`.                                                                                                                                                                                                                                                                  |
 | `sunColor`                | `'neutral'` | Colour of the sun as a light source — see `setSunColor`.                                                                                                                                                                                                                                                                                          |
 | `timeOfDay`               | `12`        | Hours, `0..24`. Combined with `latitude` + `dayOfYear` via NOAA solar position.                                                                                                                                                                                                                                                                   |
@@ -51,6 +51,7 @@ new Sky(renderer, options?)
 | `sky.aerialPerspectiveTexture`        | The 3D aerial-perspective LUT texture, or `null` if `enableAerialPerspective: false`.                                    |
 | `sky.mesh`                            | The baker's internal `SkyAtmosphereMesh` (lives in the baker's private scene, **not** your main scene — see note below). |
 | `sky.sunElevation` / `sky.sunAzimuth` | Current sun direction in degrees, as last set via `setTimeOfDay`/`setSunDirection`/etc.                                  |
+| `sky.north`                           | Heading of geographic north in degrees, clockwise from +Z seen from above (see [Compass](#compass)).                     |
 | `sky.stars`                           | The `SkyNight` instance if `enableStars()` was called, else `null`. See [Night sky](../guides/night-sky).                |
 | `sky.state`                           | `'detached'`, `'attached'` or `'disposed'`. Accessing `sky.baker` after disposal throws.                                 |
 
@@ -111,12 +112,36 @@ frame), so it's a separate call. Only needed if you've wired `applyHaze`.
 
 ## Sun and time
 
-| Method                                          | Notes                                                                                                                                                                              |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `setTimeOfDay(hours)`                           | Recomputes sun direction via NOAA solar position using the current `latitude`/`dayOfYear`.                                                                                         |
-| `setLatitude(deg)` / `setDayOfYear(day)`        | Same — recompute sun direction.                                                                                                                                                    |
-| `setSunDirection({ elevation, azimuth, raw? })` | Direct override, bypasses solar-position math. `azimuth` is degrees CW from the configured `north` axis unless `raw: true` (feeds the baker's raw spherical-coord theta directly). |
-| `setNorth(axis)`                                | `'+X' \| '-X' \| '+Z' \| '-Z'`. Re-emits the current azimuth through the new axis mapping.                                                                                         |
+| Method                                          | Notes                                                                                                                                                                                                 |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setTimeOfDay(hours)`                           | Recomputes sun direction via NOAA solar position using the current `latitude`/`dayOfYear`.                                                                                                            |
+| `setLatitude(deg)` / `setDayOfYear(day)`        | Same — recompute sun direction.                                                                                                                                                                       |
+| `setSunDirection({ elevation, azimuth, raw? })` | Direct override, bypasses solar-position math. `azimuth` is a compass azimuth, degrees clockwise from `north` (90 = east), unless `raw: true` (feeds the baker's raw spherical-coord theta directly). |
+| `setNorth(north)`                               | An axis or a heading in degrees. Turns the sun, stars, Milky Way and a manual `SkyMoon` together; `sky.north` reads the heading back.                                                                 |
+
+### Compass
+
+Azimuths are compass azimuths: degrees clockwise from north, 90 = east, as
+on a map. `north` says where geographic north points in your world: one of
+the axes, or a heading in degrees, turning clockwise seen from above (looking
+down −Y), starting at +Z.
+
+| `north` | Heading | East is |
+| ------- | ------- | ------- |
+| `'+Z'`  | `0`     | −X      |
+| `'-X'`  | `90`    | −Z      |
+| `'-Z'`  | `180`   | +X      |
+| `'+X'`  | `270`   | +Z      |
+
+Facing north, east is on your right. Set the heading once, for example to
+match a site plan, and keep driving the sky with `setTimeOfDay`,
+`setLatitude` and `setDayOfYear`: the sun, the stars, the Milky Way and a
+`SkyMoon` placed with `setDirection` all turn with it.
+
+```js
+sky.setNorth(-23.5) // the plan's north arrow is 23.5° counter-clockwise of +Z
+sky.setTimeOfDay(16) // afternoon sun, already in the plan's frame
+```
 
 ## Appearance
 

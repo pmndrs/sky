@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { SkyNorth } from '../Sky'
 
 /**
  * Shape of the value published on `SkyContext` — the active vanilla `Sky`
@@ -16,7 +17,7 @@ export interface SkyContextValue {
   setSunDirection(sunDirection: any): void
   setExposure(exposure: number): void
   setSunDisc(sunDisc: boolean): void
-  setNorth(north: any): void
+  setNorth(north: SkyNorth): void
   setTurbidity(turbidity: number): void
   setGroundAlbedo(groundAlbedo: any): void
   setAtmosphere(atmosphere: any): void

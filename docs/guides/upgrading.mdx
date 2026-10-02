@@ -75,6 +75,26 @@ new Sky(renderer, { pmrem: { generator: 'three' } })
 `environmentTexture` is still the same texture object from the first bake to
 `dispose()`, so materials don't recompile.
 
+## East is on the right: the compass was mirrored
+
+Compass azimuths turned the wrong way in 0.3: with the default `north: '+Z'`,
+an azimuth of 90° (east) landed on +X, which is on your _left_ when you face
++Z. The morning sun therefore rose in the west, and the star field was
+mirrored the same way. Azimuths now turn clockwise seen from above, as on a
+map, so with `north: '+Z'` east is −X.
+
+- Scenes driven by `timeOfDay` see the sun on the other side of the
+  north–south line at the same hour. Noon and the sun's elevation are
+  unchanged.
+- A sun placed with `setSunDirection({ elevation, azimuth })` moves to the
+  mirrored azimuth. To keep the old position, pass `360 - azimuth`, or use
+  `raw: true`, which is unchanged.
+- `SkyMoon.setDirection` now applies `north` as its docs said, and turns
+  with `setNorth`.
+
+`north` also accepts any heading in degrees now; see
+[Compass](../api/sky#compass).
+
 ## The live sky mesh draws after opaque geometry
 
 This only affects the live sky mesh from `baker.createSkyMesh()` (used by the

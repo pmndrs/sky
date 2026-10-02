@@ -1,5 +1,7 @@
 import { Box3, Color, DirectionalLight, MathUtils, Object3D, Vector3 } from 'three/webgpu'
 
+import { compassToTheta } from './compass'
+
 interface SkyMoonOptions {
   color?: number
   intensity?: number
@@ -32,7 +34,8 @@ interface SkyMoonOptions {
  *    on every `sky.setSunDirection` call.
  *
  *  - `setDirection({ elevation, azimuth })` — manual control, disables
- *    follow-sun and stays where you put it. Use for cinematic shots.
+ *    follow-sun and stays where you put it (turning with `sky.setNorth`).
+ *    Use for cinematic shots.
  *
  * The moon does NOT feed the atmosphere LUTs (the Hillaire integrator only
  * supports one light, and lunar irradiance is six orders of magnitude below
@@ -65,6 +68,9 @@ export class SkyMoon {
   _moonVec: Vector3
   _onSunChanged: (sunVec: Vector3) => void
   _unsubscribe: (() => void) | null
+  /** Last `setDirection` input, re-placed when the sky's north changes. */
+  _manual: { elevation: number; azimuth: number } | null = null
+  _onNorthChanged: () => void
 
   constructor(
     sky: any,
@@ -139,6 +145,10 @@ export class SkyMoon {
     // so toggling back on picks up immediately on the next setSunDirection.
     this._onSunChanged = (sunVec: Vector3) => this._syncFromSun(sunVec)
     this._unsubscribe = sky.baker.addSunListener(this._onSunChanged)
+    this._onNorthChanged = () => {
+      if (!this.followSun && this._manual) this.setDirection(this._manual)
+    }
+    sky._northListeners?.add(this._onNorthChanged)
 
     // Prime from the current sun vector so the first attach already has
     // a valid moon direction.
@@ -192,20 +202,17 @@ export class SkyMoon {
    * Manual moon direction. Disables `followSun` automatically — the moon
    * stays where you put it until you call `setFollowSun(true)` again.
    *
-   * `azimuth` is degrees CW from the configured `north` axis (matches
-   * `sky.setSunDirection` semantics).
+   * `azimuth` is a compass azimuth, degrees clockwise from the sky's
+   * `north` (matches `sky.setSunDirection`).
    */
   setDirection({ elevation, azimuth }: { elevation: number; azimuth: number }) {
     this.followSun = false
+    this._manual = { elevation, azimuth }
 
-    const elevRad = MathUtils.degToRad(elevation)
-    const azRad = MathUtils.degToRad(azimuth)
-
-    // Match Sky.js sun convention: spherical coords with phi from +Y,
-    // theta from +Z. y = sin(elev), horizontal = cos(elev) split by az.
-    const cosE = Math.cos(elevRad)
-    const sinE = Math.sin(elevRad)
-    this._moonVec.set(cosE * Math.sin(azRad), sinE, cosE * Math.cos(azRad))
+    // Same frame as the sun: spherical coords, phi from +Y, theta from +Z.
+    const phi = MathUtils.degToRad(90 - elevation)
+    const theta = MathUtils.degToRad(compassToTheta(azimuth, this.sky.north ?? 0))
+    this._moonVec.setFromSphericalCoords(1, phi, theta)
     this._placeLight()
     return this
   }
@@ -294,6 +301,7 @@ export class SkyMoon {
       this._unsubscribe()
       this._unsubscribe = null
     }
+    this.sky._northListeners?.delete(this._onNorthChanged)
 
     this.detach()
     this.light.dispose()

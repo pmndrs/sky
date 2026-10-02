@@ -3,8 +3,9 @@
  *
  *  - equatorial: x = cosδ·cosα, y = sinδ, z = cosδ·sinα  (y = celestial pole)
  *  - world:      three's Y-up scene frame. With north = +Z the horizon basis is
- *                +X east, +Y up, +Z north — the same frame `Sky.setSunDirection`
- *                builds the sun in, so stars and sun stay registered.
+ *                −X east, +Y up, +Z north (right-handed: facing north, east is
+ *                on your right) — the same frame `Sky.setSunDirection` builds
+ *                the sun in, so stars and sun stay registered.
  *  - galactic:   x → galactic centre, y → galactic north pole, z → l = 90°
  *                (Cygnus).
  */
@@ -28,18 +29,18 @@ export interface CelestialOrientationOptions {
   latitude: number
   /** Local sidereal time, radians — see `localSiderealTime`. */
   siderealTime: number
-  /** Rotation of geographic north about +Y, degrees (Sky's `north` axis offset). */
-  northOffsetDeg?: number
+  /** Heading of geographic north, degrees clockwise from +Z seen from above (Sky's `north`). */
+  northHeading?: number
 }
 
 /**
- * Equatorial → world rotation for an observer. Rows are the observer's east,
- * up and north expressed in equatorial coordinates (standard hour-angle
- * transform with H = θ − α), then rotated about +Y so that north lands on the
- * configured north axis.
+ * Equatorial → world rotation for an observer. Rows are the observer's west
+ * (−east), up and north expressed in equatorial coordinates (standard
+ * hour-angle transform with H = θ − α), so east lands on −X and north on +Z;
+ * then turned about +Y so that north lands on the configured heading.
  */
 export function celestialOrientation(
-  { latitude, siderealTime, northOffsetDeg = 0 }: CelestialOrientationOptions,
+  { latitude, siderealTime, northHeading = 0 }: CelestialOrientationOptions,
   target = new Matrix4(),
 ) {
   const sT = Math.sin(siderealTime)
@@ -48,12 +49,13 @@ export function celestialOrientation(
   const cL = Math.cos(latitude * DEG)
   // prettier-ignore
   const horizon = new Matrix4().set(
-    -sT,      0,  cT,      0, // east
+    sT,       0,  -cT,     0, // west (−east)
     cL * cT,  sL, cL * sT, 0, // up
     -sL * cT, cL, -sL * sT, 0, // north
     0,        0,  0,       1,
   )
-  return target.makeRotationY(northOffsetDeg * DEG).multiply(horizon)
+  // A clockwise heading is a negative rotation about +Y.
+  return target.makeRotationY(-northHeading * DEG).multiply(horizon)
 }
 
 // Galactic frame in equatorial coordinates (IAU north galactic pole + centre).

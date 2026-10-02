@@ -107,7 +107,7 @@
         timeOfDay: 14.5,
         latitude: 37.7,
         dayOfYear: 172,
-        north: '+Z',
+        north: 0, // heading, degrees clockwise from +Z seen from above
         exposure: 40,
         sunDisc: true,
         turbidity: 1.0,
@@ -139,7 +139,7 @@
       gui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => sky.setTimeOfDay(v))
       gui.add(state, 'latitude', -90, 90, 0.5).onChange((v) => sky.setLatitude(v))
       gui.add(state, 'dayOfYear', 1, 365, 1).onChange((v) => sky.setDayOfYear(v))
-      gui.add(state, 'north', ['+X', '-X', '+Z', '-Z']).onChange((v) => sky.setNorth(v))
+      gui.add(state, 'north', 0, 360, 0.5).onChange((v) => sky.setNorth(v))
       gui.add(state, 'exposure', 0, 200, 0.5).onChange((v) => sky.setExposure(v))
       gui.add(state, 'sunDisc').onChange((v) => sky.setSunDisc(v))
       gui.add(state, 'turbidity', 0, 4, 0.01).onChange((v) => sky.setTurbidity(v))

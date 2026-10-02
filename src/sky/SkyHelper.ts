@@ -28,7 +28,8 @@ const _arcPoint = new Vector3()
  * - Elevation arc tracing from sun's horizon point up to the sun direction (#fc3, 40% opacity)
  *
  * The +Z tick mark always points north, matching the Sky facade's default
- * `north: '+Z'` orientation. Sun position updates are tracked via the baker's
+ * `north: '+Z'` orientation (east is then −X); the ring does not turn with
+ * `sky.setNorth`. Sun position updates are tracked via the baker's
  * sun listener and reflected in real time.
  *
  * @example
@@ -112,10 +113,10 @@ export class SkyHelper extends Object3D {
     // Other ticks in one geometry — +X, -X, -Z
     const otherTicksGeometry = new BufferGeometry()
     otherTicksGeometry.setFromPoints([
-      // +X (east)
+      // +X (west — facing +Z north, east is on the right, at −X)
       new Vector3(this.size, 0, 0),
       new Vector3(this.size * 1.1, 0, 0),
-      // -X (west)
+      // -X (east)
       new Vector3(-this.size, 0, 0),
       new Vector3(-this.size * 1.1, 0, 0),
       // -Z (south)

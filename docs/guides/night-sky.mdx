@@ -48,7 +48,8 @@ catalog position within 0.5° of the sky's sun):
 ```js
 sky.setTimeOfDay(23) // the sky turns about the celestial pole
 sky.setLatitude(-33.9) // southern sky
-sky.setNorth('+X') // stars follow the north axis, like the sun
+sky.setNorth('+X') // stars follow north, like the sun
+sky.setNorth(25) // or any heading, clockwise from +Z seen from above
 ```
 
 `setSunDirection()` moves only the sun; the stars keep following the time and

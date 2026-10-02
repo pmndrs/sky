@@ -634,6 +634,8 @@ export class SkyAtmosphereMesh extends Mesh {
             color: skyColor,
             viewZenithCosAngle,
             lightViewCosAngle,
+            sunViewCosAngle: dot(viewDir, sunDir),
+            sunZenithCosAngle: dot(sunDir, upVec),
             look: lookU,
           }),
         )

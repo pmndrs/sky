@@ -4,6 +4,7 @@ import { Color } from 'three/webgpu'
 
 import {
   MAX_LOOK_STOPS,
+  SUN_TINT_CONE_SIN,
   applyEase,
   createLookTrack,
   evaluatePackedRamp,
@@ -17,6 +18,7 @@ import {
   resolveLookTrack,
   sampleLook,
   sampleLookTrack,
+  sunTintWeight,
 } from '../src/looks'
 
 const RAMP = [
@@ -422,5 +424,88 @@ describe('built-in ghibli looks', () => {
   it('registers a track under a name for later use', () => {
     registerLookTrack('test-track', [{ elevation: 0, look: 'ghibli-day' }])
     expect(resolveLookTrack('test-track').keys).toHaveLength(1)
+  })
+})
+
+describe('sunTintWeight — the lobe the TSL node runs', () => {
+  const RAD = Math.PI / 180
+  const dir = (elev: number, az: number) => [
+    Math.cos(elev * RAD) * Math.cos(az * RAD),
+    Math.sin(elev * RAD),
+    Math.cos(elev * RAD) * Math.sin(az * RAD),
+  ]
+  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+  /** The three scalars `applyLook` gets, for a Y-up sun and view (degrees). */
+  function inputs(sunElev: number, viewElev: number, azOffset: number) {
+    const sun = dir(sunElev, 0)
+    const view = dir(viewElev, azOffset)
+    // computeLightViewCosAngle: both projected onto the horizontal plane.
+    return { lightViewCos: Math.cos(azOffset * RAD), sunViewCos: dot(view, sun), sunZenithCos: sun[1] }
+  }
+  const weight = (sunElev: number, viewElev: number, azOffset: number, falloff = 0.3, strength = 1) => {
+    const i = inputs(sunElev, viewElev, azOffset)
+    return sunTintWeight(i.lightViewCos, i.sunViewCos, i.sunZenithCos, falloff, strength)
+  }
+  const azimuthOnly = (azOffset: number, falloff = 0.3) => Math.pow(Math.max(Math.cos(azOffset * RAD), 0), 1 / falloff)
+
+  it('keeps a high sun from flooding a horizon-to-zenith wedge (issue #18)', () => {
+    // Sun at 50°: before the fix every view in its azimuth weighed 1.
+    expect(azimuthOnly(0)).toBe(1)
+    const nearSun = weight(50, 40, 0)
+    const horizonBelow = weight(50, 2, 0)
+    const pastZenith = weight(50, 89, 0)
+    expect(nearSun).toBeGreaterThan(0.9)
+    expect(horizonBelow).toBeLessThan(0.3 * nearSun)
+    expect(pastZenith).toBeLessThan(0.7)
+  })
+
+  it('is a round glow once the sun is past the cone elevation', () => {
+    const sunElev = Math.asin(SUN_TINT_CONE_SIN) / RAD + 5
+    // Same angle from the sun, one straight below, one to the side: same weight.
+    const below = inputs(sunElev, sunElev - 30, 0)
+    const angle = Math.acos(below.sunViewCos)
+    const sideAz = Math.acos((Math.cos(angle) - Math.sin(sunElev * RAD) ** 2) / Math.cos(sunElev * RAD) ** 2) / RAD
+    expect(weight(sunElev, sunElev - 30, 0)).toBeCloseTo(weight(sunElev, sunElev, sideAz), 6)
+  })
+
+  it('leaves a sunset (2°) within a few percent of the azimuth lobe everywhere', () => {
+    // Worst case is straight overhead on the sun's side (0.043); the horizon
+    // band is within a fraction of a percent.
+    for (const viewElev of [0, 10, 30, 60, 89]) {
+      for (const az of [0, 20, 45, 80]) {
+        expect(Math.abs(weight(2, viewElev, az) - azimuthOnly(az))).toBeLessThan(0.05)
+      }
+    }
+    for (const az of [0, 20, 45, 80]) {
+      expect(Math.abs(weight(2, 3, az) - azimuthOnly(az))).toBeLessThan(0.002)
+    }
+  })
+
+  it('is exactly the azimuth lobe with the sun at or below the horizon', () => {
+    for (const sunElev of [0, -4, -10]) {
+      for (const [viewElev, az] of [
+        [5, 0],
+        [40, 30],
+        [80, 60],
+      ]) {
+        expect(weight(sunElev, viewElev, az)).toBeCloseTo(azimuthOnly(az), 10)
+      }
+    }
+  })
+
+  it('agrees with the cone along the horizon when the sun is on it', () => {
+    // Why the wedge is the right low-sun lobe: at the horizon it *is* the angle.
+    for (const az of [0, 30, 60]) {
+      const i = inputs(0, 0, az)
+      expect(i.sunViewCos).toBeCloseTo(i.lightViewCos, 10)
+    }
+  })
+
+  it('scales by strength, clamps facing-away rays to zero, and widens with falloff', () => {
+    expect(weight(60, 60, 0, 0.3, 0.4)).toBeCloseTo(0.4, 6)
+    expect(weight(60, 10, 180)).toBe(0)
+    expect(weight(2, 10, 120)).toBe(0)
+    expect(weight(60, 30, 0, 0.6)).toBeGreaterThan(weight(60, 30, 0, 0.3))
   })
 })

@@ -63,8 +63,9 @@ export interface LookStop {
   ease?: LookEase
 }
 
-/** Optional sun-relative tint layer, driven by `lightViewCosAngle`. This is
- *  what keeps a ramp from being sun-blind. */
+/** Optional sun-relative tint layer. This is what keeps a ramp from being
+ *  sun-blind. A low sun warms the whole sunward side of the sky; from about
+ *  30° up the lobe is a glow around the sun (see `sunTintWeight`). */
 export interface LookSunTint {
   color: ColorInput
   /** Angular width of the tint lobe around the sun, 0..1. Larger = broader. */
@@ -563,6 +564,47 @@ export function evaluatePackedRamp(packed: PackedLook, at: number, target = new 
   }
 
   return target
+}
+
+/**
+ * Sine of the sun elevation at which the sun-tint lobe has become a cone
+ * around the sun (30°). Below it the lobe blends back toward the azimuth
+ * wedge; see {@link sunTintWeight}. The TSL node uses the same value.
+ */
+export const SUN_TINT_CONE_SIN = 0.5
+
+/**
+ * JS mirror of the sun-tint lobe weight the TSL node computes (`applyLook`).
+ *
+ * The lobe's angle is a blend of two cosines, keyed on the sun's elevation:
+ *
+ * - `lightViewCos`, the sun-relative **azimuth** cosine. With the sun on the
+ *   horizon this is a vertical wedge: the whole sunward half of the sky warms,
+ *   from the horizon up, which is the twilight band a dusk look wants.
+ * - `sunViewCos`, the true **angle** between view and sun, `dot(view, sun)`.
+ *   A round glow around the sun wherever it is.
+ *
+ * At the horizon the two agree when the sun is low, so a low sun reads the
+ * same either way; they part as the sun climbs, where the wedge would flood a
+ * full-height band of sky from the horizon to the zenith (issue #18). So the
+ * lobe is the wedge at sunset and turns into the cone by
+ * {@link SUN_TINT_CONE_SIN}, smoothstepped in between. Below the horizon it
+ * stays the wedge (twilight).
+ *
+ * `falloff` is inverted into an exponent, so larger falloff is a broader lobe;
+ * rays facing away from the sun clamp to zero.
+ */
+export function sunTintWeight(
+  lightViewCos: number,
+  sunViewCos: number,
+  sunZenithCos: number,
+  falloff: number,
+  strength: number,
+): number {
+  const c = clamp01(sunZenithCos / SUN_TINT_CONE_SIN)
+  const cone = c * c * (3 - 2 * c)
+  const lobeCos = lightViewCos + (sunViewCos - lightViewCos) * cone
+  return Math.pow(clamp01(lobeCos), 1 / Math.max(falloff, 1e-6)) * strength
 }
 
 // ---------------------------------------------------------------------------

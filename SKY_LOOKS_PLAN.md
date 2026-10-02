@@ -237,7 +237,11 @@ the ramp walk, uniform-array padding and easing all match the JS reference.
 
 Still open:
 
-- Sun-tint lobe: confirm visually from a sun-facing camera (the workbench's
-  `faceSun` button exists for this).
+- ~~Sun-tint lobe: confirm visually from a sun-facing camera.~~ Done with
+  issue #18: the lobe was azimuth-only, so a high sun tinted a full-height
+  wedge from the horizon to the zenith. It now blends from the azimuth lobe
+  (sun at or below the horizon) to the true angle to the sun (by 30° up).
+  `scripts/verify-looks-sun-tint.mjs` reads the lobe weight back from the
+  shader and checks it against `sunTintWeight` (worst 0.003).
 - Optional: extend `verify-looks.mjs` to the planet-scale demo so the
   above-`topRadius` raymarch branch is exercised with a look assigned.

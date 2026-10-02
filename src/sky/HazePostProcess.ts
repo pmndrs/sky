@@ -600,11 +600,14 @@ export function createHazeOutputNode({
     if (lookUniforms) {
       const lookWorldDir = worldRayDir
       const lookUp = tslNormalize(upVector)
+      const lookSun = tslNormalize(sunDirection)
       apRgbScaled.assign(
         applyLook({
           color: apRgbScaled,
           viewZenithCosAngle: clamp(dot(lookWorldDir, lookUp), float(-1.0), float(1.0)),
-          lightViewCosAngle: computeLightViewCosAngle(lookWorldDir, lookUp, tslNormalize(sunDirection)),
+          lightViewCosAngle: computeLightViewCosAngle(lookWorldDir, lookUp, lookSun),
+          sunViewCosAngle: dot(lookWorldDir, lookSun),
+          sunZenithCosAngle: dot(lookSun, lookUp),
           look: lookUniforms,
           valueScale: float(0.0),
         }),
@@ -660,10 +663,13 @@ export function createHazeOutputNode({
       if (sunColor) skyShaft = skyShaft.mul(sunColor)
       if (lookUniforms) {
         const lookUp = tslNormalize(upVector)
+        const lookSun = tslNormalize(sunDirection)
         skyShaft = applyLook({
           color: skyShaft,
           viewZenithCosAngle: clamp(dot(worldRayDir, lookUp), float(-1.0), float(1.0)),
-          lightViewCosAngle: computeLightViewCosAngle(worldRayDir, lookUp, tslNormalize(sunDirection)),
+          lightViewCosAngle: computeLightViewCosAngle(worldRayDir, lookUp, lookSun),
+          sunViewCosAngle: dot(worldRayDir, lookSun),
+          sunZenithCosAngle: dot(lookSun, lookUp),
           look: lookUniforms,
           valueScale: float(0.0),
         })

@@ -162,6 +162,7 @@ and can be set before it.
 | `hazePolicy`        | `'auto' \| 'ap' \| 'raymarch'` | `'auto'`                      | Uniform | See the [Haze guide](../guides/haze).                                              |
 | `hazeAltitudeBlend` | `{ startKm?, endKm? }`         | `{ startKm: 50, endKm: 100 }` | Uniform | Altitude window over which `'auto'` blends from the AP LUT to raymarching.         |
 | `apDistanceScale`   | `number`                       | `1`                           | Uniform | Unreal `AerialPerspectiveViewDistanceScale`: haze per metre. `2` = twice the haze. |
+| `fog`               | `FogOptions`                   | —                             | Uniform | Height-fog knobs (`sky.setFog`), by value. For `<AutoHaze mode="fog" />`.          |
 
 ### Children
 
@@ -286,6 +287,7 @@ Props are the `applyHaze` options (`scenePass` is supplied for you):
 | `shadows`                | —                             | `{ light, samples, maxDistance, strength, resolution }` for light shafts. See the [Haze guide](../guides/haze). |
 | `includeSkyCubeBlend`    | `false`                       | Legacy sky-cube blend shim.                                                                                     |
 | `debugMode`              | `null`                        | AP debug view passthrough.                                                                                      |
+| `mode`                   | `'haze'`                      | `'fog'`: [height fog](../guides/haze#height-fog-the-budget-tier) (`applyFog`); other props are fog options.     |
 
 The pipeline callback runs once, with the props from the first render:
 changing an `<AutoHaze>` prop later has no effect. For live control, use the

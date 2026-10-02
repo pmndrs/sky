@@ -1,6 +1,6 @@
 ---
 title: Aerial-perspective haze
-description: applyHaze, the AP LUT vs raymarch policies, light shafts from the sun's shadow map, and the slice refinement that keeps AP haze band-free at altitude.
+description: applyHaze, the AP LUT vs raymarch policies, light shafts from the sun's shadow map, the slice refinement that keeps AP haze band-free at altitude, and applyFog, a sky-coloured height fog for tight budgets.
 ---
 
 Aerial-perspective ("AP") haze is what makes distant geometry desaturate
@@ -8,6 +8,9 @@ and blue-shift with distance, the way a real atmosphere does. It's an
 opt-in post-process on your scene's opaque geometry — the sky background
 itself already includes atmospheric scattering via the Sky-View LUT; haze
 is specifically about _surfaces_ under that same atmosphere.
+
+For a cheaper look with no per-frame LUT, see
+[Height fog](#height-fog-the-budget-tier) (`applyFog`) at the end of this page.
 
 ## Enabling it
 
@@ -350,3 +353,119 @@ to configure — `applyHaze` wires both automatically.
 `AerialPerspectiveViewDistanceScale`) stretches the optical path fed into the
 AP lookup: `2` is twice the haze per metre. It is a sample-time scale, so it
 costs no LUT rebuild and sets no dirty flag.
+
+## Height fog: the budget tier
+
+`sky.applyFog` is a cheaper alternative to aerial perspective: classic
+exponential height fog whose colour is the baked sky behind the geometry.
+Distant terrain fades into the sky that is actually there (the sun-side glow,
+the horizon gradient, twilight colours) instead of into a constant colour, and
+nothing is rendered per frame for it.
+
+```js
+const sky = new Sky(renderer, { enableAerialPerspective: false }) // fog doesn't need the AP LUT
+const scenePass = pass(scene, camera)
+const post = new THREE.RenderPipeline(renderer)
+post.outputNode = sky.applyFog(scenePass.getTextureNode(), {
+  scenePass,
+  density: 0.3, // per km at baseHeight
+  heightFalloff: 300, // metres
+})
+
+renderer.setAnimationLoop(() => {
+  sky.update(camera) // no updateAerialPerspective()
+  post.render()
+})
+
+sky.setFog({ density: 1.5, baseHeight: 20 }) // live, before or after applyFog
+```
+
+### Fog or haze?
+
+|                           | Height fog (`applyFog`)                                | Aerial perspective (`applyHaze`)                                          |
+| ------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Per-frame work            | none                                                   | AP LUT compute every frame (`updateAerialPerspective()`)                  |
+| Per pixel                 | one sky-cube sample (plus a PMREM sample at night)     | one 3D LUT sample (plus the raymarch fallback past coverage)              |
+| Measured cost, 1080p      | +0.09–0.10 ms by day, +0.15–0.16 ms at night           | +0.32–0.35 ms, LUT included                                               |
+| Colour with distance      | veils toward the sky colour; no per-channel extinction | physical: blue in-scatter, per-channel transmittance (distant reddening)  |
+| Amount                    | an art knob (`density`, `heightFalloff`)               | follows the atmosphere (`turbidity`, `setAerialPerspectiveDistanceScale`) |
+| `enableAerialPerspective` | not needed                                             | required                                                                  |
+| Light shafts              | no                                                     | `shadows: { light }`                                                      |
+| Scale                     | local: ground fog, valley fog, a hazy city             | ground to orbit                                                           |
+
+Use fog when the frame budget is tight, for stylised or thick weather the
+physical atmosphere can't produce (valley fog, a murky city), or on top of a
+scene whose sky is all you need from the library. Use haze when distant
+geometry should take on the atmosphere's real colour shift, at altitude, or
+with light shafts. The two compose: `sky.applyFog(sky.applyHaze(color, { scenePass }), { scenePass })`
+puts a ground fog over physical aerial perspective.
+
+Costs: whole-frame burst timing (300 frames, loop paused, waited to GPU
+completion) against the same frame passing the scene through unchanged, 1920×1080, Apple GPU
+via headless Chromium, minimum of 5 rounds on a machine with other GPU work
+running (`examples/vanilla/scripts/verify-sky-fog.mjs`).
+
+### Knobs
+
+| option          | default | meaning                                                                                                                         |
+| --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `density`       | `0.3`   | Extinction per km at `baseHeight`. Visibility is about `3.9 / density` km: `0.3` is a hazy day (~13 km), `4` and up is fog.     |
+| `heightFalloff` | `300`   | Scale height in metres: density drops by 1/e every `heightFalloff` metres above `baseHeight` (and grows the same way below it). |
+| `baseHeight`    | `0`     | Altitude in metres where density equals `density` (world `y` on flat ground).                                                   |
+| `maxOpacity`    | `1`     | Cap on the fog (Unreal `FogMaxOpacity`). Below 1 keeps distant silhouettes; `0` turns the fog off without a rebuild.            |
+| `nightBlur`     | `0.4`   | PMREM roughness of the night colour (see below); `0` keeps the sharp sky at all hours. Build-time.                              |
+
+The first four are uniforms on the `Sky`, with the same ownership rule as the
+haze knobs: `sky.setFog()` works before `applyFog`, which adopts what it set,
+and an option passed to `applyFog` overrides it. `logarithmicDepthBuffer` and
+`debugMode` (`'fog-amount'`, `'fog-color'`, `'is-sky'`) work as for haze.
+
+### How it works
+
+**Opacity.** Density is `σ(h) = σ₀·e^(−(h − h₀)/H)` along the straight view
+ray, so the optical depth has a closed form,
+
+```
+τ = σ₀ · d · e^(−min(a, a + x)) · (1 − e^(−|x|)) / |x|,   a = (h_cam − h₀)/H,  x = d·cosθ/H
+```
+
+with `d` the distance **along the ray** (not `|viewZ|`) and `cosθ` the ray's
+vertical component. Written this way it never forms a large exponential, and
+the level-ray limit (`x → 0`, where the textbook form is 0/0) is a series.
+Fog opacity is `min(1 − e^(−τ), maxOpacity)`. `fogOpticalDepth` and
+`fogOpacity` export the same expression on the CPU, e.g. for gameplay
+visibility checks. Camera height comes from `sky.update(camera)` (world `y`,
+or altitude above the sphere with `planetCenter`), and "up" is the local up,
+so planet-scale scenes get fog around the camera.
+
+**Colour.** The sky cube (`sky.texture`) along the view ray, at full
+resolution: the `'fog-color'` debug view matches the background over open sky
+to within one 8-bit step. Two adjustments, because the cube's lower half is
+not sky (without `mirrorBelowHorizon` it is the short, nearly black air path
+down to the ground; with it, a mirror of the sky):
+
+- Rays below the horizon read the mirrored direction. The result is the same
+  whichever way the cube was baked, and it is continuous at the nadir, which a
+  plain clamp to the horizon is not (every azimuth would converge on the point
+  straight down, swirling the sun-side and anti-sun colours round it). Most
+  fogged pixels are long, near-level rays, where mirror and clamp agree.
+- Samples stay one texel centre above the horizon, so filtering doesn't blend
+  in the dark texels below it.
+
+**Night.** The cube holds the baked [Milky Way](./night-sky). Sampled sharply,
+it prints the galaxy's dust lanes onto fogged geometry, and thick fog makes
+distant mountains look transparent. Once the sun is below −10° the fog colour
+blends (fully by −16°, as the Milky Way fades in) to the PMREM-filtered sky
+(`environmentTexture`) at roughness `nightBlur`, a soft glow that still
+brightens toward the galaxy. Not by day: the cube has no mip chain on three
+r185, and PMREM blur reaches into the dark lower half and dulls the horizon
+colour (to grey at roughness 0.3–0.5 at sunset). The blend is a uniform
+branch, so by day the shader pays for the one sharp sample.
+
+Sky pixels (raw depth 1.0) pass through untouched, exactly as with haze.
+
+What it can't do: extinction is grey, so distant objects veil but never shift
+colour through the air; there is no in-scatter from the sun beyond what the
+sky colour already holds; and nothing ties `density` to the atmosphere
+parameters. `examples/vanilla/24-sky-fog.html` has the sliders and a
+fog / haze / haze+fog / off switch on one view.

@@ -54,6 +54,7 @@ for (const m of [
   'setHazeStrength',
   'setHazePolicy',
   'setHazeAltitudeBlend',
+  'setFog',
   'setLook',
 ]) {
   ;(FakeSky.prototype as any)[m] = function (this: FakeSky, ...args: any[]) {
@@ -275,6 +276,17 @@ describe('<Sky>', () => {
     )
     expect(sky.calls.length).toBeGreaterThan(countAfterMount)
     expect(sky.calls).toContain('setAtmosphere:[{"miePhaseG":0.9}]')
+  })
+
+  it('applies the fog prop through setFog, by value', () => {
+    render(<Sky fog={{ density: 2, heightFalloff: 80 }} />)
+    const [sky] = live()
+    expect(sky.calls).toContain('setFog:[{"density":2,"heightFalloff":80}]')
+    const count = sky.calls.length
+    render(<Sky fog={{ density: 2, heightFalloff: 80 }} />)
+    expect(sky.calls).toHaveLength(count)
+    render(<Sky fog={{ density: 3, heightFalloff: 80 }} />)
+    expect(sky.calls).toContain('setFog:[{"density":3,"heightFalloff":80}]')
   })
 
   it('passes pmrem to the constructor and rebuilds only when its value changes', () => {

@@ -7,6 +7,12 @@ import { useSky } from './SkyContext'
 const useRenderPipeline: (...args: any[]) => any = (fiberWebGPU as any).useRenderPipeline
 
 export interface AutoHazeProps {
+  /**
+   * `'haze'` (default): aerial perspective, `sky.applyHaze`. `'fog'`: the
+   * sky-coloured height fog, `sky.applyFog` — no per-frame LUT, so `<Sky>`
+   * skips `updateAerialPerspective()`. Read once, like the other props.
+   */
+  mode?: 'haze' | 'fog'
   [key: string]: any
 }
 
@@ -26,7 +32,9 @@ export interface AutoHazeProps {
  * instance).
  *
  * Props are forwarded to `sky.applyHaze` as the options bag (e.g.
- * `policy`, `altStartKm`, `altEndKm`, `hazeStrength`, `skyCube`).
+ * `policy`, `altStartKm`, `altEndKm`, `hazeStrength`, `skyCube`). With
+ * `mode="fog"` they go to `sky.applyFog` instead (`density`,
+ * `heightFalloff`, `baseHeight`, `maxOpacity`, `nightBlur`).
  *
  * `useRenderPipeline` does not currently support reactive callback
  * bodies — the callback closes over its initial deps. The `sky`
@@ -34,15 +42,14 @@ export interface AutoHazeProps {
  * prop changes still take effect through `sky.setHaze*` setters even
  * without rebuilding the callback).
  */
-export function AutoHaze(options: AutoHazeProps = {}) {
+export function AutoHaze({ mode = 'haze', ...options }: AutoHazeProps = {}) {
   const sky = useSky()
 
   useRenderPipeline(({ renderPipeline, passes }: any) => {
     if (!sky) return
-    renderPipeline.outputNode = sky.applyHaze(passes.scenePass.getTextureNode(), {
-      ...options,
-      scenePass: passes.scenePass,
-    })
+    const color = passes.scenePass.getTextureNode()
+    const opts = { ...options, scenePass: passes.scenePass }
+    renderPipeline.outputNode = mode === 'fog' ? sky.applyFog(color, opts) : sky.applyHaze(color, opts)
   })
 
   return null

@@ -49,8 +49,10 @@ export const modelViewProjection: any
 export const modelWorldMatrix: any
 export const mul: any
 export const normalize: any
+export const pass: any
 export const positionLocal: any
 export const positionWorld: any
+export const pmremTexture: any
 export const pow: any
 export const reflect: any
 export const reflector: any

@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>@pmndrs/sky — sky-coloured height fog</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        overflow: hidden;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+        max-width: 46ch;
+        line-height: 1.4;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      @pmndrs/sky · sky-coloured height fog — geometry fades into the baked sky behind it, by an analytic exponential
+      height-fog opacity. One cube sample per pixel, nothing rendered per frame. Switch <b>mode</b> to compare with
+      aerial-perspective haze.
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { pass } from 'three/tsl'
+      import { Inspector } from 'three/addons/inspector/Inspector.js'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+      import { Sky, FOG_DEFAULTS } from '@pmndrs/sky'
+
+      // URL knobs (scripts/verify-sky-fog.mjs drives these):
+      //   ?mode=fog|haze|haze+fog|off   ?time=<hours>   ?stars=1   ?twinkle=<0..1>   ?mirror=1   ?ui=0
+      //   ?density= ?falloff= ?base= ?maxOpacity=   ?toneExposure=
+      //   ?view=default|down   ?yaw=<deg>   ?debug=fog-amount|fog-color|is-sky   ?nightBlur=<0..1>
+      const params = new URLSearchParams(location.search)
+      const showUI = params.get('ui') !== '0'
+      const num = (key, fallback) => (params.has(key) ? Number(params.get(key)) : fallback)
+
+      const renderer = new THREE.WebGPURenderer({ antialias: false })
+      renderer.setPixelRatio(showUI ? window.devicePixelRatio : 1)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      renderer.toneMappingExposure = num('toneExposure', 0.5)
+      if (showUI) renderer.inspector = new Inspector()
+      document.body.appendChild(renderer.domElement)
+      await renderer.init()
+
+      const state = {
+        mode: params.get('mode') ?? 'fog',
+        density: num('density', FOG_DEFAULTS.density),
+        heightFalloff: num('falloff', FOG_DEFAULTS.heightFalloff),
+        baseHeight: num('base', FOG_DEFAULTS.baseHeight),
+        maxOpacity: num('maxOpacity', FOG_DEFAULTS.maxOpacity),
+        timeOfDay: num('time', 17.5),
+        stars: params.get('stars') === '1',
+        mirrorBelowHorizon: params.get('mirror') === '1',
+        turbidity: 1,
+        toneExposure: renderer.toneMappingExposure,
+      }
+
+      // Mid-July at 38° N, north = +Z: the camera looks south (−Z), where the
+      // summer Milky Way core sits low after dark (as in 14-night-sky).
+      const sky = new Sky(renderer, {
+        preset: 'earth',
+        timeOfDay: state.timeOfDay,
+        dayOfYear: 196,
+        latitude: 38,
+        exposure: 40,
+        sunDisc: true,
+        mirrorBelowHorizon: state.mirrorBelowHorizon,
+        // Only the haze comparison needs the AP LUT; fog alone works with false.
+        enableAerialPerspective: true,
+      })
+      const scene = new THREE.Scene()
+      sky.attach(scene)
+      if (state.stars) await sky.enableStars()
+      if (params.has('twinkle')) sky.stars?.setTwinkle(num('twinkle', 0))
+
+      const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 100000)
+      const controls = new OrbitControls(camera, renderer.domElement)
+      controls.minDistance = 5
+      controls.maxDistance = 60000
+      if (params.get('view') === 'down') {
+        // On a 600 m ridge, looking down across the valley floor.
+        camera.position.set(0, 600, 400)
+        controls.target.set(0, 0, -2500)
+      } else {
+        camera.position.set(0, 40, 150)
+        controls.target.set(0, 20, -2000)
+      }
+      // ?yaw=<deg> turns the view left (+) / right (−) about the camera.
+      if (params.has('yaw')) {
+        const offset = controls.target.clone().sub(camera.position)
+        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(num('yaw', 0)))
+        controls.target.copy(camera.position).add(offset)
+      }
+      controls.update()
+
+      // Direct sun so lit geometry sits in the sky's luminance range.
+      sky.createSun({ intensity: 4 }).attach(scene)
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(200000, 200000),
+        new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.95 }),
+      )
+      ground.rotation.x = -Math.PI / 2
+      scene.add(ground)
+
+      // Cones from 1.5 km to 50 km (as in component-02-haze), deterministic.
+      const mountainMat = new THREE.MeshStandardMaterial({ color: 0x6a6a6a, roughness: 0.95 })
+      const coneGeo = new THREE.ConeGeometry(1, 1, 8)
+      let seed = 7
+      const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646
+      for (const d of [1500, 3000, 6000, 12000, 22000, 35000, 50000]) {
+        for (let i = -3; i <= 3; i++) {
+          const h = 300 + rand() * 500
+          const cone = new THREE.Mesh(coneGeo, mountainMat)
+          cone.scale.set(500, h, 500)
+          cone.position.set(i * d * 0.06 + (rand() - 0.5) * d * 0.02, h / 2, -d)
+          scene.add(cone)
+        }
+      }
+      // A ridge under the 'down' camera, so it stands on something.
+      const ridge = new THREE.Mesh(coneGeo, mountainMat)
+      ridge.scale.set(1200, 620, 1200)
+      ridge.position.set(0, 290, 900)
+      scene.add(ridge)
+
+      // --- Post: fog, haze, or nothing -----------------------------------
+      const scenePass = pass(scene, camera)
+      const post = new THREE.RenderPipeline(renderer)
+      const debugMode = params.get('debug')
+      const usesHaze = () => state.mode === 'haze' || state.mode === 'haze+fog'
+      const buildOutput = () => {
+        let color = scenePass.getTextureNode()
+        // 'haze+fog': ground fog composited over aerial perspective.
+        if (usesHaze()) color = sky.applyHaze(color, { scenePass, raymarchFallback: false })
+        if (state.mode === 'fog' || state.mode === 'haze+fog') {
+          color = sky.applyFog(color, { scenePass, debugMode, nightBlur: num('nightBlur', undefined) })
+        }
+        post.outputNode = color
+        post.needsUpdate = true
+      }
+      // Seed the live knobs before the node exists (applyFog adopts them).
+      sky.setFog({
+        density: state.density,
+        heightFalloff: state.heightFalloff,
+        baseHeight: state.baseHeight,
+        maxOpacity: state.maxOpacity,
+      })
+      buildOutput()
+
+      const setFog = () =>
+        sky.setFog({
+          density: state.density,
+          heightFalloff: state.heightFalloff,
+          baseHeight: state.baseHeight,
+          maxOpacity: state.maxOpacity,
+        })
+
+      if (showUI) {
+        const fogGui = renderer.inspector.createParameters('Height fog')
+        fogGui.add(state, 'mode', ['fog', 'haze', 'haze+fog', 'off']).onChange(buildOutput)
+        fogGui.add(state, 'density', 0, 10, 0.01).onChange(setFog)
+        fogGui.add(state, 'heightFalloff', 5, 3000, 1).onChange(setFog)
+        fogGui.add(state, 'baseHeight', -500, 1500, 1).onChange(setFog)
+        fogGui.add(state, 'maxOpacity', 0, 1, 0.01).onChange(setFog)
+        const skyGui = renderer.inspector.createParameters('Sky')
+        skyGui.add(state, 'timeOfDay', 0, 24, 0.01).onChange((v) => sky.setTimeOfDay(v))
+        skyGui.add(state, 'stars').onChange((v) => (v ? sky.enableStars() : sky.disableStars()))
+        skyGui.add(state, 'mirrorBelowHorizon').onChange((v) => sky.setMirrorBelowHorizon(v))
+        skyGui.add(state, 'turbidity', 0, 4, 0.01).onChange((v) => sky.setTurbidity(v))
+        skyGui.add(state, 'toneExposure', 0, 3, 0.01).onChange((v) => (renderer.toneMappingExposure = v))
+      }
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight
+        camera.updateProjectionMatrix()
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      })
+
+      const frame = () => {
+        controls.update()
+        sky.update(camera)
+        // Haze needs its camera-dependent LUT every frame; fog needs nothing.
+        if (usesHaze()) sky.updateAerialPerspective()
+        post.render()
+      }
+
+      // Scripted-verification hooks (scripts/verify-sky-fog.mjs).
+      window.__sky = sky
+      window.__renderer = renderer
+      window.__camera = camera
+      window.__fog = {
+        state,
+        setMode(mode) {
+          state.mode = mode
+          buildOutput()
+        },
+        setFog(partial) {
+          Object.assign(state, partial)
+          setFog()
+        },
+        // Wall-clock of `n` back-to-back frames with the loop paused, waited
+        // to GPU completion (CLAUDE.md, "Measuring GPU cost"). ms per frame.
+        async bench(n = 120) {
+          renderer.setAnimationLoop(null)
+          const device = renderer.backend.device
+          for (let i = 0; i < 10; i++) frame()
+          await device.queue.onSubmittedWorkDone()
+          const t0 = performance.now()
+          for (let i = 0; i < n; i++) frame()
+          await device.queue.onSubmittedWorkDone()
+          const ms = (performance.now() - t0) / n
+          renderer.setAnimationLoop(frame)
+          return ms
+        },
+      }
+
+      renderer.setAnimationLoop(frame)
+    </script>
+  </body>
+</html>

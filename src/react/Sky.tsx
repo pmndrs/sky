@@ -14,6 +14,7 @@ import { useFrame, useThree } from '@react-three/fiber/webgpu'
 
 import { Sky as VanillaSky } from '../Sky'
 import type { SkyPmremOptions } from '../sky/pmrem/SkyPmrem'
+import type { FogOptions } from '../sky/FogPostProcess'
 import type { LookTrackOverrides } from '../Sky'
 import { SkyContext } from './SkyContext'
 import { useStableValue } from './useStableValue'
@@ -40,6 +41,12 @@ export interface SkyProps {
   hazeStrength?: number
   hazePolicy?: any
   hazeAltitudeBlend?: any
+  /**
+   * Height-fog knobs `{ density, heightFalloff, baseHeight, maxOpacity }`, applied
+   * with `sky.setFog` (compared by value). They take effect once
+   * `<AutoHaze mode="fog" />` (or your own `applyFog`) is wired.
+   */
+  fog?: FogOptions
   /** Stylized look: a registered name, an inline definition, or `null` for physical. See the looks guide. */
   look?: string | Record<string, any> | null
   /** Keyframed look that follows sun elevation (e.g. `'ghibli'`). Overrides `look` while set. */
@@ -105,7 +112,7 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  * Imperative props (applied via setters; no rebuild):
  *   `timeOfDay`, `latitude`, `dayOfYear`, `sunDirection`, `north`,
  *   `exposure`, `sunDisc`, `turbidity`, `groundAlbedo`, `atmosphere`,
- *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `mirrorBelowHorizon`,
+ *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `fog`, `mirrorBelowHorizon`,
  *   `look`, `lookTrack`, `lookTrackOverrides`, `skyLuminanceFactor`, `sunColor`,
  *   `apDistanceScale`, `multiScatteringFactor`
  *
@@ -213,6 +220,7 @@ function SkyController({
   hazeStrength,
   hazePolicy,
   hazeAltitudeBlend: hazeAltitudeBlendProp,
+  fog: fogProp,
   look: lookProp,
   lookTrack: lookTrackProp,
   lookTrackOverrides: lookTrackOverridesProp,
@@ -237,6 +245,7 @@ function SkyController({
   const skyLuminanceFactor = useStableValue(skyLuminanceFactorProp)
   const sunColor = useStableValue(sunColorProp)
   const hazeAltitudeBlend = useStableValue(hazeAltitudeBlendProp)
+  const fog = useStableValue(fogProp)
 
   useEffect(() => {
     if (typeof timeOfDay === 'number') sky.setTimeOfDay(timeOfDay)
@@ -331,6 +340,10 @@ function SkyController({
   useEffect(() => {
     if (hazeAltitudeBlend) sky.setHazeAltitudeBlend(hazeAltitudeBlend)
   }, [sky, hazeAltitudeBlend])
+
+  useEffect(() => {
+    if (fog) sky.setFog(fog)
+  }, [sky, fog])
 
   useFrame((state) => {
     sky.update(state.camera)

@@ -13,7 +13,8 @@ Sky and Atmosphere Rendering Technique_](https://sebh.github.io/publications/egs
 (EGSR 2020) to Three.js TSL. Attach it to a scene and you get a
 physically-based sky driven by real solar position, correct at any camera
 altitude from ground level to orbit, with an opt-in aerial-perspective haze
-post-process for distant geometry (with optional light shafts), image-based
+post-process for distant geometry (with optional light shafts) or a cheaper
+sky-coloured height fog, image-based
 lighting re-filtered on every sky change, a night sky, and stylized looks —
 vanilla and React (R3F) entry points, one `update()` call per frame.
 
@@ -85,6 +86,12 @@ renderer.setAnimationLoop(() => {
 Full explanation of the AP-LUT/raymarch policies and known limitations:
 [Haze guide](https://sky.docs.pmnd.rs/guides/haze).
 
+On a tight budget, `sky.applyFog(scenePass.getTextureNode(), { scenePass, density, heightFalloff })`
+is exponential height fog coloured by the baked sky behind the geometry: one
+texture sample per pixel and no per-frame LUT (no `updateAerialPerspective()`,
+and `enableAerialPerspective` can be `false`). See
+[Height fog](https://sky.docs.pmnd.rs/guides/haze#height-fog-the-budget-tier).
+
 ## React (R3F)
 
 ```jsx
@@ -135,7 +142,7 @@ function CustomPipeline() {
 
 - **[Getting started](https://sky.docs.pmnd.rs/getting-started/introduction)** — install, requirements, first sky
 - **[API reference](https://sky.docs.pmnd.rs/api/sky)** — `Sky`, `SkyAtmosphereBaker`, the LUT classes
-- **[Haze guide](https://sky.docs.pmnd.rs/guides/haze)** — aerial perspective, policies, known issues
+- **[Haze guide](https://sky.docs.pmnd.rs/guides/haze)** — aerial perspective, policies, known issues, height fog
 - **[Planet-scale guide](https://sky.docs.pmnd.rs/guides/planet-scale)** — `planetCenter`, radial frames, flight controls
 - **[Tuning the atmosphere](https://sky.docs.pmnd.rs/guides/tuning-atmosphere)** — `AtmosphereParams`, presets
 - **[Stylized looks](https://sky.docs.pmnd.rs/guides/looks)** — colour ramps over the physical sky, elevation-keyed tracks
@@ -166,6 +173,7 @@ A condensed method table for the `Sky` facade:
 | `updateAerialPerspective()`                                                                  | Per-frame; required when `applyHaze` is wired                                                                                  |
 | `flushEnvironment()`                                                                         | Finish any pending IBL refresh now (screenshots, hard cuts)                                                                    |
 | `applyHaze(sceneColorNode, options)`                                                         | Returns a `vec4` TSL output node; pass `shadows: { light }` for light shafts                                                   |
+| `applyFog(sceneColorNode, options)` / `setFog(opts)`                                         | Sky-coloured height fog (no per-frame LUT) and its live knobs                                                                  |
 | `createSun(opts)` / `createGround(opts)` / `createGroundedSkybox(opts)` / `createMoon(opts)` | Factories for the optional helper objects                                                                                      |
 | `enableStars(opts)` / `disableStars()`                                                       | Night sky: star sprites + Milky Way (async on first enable)                                                                    |
 | `attach(scene)` / `detach()` / `dispose()`                                                   | Lifecycle                                                                                                                      |

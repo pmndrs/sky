@@ -85,7 +85,20 @@ better". Note: `06-planet-scale-debug` still uses camera-controls — port it
 when next touched. The class is demo-infrastructure (`@sky/demo/...`), a
 candidate for promotion to the public API if users want it.
 
-### D4 — Concentric "wave" bands in AP haze at 50–100 km altitude (OPEN, deferred)
+### D4 — Concentric "wave" bands in AP haze at 50–100 km altitude (FIXED 2026-10-01, #5)
+
+**Root cause:** W (depth-slice) interpolation. From altitude a ray to the
+ground gathers nearly all its haze in its last few km, inside one slice, and
+linear interpolation between slices misses that rise by an amount locked to
+the surface's position between two slice centres. Binning AP − raymarch
+alpha by slice phase on demo 05 (75 km): W phase peak-to-peak 0.016, X 0.0002,
+Y 0.0024; it halves with 2× and quarters with 4× slices at equal coverage, is
+unchanged by near/far/log depth (so not ray reconstruction) and persists
+without the underground correction (so not the correction). The earlier
+dither attempt failed because dithering W box-filters the same biased
+interpolant. Fix: `apRefineSteps` in `createHazeOutputNode` (LUT at two slice
+centres + per-pixel march of the remainder, blended; see haze guide). The
+history below is the bisection that led there.
 
 From ~50–100 km camera altitude, smooth concentric arcs (iso-distance contours
 around the nadir) appear in the haze over the planet surface. Clean at ground

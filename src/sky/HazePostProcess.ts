@@ -21,12 +21,14 @@ import {
   sin,
   smoothstep,
   normalize as tslNormalize,
+  floor,
 } from 'three/tsl'
 
 import {
   computeLightViewCosAngle,
   integrateScatteredLuminance,
   moveToTopAtmosphere,
+  raySphereIntersectNearest,
 } from '../backends/tsl/atmosphere.tsl'
 import { applyLook } from '../backends/tsl/look.tsl'
 import { createHazeDepthNodes } from './hazeScenePassDepth'
@@ -65,6 +67,15 @@ interface CreateHazeOutputNodeArgs {
    * shader. Build-time constant: changing it requires rebuilding the node.
    */
   raymarchSampleCount?: number
+  /**
+   * Steps per march for the AP slice refinement at altitude (two marches per
+   * pixel; see the comment at the refinement). It removes the concentric
+   * bands that depth-slice interpolation leaves on the ground seen from
+   * above. Ramps in between 1 and 3 km camera altitude and is skipped below.
+   * Compiled in only with `enableRaymarchFallback`, whose inputs it needs.
+   * 0 turns it off. Build-time constant.
+   */
+  apRefineSteps?: number
   atmosphereUniforms?: any
   sunDirection?: any
   /** Stylized look uniforms (`baker.sky.lookUniforms`). Retints AP inscatter
@@ -104,6 +115,14 @@ interface CreateHazeOutputNodeArgs {
   shadow?: HazeShadowState | null
   debugMode?: string | null
 }
+
+/**
+ * Camera altitude (km) over which the AP slice refinement ramps in. Measured
+ * on the planet demo (32 km/slice): the band amplitude in AP alpha is at the
+ * measurement floor (~0.002) at 1 km, 0.0045 at 3 km, 0.010 at 10 km and
+ * 0.015–0.03 from 25 to 90 km.
+ */
+const AP_REFINE_ALTITUDE_KM: [number, number] = [1.0, 3.0]
 
 /**
  * Build the TSL output node for the Aerial Perspective haze post-process.
@@ -210,6 +229,7 @@ export function createHazeOutputNode({
   raymarchCoverageBlendKm = null,
   enableRaymarchFallback = false,
   raymarchSampleCount = 64,
+  apRefineSteps = 4,
   atmosphereUniforms = null,
   sunDirection = null,
   lookUniforms = null,
@@ -225,8 +245,8 @@ export function createHazeOutputNode({
   raymarchOnlyUniform = null,
   shadow = null,
   // Debug modes for bisecting silhouette artefacts. Pass one of:
-  // 'ap-rgb'   — AP inscatter colour only (×40 for visibility)
-  // 'ap-alpha' — AP alpha (transmittance loss) only as grayscale
+  // 'ap-rgb'   — AP inscatter colour only (×40 for visibility), refined
+  // 'ap-alpha' — AP alpha (transmittance loss) only as grayscale, refined
   // 'w'        — slice index w as grayscale; sky→1, foreground→0
   // 'is-sky'   — sky mask: white = sky, black = geometry
   // 'beyond'   — past-coverage mask: white = pixel uses raymarch fallback
@@ -276,6 +296,10 @@ export function createHazeOutputNode({
   }
 
   const sceneColor = sceneColorNode ?? scenePass.getTextureNode('output')
+
+  // The AP slice refinement marches the pixel ray, so it needs the raymarch
+  // fallback's inputs (validated above) and is compiled with it.
+  const refineSteps = enableRaymarchFallback ? Math.max(0, Math.floor(apRefineSteps)) : 0
 
   // `PassNode` uses `perspectiveDepthToViewZ` for `getViewZNode` — correct for
   // default depth, wrong when `logarithmicDepthBuffer` is on; see hazeScenePassDepth.js
@@ -468,9 +492,117 @@ export function createHazeOutputNode({
     // sample, so sky pixels have nothing to compute here.
     const useRaymarch = raymarchWeight.greaterThan(float(0.0)).and(isSky.not())
 
+    // Slice refinement at altitude (#5, ROADMAP D4). From a few km up, a
+    // ray to the ground gathers nearly all of its haze in its last few km
+    // (scale heights: Rayleigh 8 km, Mie 1.2 km), well inside one depth
+    // slice (~20 km apart at 100–200 km with 32 km/slice). Linear
+    // interpolation between two slices across that rise reads low by an
+    // amount that depends on where the surface falls between them: zero at a
+    // slice centre, largest half-way. So the error repeats once per slice
+    // along every ray, and on a planet seen from above the slices are
+    // iso-distance shells, hence concentric bands around the nadir.
+    //
+    // Instead of interpolating across the rise, take the LUT only at slice
+    // centres and integrate the rest of the pixel's own ray: with u the
+    // texel-space depth of the surface distance D (capped at the ground
+    // sphere, below), za = floor(u) and zb = za − 1 the two slices before it,
+    //   Ea = LUT(za) ⊕ march(d(za) → D)
+    //   Eb = LUT(zb) ⊕ march(d(zb) → d(za)) ⊕ march(d(za) → D)
+    // and blend Eb → Ea by fract(u). Both estimate the same value; the blend
+    // keeps the result continuous where the surface crosses a slice centre
+    // (Ea alone jumps there by the LUT's own error). ⊕ is front-to-back
+    // compositing with the LUT's scalar transmittance.
+    const apC = vec4(ap).toVar()
+    if (refineSteps > 0) {
+      const refineWeight = smoothstep(
+        float(AP_REFINE_ALTITUDE_KM[0]),
+        float(AP_REFINE_ALTITUDE_KM[1]),
+        cameraAltitudeKm,
+      )
+      If(
+        refineWeight
+          .greaterThan(float(0.0))
+          .and(isSky.not())
+          .and(raymarchWeight.lessThan(float(1.0))),
+        () => {
+          const camPos = cameraPositionKm || vec3(float(0.0), viewHeightKm, float(0.0))
+          const sliceKm = (zi: any) => {
+            const wi = max(zi, float(0.0)).add(0.5).div(float(resZ))
+            return zi.greaterThanEqual(float(0.0)).select(wi.mul(wi).mul(float(resZ * kmPerSlice)), float(0.0))
+          }
+          // z = −1 is the camera itself: no haze yet.
+          const lutAt = (zi: any) => {
+            const wi = max(zi, float(0.0)).add(0.5).div(float(resZ))
+            const t = texture3D(aerialPerspectiveTexture, vec3(u.x, u.y, wi)).level(0)
+            return zi.greaterThanEqual(float(0.0)).select(t, vec4(0.0, 0.0, 0.0, 0.0))
+          }
+          // Inscatter (rgb) and mean transmittance (a) of the pixel ray over
+          // [fromKm, fromKm + lenKm]. Uniform segments: the dense air sits at the
+          // end of a descending segment, where quadratic spacing is sparsest.
+          const march = (fromKm: any, lenKm: any) => {
+            const p0 = camPos.add(worldRayDir.mul(fromKm))
+            const moved = moveToTopAtmosphere(p0, worldRayDir, atmosphereUniforms)
+            const startPos = moved.newPos.toVar()
+            const r = integrateScatteredLuminance({
+              worldPos: startPos,
+              worldDir: worldRayDir,
+              sunDir: sunDirection,
+              params: atmosphereUniforms,
+              transmittanceLUT,
+              multiScatterLUT,
+              sampleCount: refineSteps,
+              sampleDistribution: 'uniformSegments',
+              ground: false,
+              mieRayPhase: true,
+              tMaxOverride: max(lenKm.sub(length(startPos.sub(p0))), float(0.0)),
+            })
+            const valid = moved.valid.select(float(1.0), float(0.0))
+            const meanT = r.transmittance.x
+              .add(r.transmittance.y)
+              .add(r.transmittance.z)
+              .mul(1.0 / 3.0)
+            return vec4(r.L.mul(valid), mix(float(1.0), meanT, valid)).toVar()
+          }
+          // End the ray at the analytic ground if the surface lies below it
+          // (coarse planet tessellation, terrain under the sphere): there is
+          // no medium past it, which is also where the raymarch path's
+          // integrator stops. Without this a slice centre can fall under the
+          // ground, its march starts inside the planet and integrates nothing:
+          // thin dark-then-bright lines one slice apart.
+          const tGround = raySphereIntersectNearest(
+            camPos,
+            worldRayDir,
+            vec3(0.0, 0.0, 0.0),
+            atmosphereUniforms.bottomRadius,
+          )
+          const surfKm = tGround.greaterThan(float(0.0)).select(min(distKm, tGround), distKm)
+          const uTex = sqrt(clamp(surfKm.div(float(coverageKm)), float(0.0), float(1.0)))
+            .mul(float(resZ))
+            .sub(0.5)
+          const za = max(floor(uTex), float(-1.0))
+          const zb = max(za.sub(1.0), float(-1.0))
+          const phase = clamp(uTex.sub(za), float(0.0), float(1.0))
+          const da = sliceKm(za)
+          const db = sliceKm(zb)
+          const segA = march(da, max(surfKm.sub(da), float(0.0)))
+          const segB = march(db, max(da.sub(db), float(0.0)))
+          const lutA = lutAt(za)
+          const lutB = lutAt(zb)
+          const tA = float(1.0).sub(lutA.a)
+          const tB = float(1.0).sub(lutB.a)
+          const ea = vec4(lutA.rgb.add(segA.rgb.mul(tA)), float(1.0).sub(tA.mul(segA.a)))
+          const eb = vec4(
+            lutB.rgb.add(segB.rgb.mul(tB)).add(segA.rgb.mul(tB.mul(segB.a))),
+            float(1.0).sub(tB.mul(segB.a).mul(segA.a)),
+          )
+          apC.assign(mix(ap, mix(eb, ea, phase), refineWeight))
+        },
+      )
+    }
+
     // Debug bisection — JS-side mode select (compiles to one branch).
-    if (debugMode === 'ap-rgb') return vec4(ap.rgb.mul(luminanceScale).mul(5.0), 1.0)
-    if (debugMode === 'ap-alpha') return vec4(vec3(ap.a), 1.0)
+    if (debugMode === 'ap-rgb') return vec4(apC.rgb.mul(luminanceScale).mul(5.0), 1.0)
+    if (debugMode === 'ap-alpha') return vec4(vec3(apC.a), 1.0)
     if (debugMode === 'w') return vec4(vec3(w), 1.0)
     // Select between vec3s: `vec3(cond.select(1.0, 0.0))` collapses to a bare
     // f32 in the generated WGSL and fails the vec4 constructor.
@@ -482,8 +614,8 @@ export function createHazeOutputNode({
     if (debugMode === 'view-z' && cameraFarUniform) return vec4(vec3(abs(viewZ).div(cameraFarUniform)), 1.0)
 
     // --- LUT-based AP composite (close range) ---
-    const apRgbBase = ap.rgb.mul(luminanceScale)
-    const apABase = hazeStrength !== null ? ap.a.mul(hazeStrength) : ap.a
+    const apRgbBase = apC.rgb.mul(luminanceScale)
+    const apABase = hazeStrength !== null ? apC.a.mul(hazeStrength) : apC.a
     const apRgbBaseScaled = hazeStrength !== null ? apRgbBase.mul(hazeStrength) : apRgbBase
 
     // Working accumulators. We start from the LUT path and overwrite for

@@ -354,6 +354,28 @@ Two more traps from the same change:
   planet-altitude case paid the 5 % for nothing (numbers in
   `research/sebh-parity-audit.md`).
 
+### AP bands at altitude were W interpolation, not XY (2026-10-01, #5)
+
+The D4 concentric bands from 10–100 km: a ray to the ground gathers its haze
+in its last few km, inside one depth slice, and lerping between slices misses
+the rise by an amount locked to slice phase. The discriminator that settled
+it: render `AP alpha − raymarch alpha` and `fract(w·resZ − 0.5)` with
+`NoToneMapping`, then bin the difference by W, X and Y froxel phase (W p-p
+0.016, X 0.0002, Y 0.0024 at 75 km). Dithering W can't fix this (it averages
+the same biased interpolant), and neither do more build steps (they only
+shift the bias). The fix refines per pixel (`apRefineSteps`). Two traps on
+the way:
+
+- **A residual march from a single slice centre jumps at every slice** by
+  the LUT's own error there; blend two anchors (z0 and z0 − 1) by phase.
+- **Demo 05's planet is a 128×64 `SphereGeometry`**: its facets sit up to
+  ~1.9 km under the analytic sphere, so a slice centre can be inside the
+  planet while the rendered surface is still farther. Cap the surface
+  distance at the analytic ground hit or the march integrates nothing (thin
+  lines one slice apart). The cap also removed the seam the old AP output
+  showed at the local ground patch's edge (140 km), where the rendered
+  surface steps down onto the coarse sphere.
+
 ### Ground albedo feeds an isotropic bounce that glows the horizon
 
 Hillaire's multi-scatter LUT treats second-order light as isotropic, and at

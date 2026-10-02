@@ -280,6 +280,7 @@ Props are the `applyHaze` options (`scenePass` is supplied for you):
 | `altitudeBlend`          | `{ startKm: 50, endKm: 100 }` | Seeds the `'auto'` window; `hazeAltitudeBlend` on `<Sky>` changes it live.                                      |
 | `raymarchFallback`       | `true`                        | `false` drops the raymarch path from the shader: much faster compile, for scenes within AP coverage.            |
 | `raymarchSampleCount`    | `64`                          | Samples per pixel on the raymarch path. Build-time.                                                             |
+| `apRefineSteps`          | `4`                           | AP slice refinement above ~1 km altitude (removes concentric bands). `0` turns it off. Build-time.              |
 | `logarithmicDepthBuffer` | `false`                       | Must match the renderer's `logarithmicDepthBuffer`.                                                             |
 | `useCameraFar`           | auto                          | View-Z sky detection; on by default when `camera.far > 1e6`.                                                    |
 | `shadows`                | —                             | `{ light, samples, maxDistance, strength, resolution }` for light shafts. See the [Haze guide](../guides/haze). |

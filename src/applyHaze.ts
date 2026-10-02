@@ -15,6 +15,7 @@ interface ApplyHazeOptions {
   includeSkyCubeBlend?: boolean
   raymarchFallback?: boolean
   raymarchSampleCount?: number
+  apRefineSteps?: number
   shadows?: HazeShadowOptions | false
   debugMode?: string | null
 }
@@ -73,6 +74,13 @@ interface ApplyHazeOptions {
  *   keeps orbit-altitude grazing rays band-free; ground-level scenes can use
  *   32 or lower for a cheaper shader. Build-time constant — rebuild the node
  *   (call `applyHaze` again) to change it.
+ * @param {number} [options.apRefineSteps=4]           steps per
+ *   march of the AP slice refinement: above ~1–3 km camera altitude each
+ *   geometry pixel on the AP path takes the LUT at the two slice centres
+ *   before its surface and integrates the rest of its own ray (two marches),
+ *   which removes the concentric bands of interpolating between slices.
+ *   Costs nothing below 1 km. Needs `raymarchFallback` (off with it). 0 turns
+ *   it off. Build-time constant.
  * @param {object|false} [options.shadows]               opt-in shadowed haze (light
  *   shafts). `{ light, samples = 32, maxDistance = 20000, strength = 1,
  *   resolution = 0.5 }`: `light` is the shadow-casting `DirectionalLight` (or
@@ -99,6 +107,7 @@ export function applyHaze(
     includeSkyCubeBlend = false,
     raymarchFallback = true,
     raymarchSampleCount = 64,
+    apRefineSteps = 4,
     shadows,
     debugMode = null,
   }: ApplyHazeOptions = {},
@@ -194,6 +203,7 @@ export function applyHaze(
     // far smaller shader (see the option's JSDoc).
     enableRaymarchFallback: raymarchFallback,
     raymarchSampleCount,
+    apRefineSteps,
     atmosphereUniforms: baker.atmosphereUniforms,
     sunDirection: baker.sky.sunDirection,
     // Same uniform bundle the sky mesh binds, so a look assigned via

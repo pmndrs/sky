@@ -161,6 +161,33 @@ Then pass the corrected `worldDir` and `tMax` into both
 applied, the AP / Sky-View boundary matches well enough that the
 sky-fallback blend below becomes unnecessary in canonical mode.
 
+Above the atmosphere, also shorten the march by the distance
+`moveToTopAtmosphere` skipped (his `tMaxMax -= LengthToAtmosphere`,
+:685-701), and store no haze when the voxel ends before the ray enters
+(he returns opacity 1 there, which would black out geometry in front of the
+atmosphere). Until 2026-10-02 each voxel marched its full camera distance
+from the entry point, so every slice past the entry held roughly the
+whole-path value. That over-hazed `'ap'` above 100 km (mean 8-bit error vs the
+raymarch 15–31) but flattened each froxel ray's profile, which hid the D4
+slice bands there. With the correct profile the refinement brings the error
+to 2–6, but slice bands remain: 0.0076 in alpha at 150 km and 0.011 at
+300 km with the refinement's steps packed toward the surface end
+(`'quadraticEnd'`; equal steps gave 0.009 / 0.014). They are not just
+step spacing: 8 steps give 0.0046 / 0.0069 and 12 give 0.0036 / 0.0054, and
+anchoring one slice further back made them worse. Without the refinement (`apRefineSteps: 0`) `'ap'` above 100 km reads worse
+than before (3 → 9). `'auto'` raymarches up there and never reads the AP.
+
+The haze raymarch fallback had the same mistake: it started at the
+atmosphere top but marched the camera-relative distance, so anything
+standing above the ground got the air behind it (a 15 km cone from 150 km:
+alpha 0.248 instead of 0.148). It now subtracts the skipped length, as his
+`tDepth` is measured from the moved `WorldPos` (:67, :377). Ground pixels never
+showed it because the march stops at the ground sphere — and that overshoot
+had also been hiding depth-buffer precision: with the plain subtraction,
+Bruneton's 2,700 / 12,000 km views (standard depth) lost 11–12 % of their
+ground haze. Above the atmosphere a surface within 0.2 % of the ground
+sphere's distance is taken to be the ground, which restores them exactly.
+
 ### AP coverage limit vs sky integration — sky-fallback blend (legacy / opt-in)
 
 Historical context: before the underground-froxel correction was ported,

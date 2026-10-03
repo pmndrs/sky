@@ -530,8 +530,12 @@ export function createHazeOutputNode({
             return zi.greaterThanEqual(float(0.0)).select(t, vec4(0.0, 0.0, 0.0, 0.0))
           }
           // Inscatter (rgb) and mean transmittance (a) of the pixel ray over
-          // [fromKm, fromKm + lenKm]. Uniform segments: the dense air sits at the
-          // end of a descending segment, where quadratic spacing is sparsest.
+          // [fromKm, fromKm + lenKm]. Steps packed toward the far end
+          // ('quadraticEnd'): seen from above, the dense air sits at the end of
+          // the segment, by the surface. Against equal steps at 4 steps, the
+          // slice-locked error drops from 0.009 to 0.0076 (150 km) and 0.014
+          // to 0.011 (300 km) in AP alpha, same cost; 10–75 km is unchanged
+          // or slightly better.
           const march = (fromKm: any, lenKm: any) => {
             const p0 = camPos.add(worldRayDir.mul(fromKm))
             const moved = moveToTopAtmosphere(p0, worldRayDir, atmosphereUniforms)
@@ -544,7 +548,7 @@ export function createHazeOutputNode({
               transmittanceLUT,
               multiScatterLUT,
               sampleCount: refineSteps,
-              sampleDistribution: 'uniformSegments',
+              sampleDistribution: 'quadraticEnd',
               ground: false,
               mieRayPhase: true,
               tMaxOverride: max(lenKm.sub(length(startPos.sub(p0))), float(0.0)),
@@ -646,7 +650,36 @@ export function createHazeOutputNode({
         const moved = moveToTopAtmosphere(camPos, worldDir, atmosphereUniforms)
         const startPos = moved.newPos.toVar()
 
-        const distKmVar = distKm.toVar()
+        // March length is the surface's depth measured from where the march
+        // starts. RenderRayMarchingPS moves WorldPos to the atmosphere top
+        // (:377) before IntegrateScatteredLuminance turns the depth buffer
+        // into tDepth = |surface − WorldPos| (:67). Passing the camera-relative
+        // distance from the moved start ran the ray past the surface by the
+        // skipped vacuum; ground pixels hid it (the march stops at the ground
+        // sphere) but anything standing above the ground got the air behind
+        // it. Inside the atmosphere the start is the camera and this is exact.
+        //
+        // Depth-buffer distances lose precision far from the camera, and with
+        // the march no longer overshooting, an error there now shortens it.
+        // From 2,700 and 12,000 km (Bruneton's space views, standard depth)
+        // ground pixels read up to 12 % less haze. So from above the
+        // atmosphere, a surface within 0.2 % of the ground sphere's distance
+        // is taken to be the ground: that is where the march stopped before,
+        // and a mountain worth seeing stands well clear of it (0.6 km at
+        // 300 km). Inside the atmosphere nothing changes.
+        const tGround = raySphereIntersectNearest(
+          camPos,
+          worldDir,
+          vec3(0.0, 0.0, 0.0),
+          atmosphereUniforms.bottomRadius,
+        )
+        const lengthToAtmosphere = length(startPos.sub(camPos))
+        const atGround = lengthToAtmosphere
+          .greaterThan(float(0.0))
+          .and(tGround.greaterThan(float(0.0)))
+          .and(distKm.greaterThan(tGround.mul(0.998)))
+        const surfKm = atGround.select(max(distKm, tGround), distKm)
+        const distKmVar = max(surfKm.sub(lengthToAtmosphere), float(0.0)).toVar()
 
         // Per-pixel hash in [0, 1] — breaks the coherent
         // sample-position alignment that caused horizontal banding

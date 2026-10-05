@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { DataUtils, Matrix3, PerspectiveCamera, Scene, Vector3 } from 'three/webgpu'
+import { DataUtils, DoubleSide, Matrix3, PerspectiveCamera, Scene, Vector3 } from 'three/webgpu'
 
 import { Sky } from '../src/Sky'
 import { compassToTheta } from '../src/sky/compass'
@@ -169,6 +169,17 @@ describe('Milky Way map', () => {
 })
 
 describe('Sky night', () => {
+  it('draws the star quads from both sides, since the orientation is a reflection', async () => {
+    // Regression: with north/compass fixed (#37) the equatorial → world matrix
+    // has determinant −1; three flips the winding and front-side culling hid
+    // every star.
+    const sky = new Sky(mockRenderer())
+    const night = await sky.enableStars({ count: 50 })
+    expect(night.stars!.orientation.determinant()).toBeCloseTo(-1, 6)
+    expect((night.stars!.mesh.material as any).side).toBe(DoubleSide)
+    sky.dispose()
+  })
+
   it('adds the star sprites to the attached scene and follows attach/detach', async () => {
     const sky = new Sky(mockRenderer())
     const scene = new Scene()

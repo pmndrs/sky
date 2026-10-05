@@ -42,7 +42,12 @@ import * as THREE from 'three/webgpu'
 import { Sky } from '@pmndrs/sky'
 
 const renderer = new THREE.WebGPURenderer({ antialias: true })
+renderer.setSize(innerWidth, innerHeight)
+document.body.appendChild(renderer.domElement)
 await renderer.init()
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000)
+camera.position.set(0, 2, 10)
 
 const sky = new Sky(renderer, {
   preset: 'earth', // 'earth' | 'mars' | 'titan'
@@ -90,7 +95,7 @@ On a tight budget, `sky.applyFog(scenePass.getTextureNode(), { scenePass, densit
 is exponential height fog coloured by the baked sky behind the geometry: one
 texture sample per pixel and no per-frame LUT (no `updateAerialPerspective()`,
 and `enableAerialPerspective` can be `false`). See
-[Height fog](https://sky.docs.pmnd.rs/guides/haze#height-fog-the-budget-tier).
+[Height fog](https://sky.docs.pmnd.rs/guides/haze#height-fog:-the-budget-tier).
 
 ## React (R3F)
 
@@ -156,7 +161,7 @@ A condensed method table for the `Sky` facade:
 | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `setTimeOfDay(hours)`                                                                        | NOAA solar position; combined with `latitude` + `dayOfYear`                                                                    |
 | `setLatitude(deg)` / `setDayOfYear(day)`                                                     | Solar position inputs                                                                                                          |
-| `setSunDirection({ elevation, azimuth })`                                                    | Direct override                                                                                                                |
+| `setSunDirection({ elevation, azimuth })`                                                    | Direct override; `azimuth` is a compass azimuth, clockwise from north (90 = east, on your right facing north)                  |
 | `setNorth('+X' \| '-X' \| '+Z' \| '-Z' \| degrees)`                                          | Where geographic north points: an axis, or a heading clockwise from +Z seen from above                                         |
 | `setExposure(n)`                                                                             | Sky luminance scale (default 40)                                                                                               |
 | `setSunDisc(boolean \| { angularDiameter })`                                                 | Disc visibility + size in radians                                                                                              |
@@ -210,9 +215,9 @@ LUT debug views, and the numbered scratch demos used during development.
 
 ## Status
 
-Baked sky, aerial-perspective haze with light shafts, planet-scale
-(ground→orbit) rendering, the night sky, and stylized looks are all
-functional. Volumetric clouds are out of scope.
+Baked sky, aerial-perspective haze with light shafts, sky-coloured height fog,
+planet-scale (ground→orbit) rendering, the night sky, and stylized looks are
+all functional. Volumetric clouds are out of scope.
 
 ## Contributing
 

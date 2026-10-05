@@ -32,7 +32,8 @@ export interface AutoHazeProps {
  * instance).
  *
  * Props are forwarded to `sky.applyHaze` as the options bag (e.g.
- * `policy`, `altStartKm`, `altEndKm`, `hazeStrength`, `skyCube`). With
+ * `policy`, `strength`, `altitudeBlend`, `raymarchFallback`, `apRefineSteps`,
+ * `shadows`); `scenePass` is supplied. With
  * `mode="fog"` they go to `sky.applyFog` instead (`density`,
  * `heightFalloff`, `baseHeight`, `maxOpacity`, `nightBlur`).
  *

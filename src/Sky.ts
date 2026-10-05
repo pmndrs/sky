@@ -828,8 +828,8 @@ export class Sky {
    * Needs `sky.update(camera)` each frame (the sprites follow the camera).
    * Idempotent — calling again updates in place. Returns the `SkyNight`
    * instance (`setIntensity`, `setSize`, `setTwinkle`, `setContrast`,
-   * `setMilkyWay`, `setMilkyWayContrast`, `setMilkyWayTexture`, `disable`,
-   * `dispose`).
+   * `setMagnitudeContrast`, `setMilkyWay`, `setMilkyWayContrast`,
+   * `setMilkyWayTexture`, `disable`, `dispose`).
    *
    * Async for API stability; generating the procedural Milky Way map takes
    * ~120 ms on first enable.

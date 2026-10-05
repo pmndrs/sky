@@ -39,7 +39,7 @@ new SkyAtmosphereBaker(renderer, options?)
 | `apKmPerSlice`            | `8.0`              | AP LUT depth-slice size in km. Must match whatever `kmPerSlice` you pass to `createHazeOutputNode` if you're not going through `Sky.applyHaze` (which wires this for you). |
 | `apResolution`            | `{x:32,y:32,z:32}` | AP LUT voxel grid override.                                                                                                                                                |
 | `mirrorBelowHorizon`      | `false`            | See `setMirrorBelowHorizon` below.                                                                                                                                         |
-| `pmrem`                   | `{}`               | `SkyPmremOptions`: how the IBL is prefiltered. See [Environment (PMREM) refresh](#environment-pmrem-refresh).                                                              |
+| `pmrem`                   | `{}`               | `SkyPmremOptions`: how the IBL is prefiltered. See [Environment (PMREM) refresh](<#environment-(pmrem)-refresh>).                                                          |
 
 ## Getters
 
@@ -186,7 +186,11 @@ pieces are exported for custom facades:
 ### `setSun({ elevation, azimuth })`
 
 Degrees. `phi = 90 - elevation` (polar angle from +Y), `theta = azimuth`.
-Produces a Y-up world-space sun vector fed to the sky mesh, and separately
+This `azimuth` is three's spherical theta, measured from +Z toward +X, which
+is **counter-clockwise** seen from above. It is not a compass azimuth and
+ignores `north`: `Sky.setSunDirection` converts a compass azimuth (clockwise
+from north) to it, and `Sky.setSunDirection({ ..., raw: true })` passes it
+through unchanged. Produces a Y-up world-space sun vector fed to the sky mesh, and separately
 derives the Z-up sun vector the Sky-View LUT's internal frame expects (see
 the Y-up/Z-up coordinate dance in the project's `CLAUDE.md` if you're
 debugging a tilted horizon). Sets `sunDirty` and `cubeDirty`. A call with

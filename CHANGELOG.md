@@ -6,6 +6,8 @@ Conventional Commit titles of merged pull requests (see [RELEASING.md](./RELEASI
 
 ## [0.4.0](https://github.com/pmndrs/sky/compare/v0.3.0...v0.4.0) (2026-10-05)
 
+**Upgrading from 0.3:** a few defaults and behaviours changed — the compass direction, the ground albedo default, the star API, and the sun light below the horizon. The [upgrading guide](https://sky.docs.pmnd.rs/guides/upgrading) has a checklist.
+
 
 ### Features
 
@@ -13,6 +15,7 @@ Conventional Commit titles of merged pull requests (see [RELEASING.md](./RELEASI
 * **haze:** sky-coloured height fog, a haze tier with no per-frame LUT ([#44](https://github.com/pmndrs/sky/issues/44)) ([cd648fc](https://github.com/pmndrs/sky/commit/cd648fca3329fde5b0ad5881b6a0d1bf1b03a774)), closes [#3](https://github.com/pmndrs/sky/issues/3)
 * **looks:** track overrides for GUI sliders; ease the Ghibli horizon band ([eda1403](https://github.com/pmndrs/sky/commit/eda1403580916b9b1ece57d92481c56e11ff1bab))
 * **pmrem:** per-frame compute IBL prefilter (SkyPmrem) ([05046e4](https://github.com/pmndrs/sky/commit/05046e476639060959b9250c6bf78cdc940f7d3b))
+* **pmrem:** throttle and time-slice IBL re-bakes (`PmremScheduler`; `pmrem: { minInterval, levelsPerFrame }`, `sky.flushEnvironment()`) ([0fbf7ff](https://github.com/pmndrs/sky/commit/0fbf7ff5d4624e6aae9fc713f547877a5c7bf106))
 * **react:** pmrem prop on &lt;Sky&gt; ([#30](https://github.com/pmndrs/sky/issues/30)) ([48a3cb0](https://github.com/pmndrs/sky/commit/48a3cb08789f24d1f136eecd9f274a0c4eaa0d2d))
 * **sky:** `north` accepts any heading in degrees and turns the sun, stars, Milky Way and manual moon together ([#34](https://github.com/pmndrs/sky/issues/34)) ([2dbb043](https://github.com/pmndrs/sky/commit/2dbb043de8869a550123537be3c71445682885be))
 * **sky:** `sunColor` option and `setSunColor('neutral' | 'bruneton' | color)`, tinting sky, haze, sun disc and `createSun()` lights together ([aa1c4fb](https://github.com/pmndrs/sky/commit/aa1c4fb4195ce47fce7c5927b9dfa7dfefcb5766))
@@ -34,7 +37,6 @@ Conventional Commit titles of merged pull requests (see [RELEASING.md](./RELEASI
 * **looks:** keep the sun tint around the sun at high elevations ([#40](https://github.com/pmndrs/sky/issues/40)) ([58831ed](https://github.com/pmndrs/sky/commit/58831edb0d30c7cab47f88f4edca97860bb846cf)), closes [#18](https://github.com/pmndrs/sky/issues/18)
 * **looks:** put ramp intensity in luminanceScale units; retune day/dusk palettes; looks workbench example ([#10](https://github.com/pmndrs/sky/issues/10)) ([d4b2f24](https://github.com/pmndrs/sky/commit/d4b2f24d5497d2cf1ef78678fd21a44b9478979d))
 * **luts:** quality presets resize the LUTs end to end ([#42](https://github.com/pmndrs/sky/issues/42)) ([ac3c1e8](https://github.com/pmndrs/sky/commit/ac3c1e8ccf28bea5274650e2dadc20cd9725e657)), closes [#13](https://github.com/pmndrs/sky/issues/13)
-* prem baking ([0fbf7ff](https://github.com/pmndrs/sky/commit/0fbf7ff5d4624e6aae9fc713f547877a5c7bf106))
 * **react:** `useSky()` types accept `setLookTrack` overrides, `update` options and `setSunDisc` objects ([a08d6a0](https://github.com/pmndrs/sky/commit/a08d6a05edc403e215b6a6f0f11018fac42b128c))
 * **react:** avoid rebakes from reference-only prop changes ([#12](https://github.com/pmndrs/sky/issues/12)) ([#16](https://github.com/pmndrs/sky/issues/16)) ([98f2604](https://github.com/pmndrs/sky/commit/98f26049c2d923c5e5aa5f988113f6ae432e22d8))
 * **react:** keep turbidity over atmosphere, clear removed lookTrack, keep track overrides ([#31](https://github.com/pmndrs/sky/issues/31)) ([c6a4250](https://github.com/pmndrs/sky/commit/c6a42507b5b4c92a6c835ec1426ba949ab97c982))
@@ -42,7 +44,6 @@ Conventional Commit titles of merged pull requests (see [RELEASING.md](./RELEASI
 * **sky:** draw the live sky after opaques, no depth write — like an engine sky ([#25](https://github.com/pmndrs/sky/issues/25)) ([dbcc76c](https://github.com/pmndrs/sky/commit/dbcc76cdee352d72a4a90d01ead5744fecd5d298))
 * **sky:** exposure changes re-bake the background and IBL ([#29](https://github.com/pmndrs/sky/issues/29)) ([f550fc7](https://github.com/pmndrs/sky/commit/f550fc71aa05c7f77d96ea85b7065992dbe51ff1))
 * **sky:** match Bruneton's reference and fix the noon whiteout (haze sky mask, haze ray precision, Sky-View sample spacing, ground albedo default 0.3 → 0.1) ([aa1c4fb](https://github.com/pmndrs/sky/commit/aa1c4fb4195ce47fce7c5927b9dfa7dfefcb5766))
-* **stars:** draw the star sprites again; the compass fix made the orientation a reflection and culled every quad ([a08d6a0](https://github.com/pmndrs/sky/commit/a08d6a05edc403e215b6a6f0f11018fac42b128c))
 * **sun:** fade the directional light below the horizon, keeping the requested intensity ([#33](https://github.com/pmndrs/sky/issues/33)) ([922842e](https://github.com/pmndrs/sky/commit/922842e241a08157164a332218bcc41349e4d5c2))
 
 

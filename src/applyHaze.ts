@@ -27,7 +27,7 @@ interface ApplyHazeOptions {
  * onto their pipeline's outputNode.
  *
  * Vanilla:
- *   const post = new PostProcessing(renderer);
+ *   const post = new RenderPipeline(renderer);
  *   const scenePass = pass(scene, camera);
  *   post.outputNode = applyHaze(scenePass.getTextureNode(), { scenePass, sky });
  *

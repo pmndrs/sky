@@ -73,6 +73,9 @@ Built via a WebGPU compute pass (`textureStore`, `instanceIndex`) rather
 than a fragment pass, since it produces a 3D texture. Each voxel ray-marches
 from the camera through the atmosphere for exactly its slice's depth,
 storing accumulated in-scattered luminance (RGB) and transmittance (alpha).
+As in Hillaire's reference, a voxel whose end point is below the ground is
+pulled back up onto it, and with the camera above the atmosphere the march
+starts where the ray enters it (voxels that end before that hold no haze).
 Consumed by the [haze post-process](../guides/haze), not by the sky mesh
 itself.
 

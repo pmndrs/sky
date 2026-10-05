@@ -3,13 +3,49 @@ title: Upgrading to 0.4
 description: What changes for existing scenes when moving from @pmndrs/sky 0.3 to 0.4, and how to keep the old behaviour where you need it.
 ---
 
-0.4 is mostly new features: per-frame image-based lighting, stars and the
-Milky Way, light shafts, sun colour, and look-track overrides. A few defaults
-and behaviours changed too, and some of them are visible in an existing
-scene. This page lists those, in rough order of how likely you are to notice.
+0.4 is mostly new features: per-frame image-based lighting, pixel-sharp stars
+and the Milky Way, light shafts, a cheap sky-coloured height fog, sun colour,
+a sun light that can take its brightness from the sky, compass headings in
+degrees, and look-track overrides. A few defaults and behaviours changed too,
+and some of them are visible in an existing scene. This page lists those, in
+rough order of how likely you are to notice.
 
 Everything here is pre-1.0, so a minor version can change behaviour; the full
 list of changes is in the [changelog](https://github.com/pmndrs/sky/blob/main/CHANGELOG.md).
+
+## 0.3 → 0.4 at a glance
+
+Check these against your project. Each links to the details below.
+
+- **Every scene:** the sky is brighter, and the default ground albedo is now
+  `0.1` (was `0.3`). [Details](#the-sky-is-brighter,-and-noon-no-longer-whites-out)
+- **Every scene with a sun from `timeOfDay`:** the sun now rises in the east.
+  0.3 had the compass mirrored, so the sun crosses to the other side of the
+  north–south line. [Details](#east-is-on-the-right:-the-compass-was-mirrored)
+- **`setSunDirection({ elevation, azimuth })`:** a compass azimuth now lands on
+  the mirrored side. Pass `360 - azimuth` to keep a hand-placed sun where it
+  was. [Details](#east-is-on-the-right:-the-compass-was-mirrored)
+- **`createSun()`:** the light goes out once the sun has set, and
+  `sun.intensity` is the requested value, not the effective one.
+  [Details](#skysun-goes-dark-when-the-sun-sets)
+- **Stars:** the 0.3 star API (`setStarsDensity`, `setStarsBrightness`,
+  `setStarsRotation`, `setStarsSource`, `source: 'hdri'`) is gone.
+  [Details](#stars:-new-api,-old-calls-removed)
+- **Custom looks with `value > 0`:** multiply `intensity` by your
+  `toneMappingExposure` to keep the 0.3 result. [Details](#looks:-ramp-intensity-is-display-referred)
+- **A live sky mesh (`createSkyMesh`) or your own `SkyAtmosphereMesh`:** it
+  now draws after opaque geometry without writing depth.
+  [Details](#the-live-sky-mesh-draws-after-opaque-geometry)
+- **Haze with the camera above about 1 km:** a per-pixel refinement removes
+  the old concentric bands and costs about 0.5–2 ms there.
+  `apRefineSteps: 0` turns it off. [Details](#haze-is-more-accurate-near-the-camera-and-from-altitude)
+- **Exposure animated per frame** (`setExposure` or
+  `renderer.toneMappingExposure`): each change now re-bakes the background
+  and IBL. [Details](#setexposure-updates-the-background-and-reflections)
+- **`setTurbidity` called with ratios:** it is absolute now.
+  [Details](#setturbidity-is-absolute)
+
+The rest are fixes you get without changing anything, or opt-in features.
 
 ## The sky is brighter, and noon no longer whites out
 
@@ -22,7 +58,32 @@ noon whiteout some scenes had is gone.
 - If you tuned `toneMappingExposure` or the sky's exposure around the old,
   dimmer sky, check it again.
 - To keep the old ground bounce, pass it explicitly:
-  `new Sky(renderer, { groundAlbedo: 0.3 })`.
+  `new Sky(renderer, { groundAlbedo: 0.3 })`. Expect a bright band along the
+  horizon with it; see [`groundAlbedo`](./tuning-atmosphere#groundalbedo).
+
+## East is on the right: the compass was mirrored
+
+Compass azimuths turned the wrong way in 0.3: with the default `north: '+Z'`,
+an azimuth of 90° (east) landed on +X, which is on your _left_ when you face
++Z. The morning sun therefore rose in the west, and the star field was
+mirrored the same way. Azimuths now turn clockwise seen from above, as on a
+map: facing north, east is on your right, so with `north: '+Z'` east is −X.
+
+- Scenes driven by `timeOfDay` see the sun on the other side of the
+  north–south line at the same hour: a morning sun that used to sit on +X now
+  sits on −X. Noon and the sun's elevation are unchanged. If you had worked
+  around the mirrored sun (by flipping `north` or the scene), remove the
+  workaround.
+- A sun placed with `setSunDirection({ elevation, azimuth })` moves to the
+  mirrored azimuth. To keep its old position, pass `360 - azimuth`. That
+  holds for every `north` axis.
+- Sun directions set with `raw: true` never went through the compass and are
+  unchanged.
+- `SkyMoon.setDirection` now applies `north` as its docs said, and turns
+  with `setNorth`.
+
+`north` also accepts any heading in degrees now, so a site plan's north arrow
+can be matched exactly; see [Compass](../api/sky#compass).
 
 ## `SkySun` goes dark when the sun sets
 
@@ -49,6 +110,29 @@ New and opt-in: `createSun({ physical: true })` derives the light's intensity
 and colour from the sky (`exposure × T(sun)`), which is about 9× brighter than
 the default `4` at noon; see [`createSun`](../api/sky#skysun).
 
+## Stars: new API, old calls removed
+
+0.3 baked a procedural starfield (or an HDRI) into the sky cube, which is what
+made the stars blurry. 0.4 draws them as sprites in your scene and bakes only
+the Milky Way's glow. The stars are placed from `timeOfDay`, `dayOfYear`,
+`latitude` and `north`, so they turn with the sky on their own.
+
+`sky.enableStars()`, `disableStars()`, `setStarsIntensity()` and `sky.stars`
+work as before. The rest of the 0.3 star API was removed: a removed method
+throws when called, and a removed option is ignored, so an old
+`enableStars({ density: 2 })` still runs, with the defaults.
+
+| 0.3                                                                     | 0.4                                                                                |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `setStarsDensity(n)`, `{ density }`                                     | `{ count }` (number of procedural stars)                                           |
+| `setStarsBrightness(n)`, `{ brightness }`                               | `setStarsIntensity(n)`, `{ intensity }`                                            |
+| `setStarsRotation(r)`, `{ rotation }`                                   | Nothing to do: the sky follows the time, date, latitude and `north`.               |
+| `setStarsSource(s)`, `{ source, url }`                                  | Load the map yourself (galactic coordinates) and pass it as `{ milkyWayTexture }`. |
+| `{ texture }`                                                           | `{ milkyWayTexture }`, if the map is in galactic coordinates                       |
+| `SkyNight` `setDensity` / `setBrightness` / `setRotation` / `setSource` | `setIntensity`, `setSize`, `setContrast`, `setMilkyWay`, … (see the guide)         |
+
+See [Night sky](./night-sky) for the new options.
+
 ## Reflections update every frame (and look slightly different on three r185/r186)
 
 On the WebGPU backend, the environment map (`sky.environmentTexture`, the
@@ -56,7 +140,7 @@ image-based lighting for `scene.environment`) is now re-filtered with compute
 shaders on every sky change, in the same frame as the background. Before, it
 was refreshed at most every 250 ms and spread over several frames, so
 reflections lagged a moving sun. It costs about 1 ms per change at the default
-256 cube. See [the PMREM section of the baker docs](../api/baker#environment-pmrem-refresh).
+256 cube. See [the PMREM section of the baker docs](<../api/baker#environment-(pmrem)-refresh>).
 
 - **three r187+:** the output is identical to three's `PMREMGenerator`.
 - **three r185/r186:** three's generator doesn't filter its levels at the
@@ -75,34 +159,25 @@ new Sky(renderer, { pmrem: { generator: 'three' } })
 `environmentTexture` is still the same texture object from the first bake to
 `dispose()`, so materials don't recompile.
 
-## East is on the right: the compass was mirrored
+## `setExposure` updates the background and reflections
 
-Compass azimuths turned the wrong way in 0.3: with the default `north: '+Z'`,
-an azimuth of 90° (east) landed on +X, which is on your _left_ when you face
-+Z. The morning sun therefore rose in the west, and the star field was
-mirrored the same way. Azimuths now turn clockwise seen from above, as on a
-map, so with `north: '+Z'` east is −X.
-
-- Scenes driven by `timeOfDay` see the sun on the other side of the
-  north–south line at the same hour. Noon and the sun's elevation are
-  unchanged.
-- A sun placed with `setSunDirection({ elevation, azimuth })` moves to the
-  mirrored azimuth. To keep the old position, pass `360 - azimuth`, or use
-  `raw: true`, which is unchanged.
-- `SkyMoon.setDirection` now applies `north` as its docs said, and turns
-  with `setNorth`.
-
-`north` also accepts any heading in degrees now; see
-[Compass](../api/sky#compass).
+In 0.3, `setExposure(n)` (and the React `exposure` prop) only changed the
+live sky mesh. The baked background and the IBL kept the old exposure until
+something else re-baked them. Now a change re-bakes the cube and IBL, so
+everything matches straight away. Setting the same value again costs
+nothing, but animating the exposure now costs a cube + IBL bake on every
+frame it changes (about 1 ms with the default compute IBL). The same goes for
+`renderer.toneMappingExposure`, which `Sky.update()` feeds to the
+[looks](#looks:-ramp-intensity-is-display-referred).
 
 ## The live sky mesh draws after opaque geometry
 
 This only affects the live sky mesh from `baker.createSkyMesh()` (used by the
-planet-scale setups); `Sky`'s default background is the baked cube and is
-unchanged. The live sky now draws like a game-engine sky: after the opaque
-geometry, depth-tested at the far plane, without writing depth. Sky
-hidden behind geometry is never shaded, which is faster, and transparent
-objects still draw over it.
+planet-scale setups) and a `SkyAtmosphereMesh` you add yourself; `Sky`'s
+default background is the baked cube and is unchanged. The live sky now draws
+like a game-engine sky: after the opaque geometry, depth-tested at the far
+plane, without writing depth. Sky hidden behind geometry is never shaded,
+which is faster, and transparent objects still draw over it.
 
 If you create your own `SkyAtmosphereMesh`, give it the same order:
 
@@ -112,9 +187,32 @@ import { SKY_RENDER_ORDER } from '@pmndrs/sky'
 mesh.renderOrder = SKY_RENDER_ORDER
 ```
 
-If you relied on the sky drawing first (`renderOrder = -1`), for example to
-draw something behind it, move that object to a lower `renderOrder` than
-`SKY_RENDER_ORDER` and give it depth.
+If you relied on the sky drawing first (`renderOrder = -1` in 0.3), for
+example to draw something behind it, move that object to a lower
+`renderOrder` than `SKY_RENDER_ORDER` and give it depth. An opaque object
+that doesn't write depth (`depthWrite: false`) is now painted over by the
+sky; draw it as transparent, or let it write depth.
+
+## Haze is more accurate near the camera and from altitude
+
+Three fixes change how aerial-perspective haze looks; none needs code changes.
+
+- **Near the camera.** The haze volume now uses Hillaire's per-slice step
+  counts, covering each slice's whole ray. It used to read 2–3 % too thin,
+  and up to 5–7 % in the far slices. Final frames move by two or three 8-bit
+  steps at most.
+- **From altitude.** Above about 1 km camera altitude, each pixel refines the
+  depth-slice lookup with a short march of its own, which removes the faint
+  concentric rings the slices left on the ground seen from above. It costs
+  nothing at ground level, about 0.55 ms at 25 km and 1–2 ms at 75 km
+  (1080p, ground filling the screen). To get the 0.3 cost back, pass
+  `apRefineSteps: 0` to `applyHaze` (or `<AutoHaze>`); see
+  [Haze seen from altitude](<./haze#haze-seen-from-altitude-(slice-refinement)>).
+- **From space.** With the camera above the atmosphere and `policy: 'ap'`,
+  the volume used to hold haze for stretches of the ray still in vacuum, and
+  the ground looked washed out. It now starts where the ray enters the
+  atmosphere. The default `'auto'` policy raymarches up there and is
+  unchanged.
 
 ## `setTurbidity` is absolute
 
@@ -130,14 +228,22 @@ value you want instead.
 
 A look's colour ramp is now multiplied by `1 / renderer.toneMappingExposure`,
 which `Sky.update()` keeps in sync, so at `value: 1` the authored colours
-reach the screen as authored, whatever the sky's exposure. Custom looks that
-use `value > 0` and were tuned against 0.3 may need their `intensity` re-tuned.
-Looks with `value: 0` (chroma only) are unaffected. The built-in Ghibli
-palettes were retuned. See [Stylized looks](./looks).
+reach the screen as authored, whatever the sky's exposure. Looks with
+`value: 0` (chroma only) are unaffected. The built-in Ghibli palettes were
+retuned. See [Stylized looks](./looks).
+
+Custom looks that use `value > 0` and were tuned against 0.3 render
+differently. To get exactly the 0.3 result, multiply the look's `intensity`
+by your `toneMappingExposure` (with `toneMappingExposure: 0.5`, an
+`intensity` of 1 becomes 0.5).
+
+A look's `sunTint` also changed shape with the sun high: it used to tint
+every view toward the sun's azimuth, from the horizon to the zenith, and is
+now a round glow around the sun from about 30° up. Sunsets look the same.
 
 If you drive `SkyAtmosphereBaker` directly instead of `Sky`, keep
-`baker.lookUniforms.displayScale` in sync with the exposure yourself; see the
-[baker docs](../api/baker).
+`baker.sky.lookUniforms.displayScale` in sync with the exposure yourself; see
+the [baker docs](../api/baker#keeping-looks-display-referred).
 
 ## Sun colour, and `SkySun` follows it
 
@@ -171,17 +277,43 @@ after `attach()`. It now only fills the slot while it is empty or still holds
 the sky's texture, so an environment you assign later stays. To hand the slot
 back to the sky, call `attach(scene)` again.
 
-## React: object props compare by value
+## `quality: 'low'` and `'high'` are sampled correctly
 
-`<Sky>` props such as `sunDirection`, `groundAlbedo` or colours are compared
-by value, so writing them inline (a new object every render) no longer
-re-bakes the sky every render. Nothing to change; inline objects are fine now.
+The `'low'` and `'high'` tiers (and any custom `lutResolutions`) allocated
+differently sized LUTs, but the lookups still assumed the `'medium'` sizes,
+so those skies were sampled slightly off. Every lookup now uses the size of
+the texture it reads. `'medium'` (the default) is unchanged; a `'low'` or
+`'high'` sky may shift slightly. See [LUTs](../api/luts#resolutions-/-lut_resolutions).
+
+## React
+
+- **Object props compare by value.** `<Sky>` props such as `sunDirection`,
+  `groundAlbedo`, `atmosphere` or colours are compared by value, so writing
+  them inline (a new object every render) no longer re-bakes the sky every
+  render. Nothing to change; inline objects are fine now.
+- **`turbidity` applies on top of `atmosphere`**, and again whenever
+  `atmosphere` changes, so the two props no longer fight over the Mie values.
+- **Removing `lookTrack` clears the track**: the sky falls back to `look`, or
+  to the physical sky. Before, the track stayed on.
+- New props: `background`, `environment`, `pmrem`, `sunColor`, `fog`,
+  `lookTrackOverrides`, and `north` in degrees. `<AutoHaze mode="fog" />`
+  wires height fog instead of haze. `SkyProps` and `SkyContextValue` are
+  exported as types. See the [React reference](../api/react).
 
 ## Deprecated atmosphere fields
 
 The `ozone*` and `sunIlluminance` fields of the atmosphere params are
 `@deprecated`: no shader reads them, so setting them has no effect.
 `sunAngularRadius` now resizes the sun disc.
+
+## `update()` inside a G-buffer frame
+
+`sky.update()` called while your own MRT was set (`renderer.setMRT(...)`)
+compiled the sky bake under it and failed with WebGPU validation errors every
+frame. Internal draws now clear the MRT and restore your renderer state
+afterwards, even if a draw throws. If you cleared the MRT around
+`sky.update()` as a workaround, you can drop it. See
+[Renderer state](../api/baker#renderer-state).
 
 ## three.js r187
 

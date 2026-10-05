@@ -35,7 +35,7 @@
     <div id="info">
       Planet-scale — sphere ground, first-person flight camera, extended AP coverage. Drag to look; scroll to
       climb/descend.<br />
-      Stable counterpart: <a href="/examples/04-live-sky.html" style="color: #fc9">04-live-sky</a> · LUT res:
+      Stable counterpart: <a href="./04-live-sky.html" style="color: #fc9">04-live-sky</a> · LUT res:
       <a href="?" style="color: #fc9">default</a> /
       <a href="?hires=1" style="color: #fc9">hires</a>
     </div>
@@ -223,7 +223,7 @@
           scene.add(m)
         }
 
-        const clock = new THREE.Clock()
+        const timer = new THREE.Timer()
         // First-person flight controls: drag looks around from wherever the
         // camera is, wheel moves it radially (altitude only). No ground
         // target, no orbit — see planetFlightControls.ts for why the old
@@ -378,7 +378,8 @@
         markStage(5, 'running')
 
         renderer.setAnimationLoop(async () => {
-          const delta = clock.getDelta()
+          timer.update()
+          const delta = timer.getDelta()
 
           if (pendingAltitude !== null) {
             controls.setAltitudeM(pendingAltitude)
@@ -417,7 +418,7 @@
             scene.environment = baker.environmentTexture
           }
 
-          await renderPipeline.renderAsync()
+          renderPipeline.render()
         })
       })
     </script>

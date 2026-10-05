@@ -97,17 +97,20 @@ Two things change for aerial-perspective haze at planet scale:
 
 1. **Coverage** — bump `apKmPerSlice` so the AP LUT covers a useful range
    at high altitude: `apKmPerSlice: 32.0` gives 1024 km coverage (vs the
-   256 km default). See [Haze: coverage](../guides/haze#coverage-apkmperslice).
-2. **`useCameraFar`** — planet-scale cameras use a huge `camera.far`
-   (`20_000_000`+), which breaks the haze post-process's default
-   linear-depth sky-pixel test. Pass `useCameraFar: true` explicitly (or
-   rely on the automatic `camera.far > 1e6` heuristic) — see
+   256 km default). See [Haze: coverage](../guides/haze#coverage:-apkmperslice).
+2. **Huge far planes** — planet-scale cameras use a huge `camera.far`
+   (`20_000_000`+). The haze finds sky pixels by their raw depth, which
+   holds at any near/far ratio, and switches its secondary test to `viewZ`
+   (`useCameraFar`) on its own once `camera.far > 1e6`. If you use
+   `logarithmicDepthBuffer`, pass the same flag to `applyHaze` — see
    [Haze: `logarithmicDepthBuffer` and `useCameraFar`](../guides/haze#logarithmicdepthbuffer-and-usecamerafar).
 
 > **Note:**
 > Above about 1 km camera altitude the AP haze refines its depth-slice lookup per pixel, which removes the concentric
 > bands the slices used to leave on the ground seen from above — see [Haze seen from
-> altitude](../guides/haze#haze-seen-from-altitude-slice-refinement) (`apRefineSteps`).
+> altitude](<../guides/haze#haze-seen-from-altitude-(slice-refinement)>) (`apRefineSteps`). With the camera above the
+> atmosphere, the AP volume starts where each ray enters the atmosphere, so a forced `policy: 'ap'` no longer washes out
+> the ground from orbit; the default `'auto'` policy raymarches there anyway.
 
 ## Camera controls: `PlanetFlightControls`
 

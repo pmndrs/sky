@@ -102,7 +102,7 @@
   <body>
     <div id="info">
       Planet-scale debug harness — stable source page:
-      <a href="/examples/05-planet-scale.html">05-planet-scale</a><br />
+      <a href="./05-planet-scale.html">05-planet-scale</a><br />
       <span id="active-debug-label"></span>
     </div>
     <details id="debug-panel" open>
@@ -476,7 +476,7 @@
           scene.add(m)
         }
 
-        const clock = new THREE.Clock()
+        const timer = new THREE.Timer()
         const cameraControls = new CameraControls(camera, renderer.domElement)
         const cameraTarget = getPlanetLookAtTarget({
           position: camera.position,
@@ -631,7 +631,8 @@
         markStage(5, 'running')
 
         renderer.setAnimationLoop(async () => {
-          const delta = clock.getDelta()
+          timer.update()
+          const delta = timer.getDelta()
           cameraControls.update(delta)
           cameraControls.getTarget(cameraTarget)
 
@@ -674,7 +675,7 @@
 
           if (eff.iblOn && scene.environment !== baker.environmentTexture) scene.environment = baker.environmentTexture
 
-          await renderPipeline.renderAsync()
+          renderPipeline.render()
         })
       })
     </script>

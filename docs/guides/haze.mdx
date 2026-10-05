@@ -10,7 +10,7 @@ itself already includes atmospheric scattering via the Sky-View LUT; haze
 is specifically about _surfaces_ under that same atmosphere.
 
 For a cheaper look with no per-frame LUT, see
-[Height fog](#height-fog-the-budget-tier) (`applyFog`) at the end of this page.
+[Height fog](#height-fog:-the-budget-tier) (`applyFog`) at the end of this page.
 
 ## Enabling it
 
@@ -72,7 +72,7 @@ post.outputNode = graph // temporal resolve (TRAA/FSR) goes after this
 
 Sky pixels keep the base color (the cube background already contains
 atmospheric scattering), so bloom that spills over the sky survives too.
-The one exception is [light shafts](#light-shafts-shadowed-haze): with
+The one exception is [light shafts](<#light-shafts-(shadowed-haze)>): with
 `shadows` on, the shadowed in-scatter is subtracted from sky pixels as well.
 
 > **History:** before 2026-08-09 `applyHaze` ignored `sceneColorNode` and
@@ -342,12 +342,17 @@ sky.applyHaze(scenePass.getTextureNode(), {
 })
 ```
 
-`useCameraFar` opts into a `viewZ`-based sky-pixel test instead of the
-default linear-depth threshold. It defaults to `true` automatically when
-`camera.far > 1e6` — planet-scale cameras (`camera.far` in the 10⁷ m
-range) compress all real geometry into a thin sliver of `[0, 1]` linear
-depth, so the default test becomes unreliable; the `viewZ` test stays
-correct at any scale. See the [Planet-scale guide](../guides/planet-scale).
+Sky pixels are found by their raw depth: the sky draws without writing depth,
+so any pixel still at the cleared depth of exactly `1.0` is sky, at any
+near/far ratio. A second, older test is OR-ed in for a custom sky that writes
+a far-plane depth of its own: linear depth above `0.999` by default, or with
+`useCameraFar`, `viewZ` beyond `−0.999 · camera.far`. `useCameraFar`
+defaults to `true` when `camera.far > 1e6`, where planet-scale cameras
+squeeze all real geometry into a thin sliver of linear depth; it also enables
+the `'view-z'` debug view. You rarely need to set it. (A custom sky that
+writes a depth just below `1.0` can raise `sky.baker.skyDepthEpsilon.value`
+instead; the library's own sky leaves it at `0`.) See the
+[Planet-scale guide](../guides/planet-scale).
 
 ## Stylized looks and haze
 
@@ -407,6 +412,10 @@ geometry should take on the atmosphere's real colour shift, at altitude, or
 with light shafts. The two compose: `sky.applyFog(sky.applyHaze(color, { scenePass }), { scenePass })`
 puts a ground fog over physical aerial perspective.
 
+In React, `<AutoHaze mode="fog" />` wires the fog instead of haze (it then
+needs no aerial-perspective LUT either), and the `fog` prop on `<Sky>` drives
+the live knobs; see the [React reference](../api/react#autohaze).
+
 Costs: whole-frame burst timing (300 frames, loop paused, waited to GPU
 completion) against the same frame passing the scene through unchanged, 1920×1080, Apple GPU
 via headless Chromium, minimum of 5 rounds on a machine with other GPU work
@@ -439,9 +448,10 @@ ray, so the optical depth has a closed form,
 with `d` the distance **along the ray** (not `|viewZ|`) and `cosθ` the ray's
 vertical component. Written this way it never forms a large exponential, and
 the level-ray limit (`x → 0`, where the textbook form is 0/0) is a series.
-Fog opacity is `min(1 − e^(−τ), maxOpacity)`. `fogOpticalDepth` and
-`fogOpacity` export the same expression on the CPU, e.g. for gameplay
-visibility checks. Camera height comes from `sky.update(camera)` (world `y`,
+Fog opacity is `min(1 − e^(−τ), maxOpacity)`. `fogOpticalDepth(ray, fog)` and
+`fogOpacity(ray, fog)` export the same expression on the CPU, e.g. for
+gameplay visibility checks; `ray` is `{ distance, rayUp, cameraHeight }`
+(metres, the cosine to local up, metres) and `fog` the knobs above. Camera height comes from `sky.update(camera)` (world `y`,
 or altitude above the sphere with `planetCenter`), and "up" is the local up,
 so planet-scale scenes get fog around the camera.
 
@@ -470,6 +480,16 @@ colour (to grey at roughness 0.3–0.5 at sunset). The blend is a uniform
 branch, so by day the shader pays for the one sharp sample.
 
 Sky pixels (raw depth 1.0) pass through untouched, exactly as with haze.
+
+For a post-process wired by hand, the pieces `applyFog` uses are exported
+too:
+
+| Export                         | What it does                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FOG_DEFAULTS`                 | `{ density: 0.3, heightFalloff: 300, baseHeight: 0, maxOpacity: 1 }`                                                                                                                                                                                                                                                                   |
+| `createFogState(options)`      | The four knob uniforms (`FogState`).                                                                                                                                                                                                                                                                                                   |
+| `updateFogState(state, opts)`  | Applies a partial options object live — what `sky.setFog` calls.                                                                                                                                                                                                                                                                       |
+| `createFogOutputNode({ ... })` | The fog node itself: `scenePass`, `skyCube`, `cubeSize`, `fog` (a `FogState`), `cameraHeight` (a uniform, metres), plus optional `sceneColorNode`, `upVector`, `environment`, `sunDirection`, `nightBlur`, `skyDepthEpsilon`, `logarithmicDepthBuffer`, `debugMode`. See `src/applyFog.ts` for how `applyFog` fills them from a `Sky`. |
 
 What it can't do: extinction is grey, so distant objects veil but never shift
 colour through the air; there is no in-scatter from the sun beyond what the

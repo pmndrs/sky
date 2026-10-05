@@ -268,7 +268,7 @@ at which point the prop is applied again. Drive each setting from one place.
 The exception is look-track overrides: with `lookTrackOverrides` unset, a
 change of `look` or `lookTrack` keeps the overrides set through the instance.
 
-## `<AutoHaze>`
+## AutoHaze
 
 ```jsx
 import { AutoHaze } from '@pmndrs/sky/react/auto-haze'
@@ -281,25 +281,27 @@ import { AutoHaze } from '@pmndrs/sky/react/auto-haze'
 `<AutoHaze>` renders nothing. It calls R3F's `useRenderPipeline` and sets
 `renderPipeline.outputNode` to `sky.applyHaze(scenePass.getTextureNode(), { ...props, scenePass })`.
 It must be a child of `<Sky>` with `enableAerialPerspective` left on, or
-`applyHaze` throws. It lives in its own entry so bundles without it never
-import `useRenderPipeline`.
+`applyHaze` throws. With `mode="fog"` it calls `sky.applyFog` instead, which
+needs no aerial-perspective LUT, and `<Sky>` then skips
+`updateAerialPerspective()`. It lives in its own entry so bundles without it
+never import `useRenderPipeline`.
 
 Props are the `applyHaze` options (`scenePass` is supplied for you):
 
-| Prop                     | Default                       | Notes                                                                                                           |
-| ------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `policy`                 | `'auto'`                      | `'auto' \| 'ap' \| 'raymarch'`. Seeds the policy; `hazePolicy` on `<Sky>` changes it live.                      |
-| `strength`               | `1`                           | Seeds haze strength; `hazeStrength` on `<Sky>` changes it live.                                                 |
-| `altitudeBlend`          | `{ startKm: 50, endKm: 100 }` | Seeds the `'auto'` window; `hazeAltitudeBlend` on `<Sky>` changes it live.                                      |
-| `raymarchFallback`       | `true`                        | `false` drops the raymarch path from the shader: much faster compile, for scenes within AP coverage.            |
-| `raymarchSampleCount`    | `64`                          | Samples per pixel on the raymarch path. Build-time.                                                             |
-| `apRefineSteps`          | `4`                           | AP slice refinement above ~1 km altitude (removes concentric bands). `0` turns it off. Build-time.              |
-| `logarithmicDepthBuffer` | `false`                       | Must match the renderer's `logarithmicDepthBuffer`.                                                             |
-| `useCameraFar`           | auto                          | View-Z sky detection; on by default when `camera.far > 1e6`.                                                    |
-| `shadows`                | —                             | `{ light, samples, maxDistance, strength, resolution }` for light shafts. See the [Haze guide](../guides/haze). |
-| `includeSkyCubeBlend`    | `false`                       | Legacy sky-cube blend shim.                                                                                     |
-| `debugMode`              | `null`                        | AP debug view passthrough.                                                                                      |
-| `mode`                   | `'haze'`                      | `'fog'`: [height fog](../guides/haze#height-fog-the-budget-tier) (`applyFog`); other props are fog options.     |
+| Prop                     | Default                       | Notes                                                                                                                                                                                                 |
+| ------------------------ | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `policy`                 | `'auto'`                      | `'auto' \| 'ap' \| 'raymarch'`. Seeds the policy; `hazePolicy` on `<Sky>` changes it live.                                                                                                            |
+| `strength`               | `1`                           | Seeds haze strength; `hazeStrength` on `<Sky>` changes it live.                                                                                                                                       |
+| `altitudeBlend`          | `{ startKm: 50, endKm: 100 }` | Seeds the `'auto'` window; `hazeAltitudeBlend` on `<Sky>` changes it live.                                                                                                                            |
+| `raymarchFallback`       | `true`                        | `false` drops the raymarch path from the shader: much faster compile, for scenes within AP coverage.                                                                                                  |
+| `raymarchSampleCount`    | `64`                          | Samples per pixel on the raymarch path. Build-time.                                                                                                                                                   |
+| `apRefineSteps`          | `4`                           | AP slice refinement above ~1 km altitude (removes concentric bands). `0` turns it off. Build-time.                                                                                                    |
+| `logarithmicDepthBuffer` | `false`                       | Must match the renderer's `logarithmicDepthBuffer`.                                                                                                                                                   |
+| `useCameraFar`           | auto                          | View-Z secondary sky test; on by default when `camera.far > 1e6`. Rarely needed.                                                                                                                      |
+| `shadows`                | —                             | `{ light, samples, maxDistance, strength, resolution }` for light shafts. See the [Haze guide](../guides/haze).                                                                                       |
+| `includeSkyCubeBlend`    | `false`                       | Legacy sky-cube blend shim.                                                                                                                                                                           |
+| `debugMode`              | `null`                        | AP debug view passthrough.                                                                                                                                                                            |
+| `mode`                   | `'haze'`                      | `'fog'`: [height fog](../guides/haze#height-fog:-the-budget-tier) (`applyFog`); the other props are then `applyFog` options (`density`, `heightFalloff`, `baseHeight`, `maxOpacity`, `nightBlur`, …). |
 
 The pipeline callback runs once, with the props from the first render:
 changing an `<AutoHaze>` prop later has no effect. For live control, use the

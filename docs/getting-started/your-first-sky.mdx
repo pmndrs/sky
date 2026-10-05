@@ -95,7 +95,9 @@ renderer.setAnimationLoop(() => {
 2. Re-runs only the LUT stages whose inputs actually changed since the last
    call (dirty-flag cascade — see the [Baker reference](../api/baker) for
    the exact rules). Most frames where nothing changed, this is a no-op.
-3. Keeps `scene.environment` pointed at the current PMREM texture.
+3. Fills `scene.environment` once the first PMREM bake exists (it is `null`
+   before that). A texture you assign to `scene.environment` yourself later
+   is left alone.
 
 If you never call `sky.setTimeOfDay`, `sky.setSunDirection`, or any other
 setter after construction, the LUT chain bakes once and every subsequent

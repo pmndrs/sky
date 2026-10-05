@@ -39,9 +39,15 @@ lookup textures (LUTs) once per sun/atmosphere change, so you get:
 - **`applyHaze`** — an opt-in post-process node for aerial-perspective haze
   on your scene's opaque geometry, with optional light shafts from a
   shadow-casting sun. See the [Haze guide](../guides/haze).
+- **`applyFog`** — a cheaper sky-coloured height fog with no per-frame LUT,
+  for tight budgets or local weather. See
+  [Height fog](../guides/haze#height-fog:-the-budget-tier).
+- **A sun light** that tracks the sky (`sky.createSun()`), goes dark when the
+  sun sets, and can take its brightness and colour from the atmosphere. See
+  [`SkySun`](../api/sky#skysun).
 - **Image-based lighting** that keeps up with the sky — `environmentTexture`
   is re-filtered with WebGPU compute on every sun or atmosphere change
-  (~1 ms on the WebGPU backend). See [Baker: Environment (PMREM) refresh](../api/baker#environment-pmrem-refresh).
+  (~1 ms on the WebGPU backend). See [Baker: Environment (PMREM) refresh](<../api/baker#environment-(pmrem)-refresh>).
 - **Night sky** — resolved stars and the Milky Way, placed from the same
   time, date and latitude as the sun. See [Night sky](../guides/night-sky).
 - **Stylized looks** — artist colour ramps over the physical sky that the
@@ -65,7 +71,7 @@ dependency versions and WebGPU browser support notes.
 
 ## Status
 
-Baked sky, aerial-perspective haze with light shafts, planet-scale
-(ground→orbit) rendering, the night sky, and stylized looks are all
-functional today. Volumetric clouds are out of scope for this library.
+Baked sky, aerial-perspective haze with light shafts, height fog,
+planet-scale (ground→orbit) rendering, the night sky, and stylized looks are
+all functional today. Volumetric clouds are out of scope for this library.
 Coming from 0.3? See [Upgrading to 0.4](../guides/upgrading).

@@ -78,7 +78,7 @@
       const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 20_000_000)
 
       const sky = new Sky(renderer, {
-        sunDirection: { elevation: 25, azimuth: 30 },
+        sunDirection: { elevation: 25, azimuth: 330 }, // ahead, left of the view (+Z)
         enableAerialPerspective: false,
       })
       const scene = new THREE.Scene()

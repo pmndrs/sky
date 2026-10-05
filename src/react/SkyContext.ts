@@ -10,13 +10,13 @@ export interface SkyContextValue {
   attach(scene: any, options?: { background?: boolean; environment?: boolean }): void
   detach(): void
   dispose(): void
-  update(camera: any): void
+  update(camera: any, opts?: any): void
   setTimeOfDay(timeOfDay: number): void
   setLatitude(latitude: number): void
   setDayOfYear(dayOfYear: number): void
   setSunDirection(sunDirection: any): void
   setExposure(exposure: number): void
-  setSunDisc(sunDisc: boolean): void
+  setSunDisc(sunDisc: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number }): void
   setNorth(north: SkyNorth): void
   setTurbidity(turbidity: number): void
   setGroundAlbedo(groundAlbedo: any): void
@@ -26,7 +26,7 @@ export interface SkyContextValue {
   setHazePolicy(hazePolicy: any): void
   setHazeAltitudeBlend(hazeAltitudeBlend: any): void
   setLook(look: any): void
-  setLookTrack(track: any): void
+  setLookTrack(track: any, overrides?: any): void
   setSkyLuminanceFactor(factor: any): void
   setSunColor(color: any): void
   setAerialPerspectiveDistanceScale(value: number): void

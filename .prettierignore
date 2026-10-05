@@ -16,3 +16,6 @@ research/pmrem-lab/captures/
 
 # pmndrs/docs CLI output
 /out/
+
+# Written by release-please in its own format.
+CHANGELOG.md

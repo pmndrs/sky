@@ -80,8 +80,8 @@
 
       // Direct sun light so distant lit geometry sits in the sky's luminance
       // range (avoids the silhouette-fringe artifact documented in CLAUDE.md).
-      const sun = new THREE.DirectionalLight(0xffffff, 4)
-      scene.add(sun)
+      // SkySun follows the sky's sun (time, latitude, north) on its own.
+      sky.createSun({ intensity: 4 }).attach(scene)
 
       const ground = new THREE.Mesh(
         new THREE.PlaneGeometry(200000, 200000),
@@ -181,11 +181,6 @@
       window.__renderer = renderer
 
       renderer.setAnimationLoop(() => {
-        // Drive the directional light from the sky's current sun.
-        const elev = (sky.sunElevation * Math.PI) / 180
-        const az = (sky.sunAzimuth * Math.PI) / 180
-        sun.position.set(Math.cos(elev) * Math.sin(az) * 100, Math.sin(elev) * 100, Math.cos(elev) * Math.cos(az) * 100)
-
         sky.update(camera)
         sky.updateAerialPerspective()
         controls.update()

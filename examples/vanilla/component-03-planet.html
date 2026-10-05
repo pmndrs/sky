@@ -137,19 +137,8 @@
 
       // Direct sun keeps lit faces in the same luminance band as the sky,
       // avoiding the silhouette-fringe on distant geometry.
-      const sunLight = new THREE.DirectionalLight(0xffffff, 4.0)
-      scene.add(sunLight)
-      const updateSunLight = () => {
-        const elev = (sky.sunElevation * Math.PI) / 180
-        const az = (sky.sunAzimuth * Math.PI) / 180
-        sunLight.position.set(
-          Math.cos(elev) * Math.sin(az) * 50_000,
-          Math.sin(elev) * 50_000,
-          Math.cos(elev) * Math.cos(az) * 50_000,
-        )
-        sunLight.target.position.set(0, 0, 0)
-      }
-      updateSunLight()
+      // SkySun follows the sky's sun (time, latitude, date, north) on its own.
+      sky.createSun({ intensity: 4 }).attach(scene)
 
       // Sky mesh attached to the main scene (in addition to the baker's
       // internal cube) so we get a *live* sky that reacts to altitude
@@ -169,7 +158,7 @@
       })
       camera.lookAt(initialLookTarget)
 
-      const clock = new THREE.Clock()
+      const timer = new THREE.Timer()
       // First-person flight controls: drag looks around from wherever the
       // camera is, wheel moves it radially (altitude only). No ground
       // target, no orbit — see planetFlightControls.ts for why the old
@@ -209,22 +198,10 @@
       }
       const gui = renderer.inspector.createParameters('Sky')
       gui.add(state, 'preset', Object.keys(presets)).onChange((v) => sky.setPreset(v))
-      gui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => {
-        sky.setTimeOfDay(v)
-        updateSunLight()
-      })
-      gui.add(state, 'latitude', -90, 90, 0.5).onChange((v) => {
-        sky.setLatitude(v)
-        updateSunLight()
-      })
-      gui.add(state, 'dayOfYear', 1, 365, 1).onChange((v) => {
-        sky.setDayOfYear(v)
-        updateSunLight()
-      })
-      gui.add(state, 'north', ['+X', '-X', '+Z', '-Z']).onChange((v) => {
-        sky.setNorth(v)
-        updateSunLight()
-      })
+      gui.add(state, 'timeOfDay', 0, 24, 0.05).onChange((v) => sky.setTimeOfDay(v))
+      gui.add(state, 'latitude', -90, 90, 0.5).onChange((v) => sky.setLatitude(v))
+      gui.add(state, 'dayOfYear', 1, 365, 1).onChange((v) => sky.setDayOfYear(v))
+      gui.add(state, 'north', ['+X', '-X', '+Z', '-Z']).onChange((v) => sky.setNorth(v))
       gui.add(state, 'exposure', 0, 200, 0.5).onChange((v) => sky.setExposure(v))
       gui.add(state, 'toneExposure', 0, 2, 0.001).onChange((v) => {
         renderer.toneMappingExposure = v
@@ -266,7 +243,8 @@
       })
 
       renderer.setAnimationLoop(async () => {
-        const delta = clock.getDelta()
+        timer.update()
+        const delta = timer.getDelta()
 
         if (pendingAltitude !== null) {
           controls.setAltitudeM(pendingAltitude)

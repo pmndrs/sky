@@ -84,7 +84,7 @@
       camera.position.set(0, 2, 0)
 
       const sky = new Sky(renderer, {
-        sunDirection: { elevation: cfg.sunElevation, azimuth: 30 },
+        sunDirection: { elevation: cfg.sunElevation, azimuth: 330 },
         timeOfDay: 23,
         dayOfYear: 176,
         latitude: 48.9,
@@ -125,7 +125,7 @@
 
       const setSun = (elevation) => {
         cfg.sunElevation = elevation
-        sky.setSunDirection({ elevation, azimuth: 30 })
+        sky.setSunDirection({ elevation, azimuth: 330 })
       }
 
       function applyMode(mode) {
@@ -161,7 +161,7 @@
       let sunPhase = 0
       const wiggleSun = () => {
         sunPhase += 1
-        sky.setSunDirection({ elevation: cfg.sunElevation + (sunPhase % 2 ? 0.05 : -0.05), azimuth: 30 })
+        sky.setSunDirection({ elevation: cfg.sunElevation + (sunPhase % 2 ? 0.05 : -0.05), azimuth: 330 })
       }
 
       const loop = () => {

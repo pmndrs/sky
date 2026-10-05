@@ -36,7 +36,7 @@
       Space-to-ground — cinematic descent from orbit to the surface. Click or scroll to take over free flight at any
       time.<br />
       <span id="timeline-status">Phase: cinematic 0.0s / 45.0s</span><br />
-      Related: <a href="/examples/05-planet-scale.html" style="color: #fc9">05-planet-scale</a>
+      Related: <a href="./05-planet-scale.html" style="color: #fc9">05-planet-scale</a>
     </div>
     <script type="module">
       import * as THREE from 'three/webgpu'
@@ -301,7 +301,7 @@
           scene.add(m)
         }
 
-        const clock = new THREE.Clock()
+        const timer = new THREE.Timer()
 
         //* Cinematic driver ================================================
         //
@@ -509,7 +509,8 @@
         markStage(6, 'running')
 
         renderer.setAnimationLoop(async () => {
-          const delta = clock.getDelta()
+          timer.update()
+          const delta = timer.getDelta()
 
           if (cinematicActive) {
             cinematicElapsedS += delta
@@ -565,7 +566,7 @@
             scene.environment = baker.environmentTexture
           }
 
-          await renderPipeline.renderAsync()
+          renderPipeline.render()
         })
 
         // Sanity: getPlanetAltitudeM should agree with the scripted

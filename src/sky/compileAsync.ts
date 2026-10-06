@@ -28,7 +28,16 @@ export function compileQuadAsync(renderer: any, material: Material, target: Rend
   _state = RendererUtils.resetRendererState(renderer, _state)
   try {
     _quad.material = material
-    return compileIntoTarget(renderer, _quad, _quad.camera, target)
+    // Through QuadMesh.render() itself: from r186 it swaps in its own
+    // full-screen-triangle vertex shader for the draw, so compiling the quad
+    // directly would key (and compile) a different shader than the draw uses.
+    let pending: Promise<void> = Promise.resolve()
+    _quad.render({
+      render: (object: any, camera: any) => {
+        pending = compileIntoTarget(renderer, object, camera, target)
+      },
+    } as any)
+    return pending
   } finally {
     RendererUtils.restoreRendererState(renderer, _state)
   }

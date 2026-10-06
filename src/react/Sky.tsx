@@ -89,6 +89,8 @@ interface SkyConfig {
 interface SkyResource {
   sky: VanillaSky
   config: SkyConfig
+  /** Set once `sky.compileAsync()` settles; the controller bakes only after. */
+  compiled: { current: boolean }
 }
 
 function sameConfig(a: SkyConfig, b: SkyConfig) {
@@ -186,9 +188,19 @@ export function Sky(props: SkyProps) {
     // Attach with the current roles straight away: attaching with both and
     // narrowing later would overwrite (and then clear) the caller's own slot.
     sky.attach(scene, { background, environment })
+    // Compile the sky's internal shaders before its first bake, so they don't
+    // compile synchronously inside a frame. Children mount straight away; only
+    // the per-frame bake waits. A failed compile just means that first bake
+    // compiles them.
+    const compiled = { current: false }
+    const settle = () => {
+      compiled.current = true
+    }
+    sky.compileAsync().then(settle, settle)
     setResource({
       sky,
       config: { renderer, scene, preset, quality, cubeSize, enableAerialPerspective, apKmPerSlice, pmrem },
+      compiled,
     })
 
     return () => {
@@ -206,7 +218,7 @@ export function Sky(props: SkyProps) {
     <SkyContext.Provider value={resource.sky}>
       {/* Keep asset loading from suspending and replaying the resource owner. */}
       <Suspense fallback={null}>
-        <SkyController sky={resource.sky} {...props} />
+        <SkyController sky={resource.sky} compiled={resource.compiled} {...props} />
         {children}
       </Suspense>
     </SkyContext.Provider>
@@ -216,6 +228,7 @@ export function Sky(props: SkyProps) {
 /** Applies the imperative props to the live instance and drives `update()` per frame. */
 function SkyController({
   sky,
+  compiled,
   mirrorBelowHorizon = false,
   background = true,
   environment = true,
@@ -240,7 +253,7 @@ function SkyController({
   sunColor: sunColorProp,
   apDistanceScale,
   multiScatteringFactor,
-}: SkyProps & { sky: VanillaSky }) {
+}: SkyProps & { sky: VanillaSky; compiled: { current: boolean } }) {
   // Object-valued props keyed by structural equality, not reference — an
   // inline `atmosphere={{...}}` / `sunDirection={{...}}` re-created every
   // parent render must not re-run the effect below (each re-run calls a
@@ -368,6 +381,7 @@ function SkyController({
   }, [sky, fog])
 
   useFrame((state) => {
+    if (!compiled.current) return
     sky.update(state.camera)
     // The AP LUT is camera-relative and must refresh per frame — but only
     // once haze actually has a consumer (`applyHaze` sets `_hazeApplied`).

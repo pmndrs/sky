@@ -243,3 +243,78 @@ describe('SkyAtmosphereBaker renderer-state isolation (issue #36)', () => {
     expect(sky.showSunDisc.value).toBe(1)
   })
 })
+
+describe('SkyAtmosphereBaker.compileAsync (issue #49)', () => {
+  /** The mock above, plus what three's state save/restore and compileAsync touch. */
+  function compilingRenderer() {
+    const r: any = mockRenderer()
+    Object.assign(r, {
+      depth: true,
+      stencil: false,
+      toneMapping: 0,
+      toneMappingExposure: 1,
+      outputColorSpace: 'srgb',
+      autoClear: true,
+      getRenderObjectFunction: () => null,
+      setRenderObjectFunction() {},
+      getPixelRatio: () => 1,
+      setPixelRatio() {},
+      getClearColor: (c: any) => c,
+      getClearAlpha: () => 1,
+      setClearColor() {},
+      getScissorTest: () => false,
+      setScissorTest() {},
+      init: vi.fn(async () => {}),
+      compiled: [] as any[],
+      compileAsync: vi.fn(async (object: any) => {
+        r.compiled.push({ object, target: r.target, depth: r.depth, stencil: r.stencil, mrt: r.mrt })
+      }),
+    })
+    return r
+  }
+
+  it('compiles each LUT pass and the cube capture against its own target, keyed by that target', async () => {
+    const r = compilingRenderer()
+    const baker = new SkyAtmosphereBaker(r, { enableAerialPerspective: false })
+    const callerMrt = { mrt: true }
+    const callerTarget = { caller: true }
+    r.mrt = callerMrt
+    r.target = callerTarget
+
+    await baker.compileAsync()
+
+    expect(r.init).toHaveBeenCalled()
+    const targets = r.compiled.map((c: any) => c.target)
+    expect(targets).toEqual([
+      baker.transmittanceLUT.renderTarget,
+      baker.multiScatterLUT.renderTarget,
+      baker.skyViewLUT.renderTarget,
+      baker.cubeRenderTarget,
+    ])
+    for (const c of r.compiled) {
+      // three's compileAsync reads renderer.depth / .stencil where render()
+      // reads the target's; they must agree or the draw recompiles.
+      expect(c.depth).toBe(c.target.depthBuffer)
+      expect(c.stencil).toBe(c.target.stencilBuffer)
+      // Never under the caller's MRT.
+      expect(c.mrt).toBeNull()
+    }
+    expect(r.compiled[3].object).toBe(baker.skyScene)
+    // The caller's state is back.
+    expect(r.mrt).toBe(callerMrt)
+    expect(r.target).toBe(callerTarget)
+    expect(r.depth).toBe(true)
+    expect(r.stencil).toBe(false)
+  })
+
+  it('compiles the aerial-perspective pass only where three can do it asynchronously (r186+)', async () => {
+    const r185 = compilingRenderer()
+    await new SkyAtmosphereBaker(r185, { enableAerialPerspective: true }).compileAsync()
+
+    const r186 = compilingRenderer()
+    r186.compileComputeAsync = vi.fn(async () => {})
+    const baker = new SkyAtmosphereBaker(r186, { enableAerialPerspective: true })
+    await baker.compileAsync()
+    expect(r186.compileComputeAsync).toHaveBeenCalledWith((baker.aerialPerspectiveLUT as any)._compute)
+  })
+})

@@ -24,6 +24,7 @@ import { AerialPerspectiveLUT } from './luts/AerialPerspectiveLUT'
 import { uniform } from 'three/tsl'
 import { SKY_RENDER_ORDER, SkyAtmosphereMesh } from './SkyAtmosphereMesh'
 import { SkyPmrem } from './pmrem/SkyPmrem'
+import { compileIntoTarget } from './compileAsync'
 import { beginSkyDraw, createSkyDrawState, endSkyDraw } from './drawState'
 
 import type { Look } from '../looks'
@@ -652,6 +653,42 @@ export class SkyAtmosphereBaker {
     if (showSunDisc) this.sky.showSunDisc.value = 1.0
 
     return mesh
+  }
+
+  /**
+   * Compile the pipelines of the first bake without blocking: the three LUT
+   * passes, the cube capture of the sky and, on three r186+, the
+   * aerial-perspective compute pass. Optional; await it once before the
+   * first `update()`, like `renderer.init()`.
+   *
+   * Why: Chrome compiles WebGPU shaders in its GPU process. A pipeline three
+   * first meets during a draw is created synchronously and stalls that
+   * process until the compile finishes, right as the first frame is being
+   * prepared; on Windows (WGSL → HLSL → DXC/FXC) that is hundreds of ms per
+   * shader. These are off-scene draws, so `renderer.compileAsync(scene,
+   * camera)` never reaches them. three's PMREM generator still compiles its
+   * two small shaders on the first bake.
+   */
+  async compileAsync(): Promise<void> {
+    const renderer = this.renderer
+    // Every compile below reads the renderer state synchronously, which only
+    // holds once the backend exists (otherwise three awaits `init()` first).
+    if (typeof renderer.init === 'function') await renderer.init()
+    const pending: Promise<void>[] = [
+      this.transmittanceLUT.compileAsync(),
+      this.multiScatterLUT.compileAsync(),
+      this.skyViewLUT.compileAsync(),
+    ]
+    beginSkyDraw(renderer, _drawState)
+    try {
+      // One pipeline serves all six faces; the bake-only uniforms don't
+      // change the shader.
+      pending.push(compileIntoTarget(renderer, this.skyScene, this.cubeCamera.children[0], this.cubeRenderTarget))
+    } finally {
+      endSkyDraw(renderer, _drawState)
+    }
+    if (this.aerialPerspectiveLUT) pending.push(this.aerialPerspectiveLUT.compileAsync())
+    await Promise.all(pending)
   }
 
   /**

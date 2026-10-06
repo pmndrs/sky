@@ -17,6 +17,7 @@ import {
 } from '../../backends/tsl/atmosphere.tsl'
 import { skyViewLutColorNode } from '../../backends/wgsl/luts'
 import { LUT_RESOLUTIONS } from '../../core/resolutions'
+import { compileQuadAsync } from '../compileAsync'
 import type { TransmittanceLUT } from './TransmittanceLUT'
 import type { MultiScatterLUT } from './MultiScatterLUT'
 
@@ -150,6 +151,14 @@ export class SkyViewLUT {
     if (v instanceof Vector3) this._sunDirectionUniform.value.copy(v)
     else if (Array.isArray(v)) this._sunDirectionUniform.value.fromArray(v)
     else if (v && typeof v === 'object') this._sunDirectionUniform.value.set(v.x, v.y, v.z)
+  }
+
+  /**
+   * Compile this pass's pipeline without blocking, so the first `render()`
+   * finds it ready. See `SkyAtmosphereBaker.compileAsync`.
+   */
+  compileAsync(): Promise<void> {
+    return compileQuadAsync(this.renderer, this.material, this.renderTarget)
   }
 
   /** Planet-centred camera height in km. Setter for phase 2 per-frame updates. */

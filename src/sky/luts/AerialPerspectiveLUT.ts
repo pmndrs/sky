@@ -212,6 +212,15 @@ export class AerialPerspectiveLUT {
     this._cameraMatrixWorld.value.copy(camera.matrixWorld)
   }
 
+  /**
+   * Compile the compute pipeline without blocking, where three can: its
+   * `compileComputeAsync` arrived in r186. On r185 this resolves at once and
+   * the first `render()` still compiles synchronously.
+   */
+  async compileAsync(): Promise<void> {
+    if (typeof this.renderer.compileComputeAsync === 'function') await this.renderer.compileComputeAsync(this._compute)
+  }
+
   /** Dispatch the compute pass. Cheap (~1ms on a mid-tier GPU). */
   async render() {
     await this.renderer.computeAsync(this._compute)

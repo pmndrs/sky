@@ -9,6 +9,10 @@ import { createRoot } from 'react-dom/client'
 // against a stand-in that records what a consumer can observe: which scene
 // it is attached to, whether it has been disposed, and setter calls.
 const instances: FakeSky[] = []
+/** When set, every FakeSky's compileAsync() waits on it. */
+let compileGate: Promise<void> | null = null
+/** The latest useFrame callback, so a test can step a frame. */
+let frame: ((state: any) => void) | null = null
 
 class FakeSky {
   options: any
@@ -38,7 +42,13 @@ class FakeSky {
     this.disposed = true
     this.scene = null
   }
-  update() {}
+  compileAsync() {
+    return compileGate ?? Promise.resolve()
+  }
+  updates = 0
+  update() {
+    this.updates++
+  }
   // Mirrors the vanilla contract: overrides are stored with the track, and a
   // missing second argument resets them.
   setLookTrack(track: any, overrides: any = null) {
@@ -79,7 +89,9 @@ const fakeRenderer = {}
 const fakeScene = { isScene: true }
 vi.mock('@react-three/fiber/webgpu', () => ({
   useThree: (selector: (s: any) => any) => selector({ gl: fakeRenderer, scene: fakeScene }),
-  useFrame: () => {},
+  useFrame: (cb: (state: any) => void) => {
+    frame = cb
+  },
 }))
 
 const { Sky } = await import('../src/react/Sky')
@@ -101,6 +113,8 @@ let root: Root
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
   instances.length = 0
+  compileGate = null
+  frame = null
   probeMounts = 0
   probeSeen = []
   container = document.createElement('div')
@@ -116,6 +130,18 @@ const live = () => instances.filter((s) => !s.disposed)
 const render = (ui: React.ReactNode) => act(() => root.render(ui))
 
 describe('<Sky>', () => {
+  it('bakes only once compileAsync has settled (issue #49)', async () => {
+    let finish!: () => void
+    compileGate = new Promise<void>((done) => (finish = done))
+    render(<Sky />)
+    const [sky] = live()
+    frame!({ camera: {} })
+    expect(sky.updates).toBe(0)
+    await act(async () => finish())
+    frame!({ camera: {} })
+    expect(sky.updates).toBe(1)
+  })
+
   it('keeps resources live when suspended children reveal in StrictMode', async () => {
     let ready = false
     let resolve!: () => void

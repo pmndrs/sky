@@ -58,7 +58,7 @@ new SkyAtmosphereBaker(renderer, options?)
 ## Shader compilation
 
 `await baker.compileAsync()` compiles the three LUT passes, the cube capture
-and (three r186+) the aerial-perspective pass without blocking, so the first
+and the aerial-perspective pass without blocking, so the first
 `update()` finds their pipelines ready. Each pass is compiled against its own
 render target, keyed the way the draw will be. Optional; see
 [`Sky.compileAsync()`](./sky#shader-compilation) for why it matters on Windows.

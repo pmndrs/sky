@@ -16,7 +16,7 @@ import type { Material, RenderTarget } from 'three/webgpu'
  * compiling a material on this quad against the same render target is enough
  * for the LUT's own quad to hit the cache later.
  */
-const _quad = /*@__PURE__*/ new QuadMesh()
+const _quad = /*@__PURE__*/ new QuadMesh(null as any) // material is assigned per compile
 let _state: any
 
 /**

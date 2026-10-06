@@ -307,14 +307,11 @@ describe('SkyAtmosphereBaker.compileAsync (issue #49)', () => {
     expect(r.stencil).toBe(false)
   })
 
-  it('compiles the aerial-perspective pass only where three can do it asynchronously (r186+)', async () => {
-    const r185 = compilingRenderer()
-    await new SkyAtmosphereBaker(r185, { enableAerialPerspective: true }).compileAsync()
-
-    const r186 = compilingRenderer()
-    r186.compileComputeAsync = vi.fn(async () => {})
-    const baker = new SkyAtmosphereBaker(r186, { enableAerialPerspective: true })
+  it('compiles the aerial-perspective compute pass too', async () => {
+    const r = compilingRenderer()
+    r.compileComputeAsync = vi.fn(async () => {})
+    const baker = new SkyAtmosphereBaker(r, { enableAerialPerspective: true })
     await baker.compileAsync()
-    expect(r186.compileComputeAsync).toHaveBeenCalledWith((baker.aerialPerspectiveLUT as any)._compute)
+    expect(r.compileComputeAsync).toHaveBeenCalledWith((baker.aerialPerspectiveLUT as any)._compute)
   })
 })

@@ -509,6 +509,7 @@ bump (cosT shared by the Mie and HG bands); r185 passed. Our shaders rendered
 the same on r185 and r186 page for page, but any new code that hands one node
 to Fns in several branches must `.toVar()` it **before** the branch — the same
 rule as for loops (see "Shader size and synchronous compiles").
+
 ### Shader size and synchronous compiles — Windows pays for both (#49, 2026-10-06)
 
 Chrome compiles WebGPU shaders in its GPU process; on Windows that is WGSL →
@@ -527,14 +528,14 @@ is byte-identical across reloads, which Chrome's shader cache needs — it is):
   inside the loop body is declared in that scope and is out of scope after it.
 - **Off-scene draws compile synchronously on first use.** `sky.compileAsync()`
   / `baker.compileAsync()` compile the LUT passes and the cube capture ahead
-  (and the AP compute on three r186+, which added `compileComputeAsync`).
+  (and the AP compute, through r186's `compileComputeAsync`).
   three r185–r186's `renderer.compileAsync` keys the render context from
   `renderer.depth/stencil`, while `render()` uses the target's
   `depthBuffer/stencilBuffer`; for a depth-less target (every LUT) the keys
   differ and the draw recompiles synchronously. Compile through
   `compileIntoTarget` (`src/sky/compileAsync.ts`), and confirm with the probe:
   a warmed pipeline must show up once, as `async`. Still synchronous: three's
-  PMREM generator (two small shaders), its mip generation, the AP compute on r185.
+  PMREM generator (two small shaders) and its mip generation.
 
 ### Vite HMR + WebGPU shader edits
 

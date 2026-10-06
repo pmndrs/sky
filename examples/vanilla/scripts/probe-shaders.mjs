@@ -143,7 +143,8 @@ for (const page of pages) {
   if (JSON_OUT) {
     const dir = JSON_OUT.replace(/\.json$/, '') + '-wgsl'
     fs.mkdirSync(dir, { recursive: true })
-    for (const m of a.modules) fs.writeFileSync(`${dir}/${page.replace('.html', '')}-${m.hash}.wgsl`, m.code)
+    for (const m of a.modules)
+      fs.writeFileSync(`${dir}/${page.replace('.html', '').replace(/[^A-Za-z0-9_-]/g, '_')}-${m.hash}.wgsl`, m.code)
   }
 }
 await browser.close()

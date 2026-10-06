@@ -645,8 +645,8 @@ export class Sky {
    * renderer.setAnimationLoop(frame)
    * ```
    *
-   * It covers the lookup-table passes, the background cube capture and, on
-   * three r186+, the aerial-perspective pass. Objects in your own scene (the
+   * It covers the lookup-table passes, the background cube capture and the
+   * aerial-perspective pass. Objects in your own scene (the
    * live sky mesh, stars, haze) are compiled by your
    * `renderer.compileAsync(scene, camera)`.
    */

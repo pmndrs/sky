@@ -657,8 +657,8 @@ export class SkyAtmosphereBaker {
 
   /**
    * Compile the pipelines of the first bake without blocking: the three LUT
-   * passes, the cube capture of the sky and, on three r186+, the
-   * aerial-perspective compute pass. Optional; await it once before the
+   * passes, the cube capture of the sky and the aerial-perspective compute
+   * pass. Optional; await it once before the
    * first `update()`, like `renderer.init()`.
    *
    * Why: Chrome compiles WebGPU shaders in its GPU process. A pipeline three

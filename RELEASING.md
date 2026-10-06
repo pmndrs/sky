@@ -77,15 +77,19 @@ first automated release:
       check. If `ci` is a required check, add a `RELEASE_PLEASE_TOKEN` secret
       (a fine-grained PAT or GitHub App token with contents and pull-requests
       write access); `publish.yml` uses it automatically.
-- [ ] **Turn publishing on:** set `NPM_PUBLISH_ENABLED=true`.
+- [x] **Turn publishing on:** set `NPM_PUBLISH_ENABLED=true` (done for 0.4.0).
 
-## The first automated release (0.4.0)
+## Editing the release notes
 
-0.3.0 was published without a git tag, so `release-please-config.json` pins
-the last release with `last-release-sha` (the `release: 0.3.0` commit,
-`45f2b1d`). The first release PR therefore covers everything since 0.3.0 and
-proposes **0.4.0**. Once v0.4.0 is tagged, **remove `last-release-sha`** from
-the config; from then on release-please finds the previous release by its tag.
+0.4.0 (2026-10-06) was the first release cut this way, published from CI with
+npm Trusted Publishing and provenance. 0.3.0 had no tag at the time, so the
+config pinned it with `last-release-sha` until v0.4.0 existed; the `v0.3.0`
+tag was added afterwards for the changelog's compare link.
+
+release-please regenerates the release PR's `CHANGELOG.md` and description on
+every push to `main`, so hand edits are lost if anything merges after them.
+Make them last, right before merging the release PR, and edit both: the
+GitHub release is created from the PR description.
 
 Commits from before this setup that aren't Conventional (`stars wip`, `Fix
 noon whiteout…` (#23)) don't make it into the generated notes. Cover them by

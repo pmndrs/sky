@@ -27,6 +27,40 @@ environment lighting and shadow filtering), so rough, sunlit surfaces can come
 out a little darker. r186 also removed `PCFSoftShadowMap`; three falls back to
 `PCFShadowMap` with a console warning.
 
+### No shader compiles on the first frame: call `compileAsync()`
+
+0.5 compiles every shader the sky needs in the background, and on WebGPU it
+no longer uses three's `PMREMGenerator` at all: its own compute prefilter
+allocates the IBL texture and fills it. Add one line before your render loop:
+
+```js
+await renderer.init()
+const sky = new Sky(renderer, { timeOfDay: 16 })
+sky.attach(scene)
+await sky.compileAsync() // new
+renderer.setAnimationLoop(frame)
+```
+
+The React `<Sky>` does this for you. What changes if you skip it:
+
+- The scene still renders straight away, but the first `update()` compiles the
+  lookup-table shaders synchronously, as in 0.4.
+- The environment lighting is **black for the first few frames**, until the
+  prefilter's pipelines are ready. 0.4 baked the first IBL synchronously with
+  three's generator instead.
+
+Smaller changes:
+
+- `sky.baker.environmentTexture` (and `scene.environment` after `attach()`)
+  exists from construction, where 0.4 returned `null` until the first bake.
+  It is still the same texture object for the sky's lifetime.
+- The background cube's mip chain is filled by the sky's compute pass, not
+  by three. If you set `generateMipmaps` on `baker.texture` yourself, leave it
+  as the sky sets it.
+- `baker.pmremGenerator` is created only when it is used (WebGL, or
+  `pmrem: { generator: 'three' }`). `pmrem: { generator: 'three' }` keeps 0.4's
+  behaviour, synchronous first bake included.
+
 ## 0.3 → 0.4 at a glance
 
 Check these against your project. Each links to the details below.

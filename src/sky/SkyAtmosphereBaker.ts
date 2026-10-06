@@ -99,7 +99,7 @@ export class SkyAtmosphereBaker {
   cubeRenderTarget: CubeRenderTarget
   cubeCamera: CubeCamera
   _mirrorBelowHorizon: boolean
-  pmremGenerator: PMREMGenerator
+  private _pmremGenerator: PMREMGenerator | null = null
   /** IBL prefilter (compute every change, or three's generator throttled); owns the persistent PMREM target. */
   pmrem: SkyPmrem
   sunDirty: boolean
@@ -243,12 +243,11 @@ export class SkyAtmosphereBaker {
     this._mirrorBelowHorizon = mirrorBelowHorizon
 
     // --- PMREM ---
-    this.pmremGenerator = new PMREMGenerator(renderer)
-    this.pmremGenerator.compileCubemapShader()
-    // three's generator allocates the persistent target on the first bake and
-    // it is reused from then on, so `environmentTexture` keeps a stable
-    // identity (see update()).
-    this.pmrem = new SkyPmrem(renderer, this.pmremGenerator, this.cubeRenderTarget.texture, pmrem)
+    // On WebGPU, SkyPmrem allocates the persistent target now and compiles its
+    // compute pipelines in the background; three's generator is only created
+    // for WebGL or a fallback. `environmentTexture` keeps one identity (see
+    // update()).
+    this.pmrem = new SkyPmrem(renderer, () => this.pmremGenerator, this.cubeRenderTarget.texture, pmrem)
 
     // --- dirty flags (all true on construction → first update() does a full bake) ---
     this.sunDirty = true
@@ -298,6 +297,16 @@ export class SkyAtmosphereBaker {
 
   get environmentTexture(): Texture | null {
     return this.pmrem.texture
+  }
+
+  /**
+   * three's `PMREMGenerator`, created on first use. On WebGPU the IBL comes
+   * from `SkyPmrem`'s compute path and this is never created; it serves the
+   * WebGL backend, `pmrem: { generator: 'three' }` and fallbacks.
+   */
+  get pmremGenerator(): PMREMGenerator {
+    if (!this._pmremGenerator) this._pmremGenerator = new PMREMGenerator(this.renderer)
+    return this._pmremGenerator
   }
 
   /** The persistent PMREM render target (kept for callers that read it directly). */
@@ -657,17 +666,18 @@ export class SkyAtmosphereBaker {
 
   /**
    * Compile the pipelines of the first bake without blocking: the three LUT
-   * passes, the cube capture of the sky and the aerial-perspective compute
-   * pass. Optional; await it once before the
-   * first `update()`, like `renderer.init()`.
+   * passes, the cube capture of the sky, the aerial-perspective compute pass
+   * and the IBL prefilter. Optional; await it once before the first
+   * `update()`, like `renderer.init()`. Without it the IBL stays black for
+   * the few frames its pipelines take to compile.
    *
    * Why: Chrome compiles WebGPU shaders in its GPU process. A pipeline three
    * first meets during a draw is created synchronously and stalls that
    * process until the compile finishes, right as the first frame is being
    * prepared; on Windows (WGSL → HLSL → DXC/FXC) that is hundreds of ms per
    * shader. These are off-scene draws, so `renderer.compileAsync(scene,
-   * camera)` never reaches them. three's PMREM generator still compiles its
-   * two small shaders on the first bake.
+   * camera)` never reaches them. On WebGPU nothing in the sky's bake then
+   * compiles synchronously.
    */
   async compileAsync(): Promise<void> {
     const renderer = this.renderer
@@ -688,6 +698,8 @@ export class SkyAtmosphereBaker {
       endSkyDraw(renderer, _drawState)
     }
     if (this.aerialPerspectiveLUT) pending.push(this.aerialPerspectiveLUT.compileAsync())
+    // SkyPmrem's compute pipelines, started at construction.
+    pending.push(this.pmrem.ready)
     await Promise.all(pending)
   }
 
@@ -737,11 +749,10 @@ export class SkyAtmosphereBaker {
       // the next update() retries the whole bake.
       this._captureCube()
 
-      // 3. PMREM. On WebGPU with a cube-mip PMREM (three r187+), SkyPmrem
-      // re-filters it in one compute pass (~0.9 ms) on every change. Otherwise
-      // three's generator runs throttled and time-sliced (PmremScheduler),
-      // since a whole r185 bake is ~6 ms. Either way the first bake is
-      // synchronous and there is one persistent target so
+      // 3. PMREM. On WebGPU, SkyPmrem re-filters it in one compute pass
+      // (~1 ms) on every change, into a target it allocated up front. On
+      // WebGL, three's generator runs throttled and time-sliced
+      // (PmremScheduler). Either way there is one persistent target, so
       // `environmentTexture` never changes identity — a new texture object
       // every tick invalidates the TSL pipeline cache for every material that
       // references the environment node (see Changelog 0.1.3).
@@ -840,7 +851,7 @@ export class SkyAtmosphereBaker {
 
     this.cubeRenderTarget.dispose()
     this.pmrem.dispose()
-    this.pmremGenerator.dispose()
+    this._pmremGenerator?.dispose()
 
     if (this.sky.material) (this.sky.material as Material).dispose()
     if (this.sky.geometry) this.sky.geometry.dispose()

@@ -534,8 +534,11 @@ is byte-identical across reloads, which Chrome's shader cache needs — it is):
   `depthBuffer/stencilBuffer`; for a depth-less target (every LUT) the keys
   differ and the draw recompiles synchronously. Compile through
   `compileIntoTarget` (`src/sky/compileAsync.ts`), and confirm with the probe:
-  a warmed pipeline must show up once, as `async`. Still synchronous: three's
-  PMREM generator (two small shaders) and its mip generation.
+  a warmed pipeline must show up once, as `async`. From r186 `QuadMesh.render()`
+  swaps in its own vertex shader, so LUT quads compile _through_ it (a stand-in
+  renderer whose `render` calls `compileAsync`). three's PMREM generator and
+  the sky cube's mipmap pass are gone on WebGPU: `SkyPmrem` allocates the
+  PMREM target itself and fills the cube's listed mips from its own chain.
 
 ### Vite HMR + WebGPU shader edits
 

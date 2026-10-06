@@ -117,13 +117,22 @@ prefilter (`SkyPmrem`) on every sky change, in one compute pass instead of
 three's six render passes per level. A moving sun or a scrubbed time-of-day
 slider updates reflections in the same frame as the background.
 
+three's `PMREMGenerator` is not used at all on this path. `SkyPmrem` allocates
+the PMREM target itself, in the layout the installed three samples, so
+`environmentTexture` exists from construction. Its compute pipelines compile
+asynchronously from construction too: until they are ready (a few frames) the
+IBL is black, so `await sky.compileAsync()` (or `baker.compileAsync()`) before
+the first frame to have it on frame one, with no shader compiled
+synchronously. It also fills the sky cube's mip chain from its own
+downsampling, so three's mipmap pass for the cube never runs.
+
 - **three r187 and later:** three's own algorithm (GGX filtered importance
   sampling on the sharp levels, exhaustive integration on the rough ones), so
   the output matches three's generator. About 0.9 ms instead of about 4.5 ms
   (256 cube, Apple M-series).
-- **three r185/r186:** the PMREM is a CubeUV atlas. Each atlas level is
+- **three r186:** the PMREM is a CubeUV atlas. Each atlas level is
   filtered at the roughness three's material sampler reads it at. About 1 ms
-  instead of 6.4 ms (r185) or 3.3 ms (r186). It is also much closer to the
+  instead of 3.3 ms. It is also much closer to the
   true GGX reflection than three's generator, whose levels don't match its
   own sampler, so mid and high roughness reflections look slightly different
   from `generator: 'three'`: softer horizons, and the ground's falloff kept
@@ -142,13 +151,13 @@ On the WebGL backend (no compute) the baker uses three's generator as below.
 
 ### `generator: 'three'`: throttled and time-sliced
 
-three's `PMREMGenerator` through `PmremScheduler`. A whole r185 bake is
-about 6 ms and latency-bound, so a smaller cube barely helps. The scheduler:
+three's `PMREMGenerator` through `PmremScheduler`. A whole r186 bake is
+about 3 ms and latency-bound, so a smaller cube barely helps. The scheduler:
 
 - **throttles**: while the sky keeps changing, a refresh starts at most every
   `minInterval` ms (default 250). When changes stop, the final state is
   refreshed on the next frame, so the IBL never stays stale;
-- **time-slices** (r185/r186): each refresh filters `levelsPerFrame`
+- **time-slices** (r186): each refresh filters `levelsPerFrame`
   roughness levels per frame (default 1) into a scratch target and copies
   into the persistent target when complete. The result is identical to a
   whole bake. Slicing drives three's private per-level `PMREMGenerator`
@@ -167,27 +176,28 @@ cost 7.7 ms mean / 17 ms max per update; the defaults cost 1.0 ms mean /
 3.1 ms max, but the IBL lags the background by up to `minInterval` plus
 about ten frames.
 
-Either way, `environmentTexture` keeps the same texture object from the first
-bake until `dispose()`. `baker.flushPmrem()` (what `sky.flushEnvironment()`
+Either way, `environmentTexture` keeps the same texture object until
+`dispose()`: from construction with `'sky'` on WebGPU, from the first bake
+with three's generator (`null` before it). `baker.flushPmrem()` (what `sky.flushEnvironment()`
 calls) finishes any pending or in-flight refresh immediately.
 
 ### Options and classes
 
-| `pmrem` option   | Default   | Notes                                                                                                                                  |
-| ---------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `generator`      | `'sky'`   | `'sky'`: compute prefilter on every change (WebGPU; falls back to `'three'` on WebGL or an unknown PMREM layout). `'three'`: as above. |
-| `quality`        | `'three'` | `'sky'` only. `'fast'`: 96 samples on the sharpest level, ~35 % cheaper on r187+, saves little on r185/r186.                           |
-| `minInterval`    | `250`     | `'three'` only. Milliseconds between refreshes while the sky keeps changing; `0` refreshes on every change.                            |
-| `levelsPerFrame` | `1`       | `'three'` only, r185/r186 only. `Infinity` bakes the whole PMREM in one frame.                                                         |
+| `pmrem` option   | Default   | Notes                                                                                                                                                                  |
+| ---------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generator`      | `'sky'`   | `'sky'`: compute prefilter on every change (WebGPU; falls back to `'three'` on WebGL, a sky cube that isn't a power of two, or a failed compile). `'three'`: as above. |
+| `quality`        | `'three'` | `'sky'` only. `'fast'`: 96 samples on the sharpest level, ~35 % cheaper on r187+, saves little on r186.                                                                |
+| `minInterval`    | `250`     | `'three'` only. Milliseconds between refreshes while the sky keeps changing; `0` refreshes on every change.                                                            |
+| `levelsPerFrame` | `1`       | `'three'` only, r186 only. `Infinity` bakes the whole PMREM in one frame.                                                                                              |
 
 The baker builds this from `SkyPmrem`, exposed as `baker.pmrem`. All three
 pieces are exported for custom facades:
 
-| Export                                                                             | Notes                                                                                                                                                                                                                                                                                                              |
-| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `new SkyPmrem(renderer, pmremGenerator, cubeTexture, SkyPmremOptions)`             | `markDirty()` after each cube bake, `tick()` once per frame, `flush()`, `dispose()`; `.texture` / `.target` (`null` before the first bake). `.mode` stays `'three'` until the compute pipelines finish compiling after the first bake, then reads `'sky'`; `.layout` is `'cube'` (r187+) or `'atlas'` (r185/r186). |
-| `new PmremScheduler(renderer, pmremGenerator, cubeTexture, PmremSchedulerOptions)` | three's generator, throttled and time-sliced. Same `markDirty` / `tick` / `flush` / `dispose` / `texture` / `target`; `minInterval` and `levelsPerFrame` are public fields you can change live.                                                                                                                    |
-| `skyPmremPlan(maxLod, quality?)`                                                   | The per-level plan `SkyPmrem` runs on an r187+ cube PMREM: level 0 `{ fis: 0 }` (copy), the last three `{ integ: 16 }` (integrate the 16² mip), the rest `{ fis: 256 }` (`96` on level 1 with `'fast'`).                                                                                                           |
+| Export                                                                             | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new SkyPmrem(renderer, pmremGenerator, cubeTexture, SkyPmremOptions)`             | `markDirty()` after each cube bake, `tick()` once per frame, `flush()`, `dispose()`; `.ready` resolves when its pipelines are compiled. `pmremGenerator` may be `null` or a function returning one: it is only created for a fallback. `.mode` is `'sky'` from construction on WebGPU (`.texture` / `.target` exist at once), `'three'` otherwise (`null` before three's first bake); `.layout` is `'cube'` (r187+) or `'atlas'` (r186). With `'sky'` it takes over the cube's mip chain (`mipmaps` listed, `generateMipmaps` off). |
+| `new PmremScheduler(renderer, pmremGenerator, cubeTexture, PmremSchedulerOptions)` | three's generator, throttled and time-sliced. Same `markDirty` / `tick` / `flush` / `dispose` / `texture` / `target`; `minInterval` and `levelsPerFrame` are public fields you can change live.                                                                                                                                                                                                                                                                                                                                     |
+| `skyPmremPlan(maxLod, quality?)`                                                   | The per-level plan `SkyPmrem` runs on an r187+ cube PMREM: level 0 `{ fis: 0 }` (copy), the last three `{ integ: 16 }` (integrate the 16² mip), the rest `{ fis: 256 }` (`96` on level 1 with `'fast'`).                                                                                                                                                                                                                                                                                                                            |
 
 ## Sun and camera
 

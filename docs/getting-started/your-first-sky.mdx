@@ -81,6 +81,10 @@ controls.update()
 ## The update loop
 
 ```js
+// Optional: compile the sky's shaders and your scene's without blocking the
+// first frame (see the Sky reference, "Shader compilation").
+await Promise.all([sky.compileAsync(), renderer.compileAsync(scene, camera)])
+
 renderer.setAnimationLoop(() => {
   sky.update(camera)
   controls.update()

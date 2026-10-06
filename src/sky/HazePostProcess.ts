@@ -16,6 +16,7 @@ import {
   max,
   min,
   If,
+  Loop,
   dot,
   fract,
   sin,
@@ -576,13 +577,29 @@ export function createHazeOutputNode({
           const uTex = sqrt(clamp(surfKm.div(float(coverageKm)), float(0.0), float(1.0)))
             .mul(float(resZ))
             .sub(0.5)
-          const za = max(floor(uTex), float(-1.0))
+          const za = max(floor(uTex), float(-1.0)).toVar()
           const zb = max(za.sub(1.0), float(-1.0))
           const phase = clamp(uTex.sub(za), float(0.0), float(1.0))
-          const da = sliceKm(za)
-          const db = sliceKm(zb)
-          const segA = march(da, max(surfKm.sub(da), float(0.0)))
-          const segB = march(db, max(da.sub(db), float(0.0)))
+          const da = sliceKm(za).toVar()
+          const db = sliceKm(zb).toVar()
+          // Both marches run through one loop, so the integrator is emitted
+          // once: two inline calls doubled the shader (60 KB at planet scale,
+          // where FXC compiles get slow; issue #49). Values the loop reads are
+          // pinned above it, or TSL would declare them inside the first
+          // iteration's scope.
+          const lenA = max(surfKm.sub(da), float(0.0)).toVar()
+          const lenB = max(da.sub(db), float(0.0)).toVar()
+          const segA = vec4(0.0).toVar()
+          const segB = vec4(0.0).toVar()
+          Loop({ start: 0, end: 2, type: 'int' }, ({ i }: any) => {
+            const first = i.equal(0)
+            const seg = march(first.select(da, db), first.select(lenA, lenB))
+            If(first, () => {
+              segA.assign(seg)
+            }).Else(() => {
+              segB.assign(seg)
+            })
+          })
           const lutA = lutAt(za)
           const lutB = lutAt(zb)
           const tA = float(1.0).sub(lutA.a)

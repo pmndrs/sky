@@ -497,17 +497,22 @@ export function buildFullPathInscatter({
     return max(sp.transmittance.mul(single.add(multiple)), vec3(1e-30))
   }
   const intervals = 4
-  const hKm = endM.mul(0.001).mul(ctx.pathScale).div(float(intervals))
+  const hKm = endM.mul(0.001).mul(ctx.pathScale).div(float(intervals)).toVar()
   const total = vec3(0.0).toVar()
-  let g0 = integrand(float(0.0))
-  for (let k = 1; k <= intervals; k++) {
-    const g1 = integrand(endM.mul(k / intervals))
-    const logRatio = log(g1.div(g0))
-    const expFit = g1.sub(g0).div(select(abs(logRatio).lessThan(vec3(1e-4)), vec3(1.0), logRatio))
-    const trapezoid = g0.add(g1).mul(0.5)
-    total.addAssign(select(abs(logRatio).lessThan(vec3(1e-4)), trapezoid, expFit).mul(hKm))
-    g0 = g1
-  }
+  const g0 = vec3(0.0).toVar()
+  // A TSL loop, so the integrand (medium, sun light, multi-scatter lookup) is
+  // emitted once instead of five times; unrolled it was most of this pass's
+  // 50 KB shader (issue #49).
+  Loop({ start: int(0), end: int(intervals + 1), type: 'int', condition: '<' }, ({ i }: any) => {
+    const g1 = integrand(endM.mul(float(i).div(float(intervals)))).toVar()
+    If(i.greaterThan(int(0)), () => {
+      const logRatio = log(g1.div(g0))
+      const expFit = g1.sub(g0).div(select(abs(logRatio).lessThan(vec3(1e-4)), vec3(1.0), logRatio))
+      const trapezoid = g0.add(g1).mul(0.5)
+      total.addAssign(select(abs(logRatio).lessThan(vec3(1e-4)), trapezoid, expFit).mul(hKm))
+    })
+    g0.assign(g1)
+  })
   return total
 }
 

@@ -20,7 +20,7 @@ import { LUT_RESOLUTIONS } from '../../core/resolutions'
 import type { TransmittanceLUT } from './TransmittanceLUT'
 import type { MultiScatterLUT } from './MultiScatterLUT'
 
-const _quadMesh = /*@__PURE__*/ new QuadMesh()
+const _quadMesh = /*@__PURE__*/ new QuadMesh(null as any) // material is assigned per render
 let _rendererState: any
 
 // HLSL:626. SebH uses VariableSampleCount=true (4–14 steps, quadratic spacing);

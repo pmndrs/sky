@@ -16,7 +16,7 @@ pnpm add @pmndrs/sky
 
 | Package              | Version      | Required?                          |
 | -------------------- | ------------ | ---------------------------------- |
-| `three`              | `>=0.185.0`  | always                             |
+| `three`              | `>=0.186.0`  | always                             |
 | `react`              | `>=18`       | only if you use the React bindings |
 | `react-dom`          | `>=18`       | only if you use the React bindings |
 | `@react-three/fiber` | `>=10.0.0-0` | only if you use the React bindings |
@@ -27,17 +27,13 @@ The React bindings need `@react-three/fiber >= 10.0.0-alpha.4` in practice:
 earlier 10.x canaries import a WebGL-only class from `three/webgpu` and fail
 to load. See the [React reference](../api/react).
 
-`three@>=0.185.0` is a hard floor: the baker constructs its cube-bake target
-via `CubeRenderTarget` and filters it with `PMREMGenerator.fromCubemap(...)`
-(both `three/webgpu` APIs), and the reused-PMREM-target fix that keeps
-`environmentTexture` stable across bakes depends on the 0.185 WebGPU
-backend. Older `three` versions may partially work but aren't tested or
-supported.
+`three@>=0.186.0` is a hard floor: CI tests r186 only, and the sky relies on
+r186 APIs such as `renderer.compileComputeAsync`. 0.4 supported r185; see
+[Upgrading](../guides/upgrading).
 
-CI tests against `three` 0.185.x. The library has also been run against
+CI tests against `three` 0.186.x. The library has also been run against
 r187-dev, three's unreleased branch, which removed `CubeUVReflectionMapping`
-from its exports (0.4 no longer imports it). For r186, only the IBL's atlas
-writer was validated. Neither is part of CI.
+from its exports; that is not part of CI.
 
 ## WebGPU requirement
 

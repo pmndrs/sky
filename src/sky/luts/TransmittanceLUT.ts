@@ -17,7 +17,7 @@ import {
 import { transmittanceLutColorNode } from '../../backends/wgsl/luts'
 import { LUT_RESOLUTIONS } from '../../core/resolutions'
 
-const _quadMesh = /*@__PURE__*/ new QuadMesh()
+const _quadMesh = /*@__PURE__*/ new QuadMesh(null as any) // material is assigned per render
 let _rendererState: any
 
 interface Resolution2D {

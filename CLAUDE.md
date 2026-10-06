@@ -498,6 +498,18 @@ passes. `examples/vanilla/scripts/verify-mrt-isolation.mjs` reproduces it
 (fails without the guard; three's generator happened not to error under the
 MRT, the cube capture did).
 
+### three r186: a TSL Fn's arguments become variables — pin shared ones before branching (2026-10-06)
+
+r186 assigns each argument of a (non-layout) TSL `Fn` call to a `var` at the
+call site. When the same argument node is passed to calls in different
+`If`/`select` branches, the var is assigned in the first branch that builds it
+and read unassigned (0) in the others — no error, just wrong numbers. It
+surfaced as a 2.87 "parity failure" in `parity/00-leaf-helpers` on the r186
+bump (cosT shared by the Mie and HG bands); r185 passed. Our shaders rendered
+the same on r185 and r186 page for page, but any new code that hands one node
+to Fns in several branches must `.toVar()` it **before** the branch — the same
+rule as for loops (see "Shader size and synchronous compiles").
+
 ### Vite HMR + WebGPU shader edits
 
 Editing a TSL helper while a page is open often leaves the previous shader

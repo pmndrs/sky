@@ -38,7 +38,7 @@ import { multiScatterLutColorNode } from '../../backends/wgsl/luts'
 import { LUT_RESOLUTIONS } from '../../core/resolutions'
 import type { TransmittanceLUT } from './TransmittanceLUT'
 
-const _quadMesh = /*@__PURE__*/ new QuadMesh()
+const _quadMesh = /*@__PURE__*/ new QuadMesh(null as any) // material is assigned per render
 let _rendererState: any
 
 // Match RenderSkyRayMarching.hlsl:448. 8x8 stratified samples -> 64 directions.

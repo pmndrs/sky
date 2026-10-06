@@ -5,7 +5,6 @@
   "include-v-in-tag": true,
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
-  "last-release-sha": "45f2b1d1181d6cf341e9eb7b36d3c2525267e28d",
   "pull-request-title-pattern": "chore: release ${version}",
   "changelog-sections": [
     { "type": "feat", "section": "Features" },

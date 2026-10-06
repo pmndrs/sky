@@ -177,6 +177,7 @@ describe('Sky night', () => {
     const night = await sky.enableStars({ count: 50 })
     expect(night.stars!.orientation.determinant()).toBeCloseTo(-1, 6)
     expect((night.stars!.mesh.material as any).side).toBe(DoubleSide)
+    expect((night.stars!.mesh.material as any).forceSinglePass).toBe(true)
     sky.dispose()
   })
 

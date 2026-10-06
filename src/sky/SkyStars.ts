@@ -226,7 +226,10 @@ export class SkyStars extends Group {
     // The catalog frame (y = celestial pole) is left-handed, so the
     // equatorial → world orientation is a reflection (determinant −1) and three
     // flips the quads' winding. Front-side culling would then drop every star.
+    // Single pass: three draws a transparent double-sided material twice
+    // (back faces, then front), i.e. a second draw and pipeline for nothing.
     material.side = DoubleSide
+    material.forceSinglePass = true
     material.positionNode = dirEq.mul(u.radius)
     material.sizeAttenuation = false
     // Quad covers ±3σ (in device px). Invisible stars collapse to zero size.

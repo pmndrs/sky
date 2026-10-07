@@ -6,15 +6,12 @@ Conventional Commit titles of merged pull requests (see [RELEASING.md](./RELEASI
 
 ## [0.5.0](https://github.com/pmndrs/sky/compare/v0.4.0...v0.5.0) (2026-10-07)
 
+**Upgrading from 0.4:** three r186 or later is now required, and the sky compiles its shaders in the background — `await sky.compileAsync()` before your render loop to have it on the first frame. The [upgrading guide](https://sky.docs.pmnd.rs/guides/upgrading) has the details.
+
 
 ### ⚠ BREAKING CHANGES
 
 * three 0.186 or later is required (0.4 ran on r185). The sky renders the same; lit objects follow r186's reworked shading.
-
-### Features
-
-* require three r186 or later ([d4d604e](https://github.com/pmndrs/sky/commit/d4d604ebf5ff23814c09992428d387d290877126))
-
 
 ### Bug Fixes
 

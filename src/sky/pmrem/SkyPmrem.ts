@@ -2,7 +2,18 @@ import { PmremScheduler } from '../PmremScheduler'
 import { cubeUVLayout } from './cubeUV'
 import { DOWNSAMPLE_WGSL, FIS_WGSL, INTEG_TILED_WGSL, INTEG_WGSL, PACK_CUBEUV_WGSL } from './kernels'
 
-import type { PMREMGenerator, RenderTarget, Texture } from 'three/webgpu'
+import {
+  CubeRenderTarget,
+  HalfFloatType,
+  LinearFilter,
+  LinearMipmapLinearFilter,
+  LinearSRGBColorSpace,
+  REVISION,
+  RGBAFormat,
+  RenderTarget,
+} from 'three/webgpu'
+
+import type { PMREMGenerator, Texture } from 'three/webgpu'
 import type { PmremSchedulerOptions } from '../PmremScheduler'
 
 export interface SkyPmremOptions extends PmremSchedulerOptions {
@@ -62,7 +73,7 @@ export function skyPmremPlan(maxLod: number, quality: 'three' | 'fast' = 'three'
 export const lodToRoughness = (lod: number, maxLod: number) => (maxLod > 0 ? 1 - Math.sqrt(1 - lod / maxLod) : 0)
 
 /**
- * The sky's PMREM (image-based lighting), re-filtered with WebGPU compute.
+ * The sky's PMREM (image-based lighting), prefiltered with WebGPU compute.
  *
  * three's `PMREMGenerator` renders every level as six face passes of a long
  * per-texel loop; at 256 it costs ~3–6 ms depending on the three version,
@@ -70,147 +81,189 @@ export const lodToRoughness = (lod: number, maxLod: number) => (maxLod > 0 ? 1 -
  * (~0.9–1.1 ms), so a moving sun or a scrubbed time-of-day slider updates the
  * IBL in the same frame as the background, with no throttle.
  *
- * three still allocates the target (its first bake), so the texture has the
- * exact layout the installed three samples, and its identity never changes.
- * Each later bake prefilters the sky cube (whose mips three already built)
- * into private storage textures and copies the result into that target:
+ * On WebGPU it replaces three's generator entirely. It allocates the PMREM
+ * target itself, in the layout the installed three samples, so
+ * `texture` exists (and never changes identity) from construction:
  *
- * - r187+ cube PMREM (`texture.isPMREMTexture`, one mip per roughness): three
- *   r187's algorithm, identical output, copied mip by mip.
- * - r185/r186 CubeUV atlas: each atlas level prefiltered at the roughness
- *   three's sampler reads it at, packed into the atlas layout. Closer to the
- *   true GGX lobe than three's own incremental chain, so rough reflections
- *   look slightly different from three's generator.
+ * - r187+ cube PMREM (`isPMREMTexture`, one mip per roughness): three r187's
+ *   algorithm, identical output.
+ * - r186 CubeUV atlas: each atlas level prefiltered at the roughness three's
+ *   sampler reads it at, packed into the atlas layout. Closer to the true GGX
+ *   lobe than three's own incremental chain, so rough reflections look
+ *   slightly different from three's generator.
  *
- * The WebGL backend (no compute) and unknown layouts keep three's generator
- * via `PmremScheduler`.
+ * Its compute pipelines compile asynchronously from construction (`ready`);
+ * nothing it does compiles a shader synchronously. Until they are ready the
+ * texture is black; the baker waits for `ready` before its first bake. It also takes over the source cube's mip
+ * chain: the mips it builds for its own sampling are copied into the cube, and
+ * three's mipmap pass for it never runs.
+ *
+ * The WebGL backend (no compute), `generator: 'three'`, a source it can't
+ * filter and a failed compile fall back to three's generator via
+ * `PmremScheduler`, which is only created then.
  */
 export class SkyPmrem {
-  /** Which path is live: three's generator (always, until our pipelines are ready) or ours. */
+  /** Which path is live: ours (`'sky'`) or three's generator. */
   mode: 'three' | 'sky' = 'three'
-  /** The PMREM layout our path writes, once detected. */
+  /** The PMREM layout our path writes. */
   layout: 'cube' | 'atlas' | null = null
+  /** Resolves once the compute pipelines are compiled (or the three fallback is in place). Never rejects. */
+  readonly ready: Promise<void>
 
   private _renderer: any
   private _source: Texture
-  private _fallback: PmremScheduler
-  private _want: boolean
+  private _generator: PMREMGenerator | (() => PMREMGenerator) | null
+  private _options: SkyPmremOptions
+  private _fallback: PmremScheduler | null = null
   private _quality: 'three' | 'fast'
+  private _target: any = null
+  private _sourceMips = 0
   private _pending = false
-  /** Set once the first three bake has allocated the target and we tried to set up. */
-  private _probed = false
   private _gpu: GpuState | null = null
   private _disposed = false
 
-  constructor(renderer: any, generator: PMREMGenerator, source: Texture, options: SkyPmremOptions = {}) {
+  /**
+   * @param generator three's `PMREMGenerator`, a function returning one, or
+   *   `null`. Only used for the fallback, so on WebGPU it is usually never
+   *   created.
+   */
+  constructor(
+    renderer: any,
+    generator: PMREMGenerator | (() => PMREMGenerator) | null,
+    source: Texture,
+    options: SkyPmremOptions = {},
+  ) {
     this._renderer = renderer
     this._source = source
-    this._want = (options.generator ?? 'sky') === 'sky'
+    this._generator = generator
+    this._options = options
     this._quality = options.quality ?? 'three'
-    this._fallback = new PmremScheduler(renderer, generator, source, options)
+
+    const backend = renderer.backend
+    const srcSize = sourceSize(source)
+    const intMip = Math.log2(srcSize / INTEGRATION_SIZE)
+    const canFilter = Number.isInteger(intMip) && intMip >= 0
+    if ((options.generator ?? 'sky') !== 'sky' || backend?.isWebGPUBackend !== true) {
+      this._useThree()
+      this.ready = Promise.resolve()
+    } else if (!canFilter) {
+      console.warn('SkyPmrem: the sky cube is not a power of two of at least 16; using three’s PMREMGenerator.')
+      this._useThree()
+      this.ready = Promise.resolve()
+    } else {
+      this.mode = 'sky'
+      this.layout = Number(REVISION) >= 187 ? 'cube' : 'atlas'
+      this._target = allocateTarget(this.layout, cubeSizeFor(srcSize))
+      renderer.initTexture(this._target.texture)
+      this._takeOverSourceMips(srcSize)
+      this.ready = this._compile(srcSize)
+    }
   }
 
+  /** The PMREM texture: ours from construction on WebGPU, three's after its first bake otherwise. */
   get texture(): Texture | null {
-    return this._fallback.texture
+    return this._fallback ? this._fallback.texture : this._target.texture
   }
 
   get target(): RenderTarget | null {
-    return this._fallback.target
+    return this._fallback ? this._fallback.target : this._target
   }
 
   /** The source cube changed; schedule a refresh. */
   markDirty(): void {
-    if (this.mode === 'sky') this._pending = true
-    else this._fallback.markDirty()
+    if (this._fallback) this._fallback.markDirty()
+    else this._pending = true
   }
 
   /** Call once per frame, after the cube bake. */
   tick(now: number = performance.now()): void {
-    if (this.mode === 'sky') {
-      if (this._pending) this._bake()
-      return
-    }
-    this._fallback.tick(now)
-    if (this._want && !this._probed && this._fallback.target) {
-      this._probed = true
-      this._setup()
-    }
+    if (this._fallback) this._fallback.tick(now)
+    else if (this._pending && this._gpu) this._bake()
   }
 
-  /** Finish any pending refresh now (screenshots, tests). */
+  /** Finish any pending refresh now (screenshots, tests). Before `ready`, ours has nothing to run yet. */
   flush(): void {
-    if (this.mode === 'sky') {
-      if (this._pending) this._bake()
-    } else {
-      this._fallback.flush()
-    }
+    if (this._fallback) this._fallback.flush()
+    else if (this._pending && this._gpu) this._bake()
   }
 
   dispose(): void {
     this._disposed = true
     if (this._gpu) for (const r of this._gpu.owned) r.destroy()
     this._gpu = null
-    this._fallback.dispose()
+    this._fallback?.dispose()
+    // A fallback writes into our target (see `_useThree`), so it is ours to free either way.
+    this._target?.dispose()
   }
 
   // ---------------------------------------------------------------------
 
-  /** Detect the layout and build every GPU object once; switch over when the pipelines are compiled. */
-  private _setup(): void {
-    const backend = this._renderer.backend
-    if (backend?.isWebGPUBackend !== true) return
-    const tex = (this._fallback.target as any)?.texture
-    const target = this._fallback.target as any
-    const srcGpu = backend.get(this._source)?.texture
-    const dstGpu = tex ? backend.get(tex)?.texture : null
-    const srcSize: number = srcGpu?.width ?? 0
-    const intMip = Math.log2(srcSize / INTEGRATION_SIZE)
-    // We build our own source mips (r185 allocates the sky cube without any), so only mip 0 matters.
-    const srcOk = srcGpu && Number.isInteger(intMip) && intMip >= 0
-    if (!srcOk || !dstGpu || dstGpu.format !== 'rgba16float') return this._unsupported()
-
-    let layout: 'cube' | 'atlas'
-    if (tex.isPMREMTexture === true && tex.mipmaps?.length) {
-      layout = 'cube'
-      if (target.width >> (tex.mipmaps.length - 1) !== 8) return this._unsupported()
-    } else if (tex.mapping === CUBEUV_REFLECTION_MAPPING) {
-      layout = 'atlas'
-      const L = cubeUVLayout(target.height / 4)
-      if (target.width !== L.width || target.height !== L.height) return this._unsupported()
-    } else {
-      return this._unsupported()
-    }
-
-    const device = backend.device
+  /** Compile every pipeline asynchronously, then build the GPU state; on failure fall back to three. */
+  private async _compile(srcSize: number): Promise<void> {
+    const device = this._renderer.backend.device
     const make = (code: string, constants?: Record<string, number>) =>
       device.createComputePipelineAsync({
         layout: 'auto',
         compute: { module: device.createShaderModule({ code }), entryPoint: 'main', constants },
       })
-    Promise.all([
-      make(DOWNSAMPLE_WGSL),
-      make(FIS_WGSL, { MIRROR: 1 }),
-      make(INTEG_WGSL),
-      make(INTEG_TILED_WGSL),
-      layout === 'atlas' ? make(PACK_CUBEUV_WGSL) : null,
-    ]).then(
-      ([down, fis, integ, tiled, pack]) => {
-        if (this._disposed) return
-        const pipes = { down, fis, integ, tiled, pack }
-        this._gpu =
-          layout === 'cube'
-            ? buildCube(device, pipes, srcSize, target.width, tex.mipmaps.length - 1, this._quality)
-            : buildAtlas(device, pipes, srcSize, target.height / 4, this._quality)
-        this.layout = layout
-        this.mode = 'sky'
-        this._pending = true // re-filter at the next tick in case the sky moved while compiling
-      },
-      (err: unknown) => console.warn('SkyPmrem: pipeline compile failed; using three’s PMREMGenerator.', err),
-    )
+    try {
+      const [down, fis, integ, tiled, pack] = await Promise.all([
+        make(DOWNSAMPLE_WGSL),
+        make(FIS_WGSL, { MIRROR: 1 }),
+        make(INTEG_WGSL),
+        make(INTEG_TILED_WGSL),
+        this.layout === 'atlas' ? make(PACK_CUBEUV_WGSL) : null,
+      ])
+      if (this._disposed) return
+      const pipes = { down, fis, integ, tiled, pack }
+      const t = this._target
+      this._gpu =
+        this.layout === 'cube'
+          ? buildCube(device, pipes, srcSize, t.width, t.texture.mipmaps.length - 1, this._quality)
+          : buildAtlas(device, pipes, srcSize, t.height / 4, this._quality)
+      // A bake requested while compiling runs now, not at the next tick():
+      // callers that only call update() on a change would otherwise keep a
+      // black IBL until the sky next changes. Our own encoder and queue, so
+      // this doesn't depend on three's frame.
+      if (this._pending) this._bake()
+    } catch (err) {
+      if (this._disposed) return
+      console.warn('SkyPmrem: pipeline compile failed; using three’s PMREMGenerator.', err)
+      this._restoreSourceMips()
+      this._useThree(this._target)
+    }
   }
 
-  private _unsupported(): void {
-    console.warn('SkyPmrem: unexpected PMREM or sky cube layout; using three’s PMREMGenerator.')
+  /** Switch to three's generator, throttled by `PmremScheduler`, optionally writing into `target`. */
+  private _useThree(target: any = null): void {
+    this.mode = 'three'
+    const gen = typeof this._generator === 'function' ? this._generator() : this._generator
+    if (!gen) throw new Error('SkyPmrem: three’s PMREMGenerator is needed here but none was given.')
+    this._fallback = new PmremScheduler(this._renderer, gen, this._source, this._options)
+    if (target) this._fallback.target = target
+    if (this._pending) this._fallback.markDirty()
+  }
+
+  /**
+   * Allocate the source cube's mips without three generating them: a cube
+   * texture listing its mips gets them allocated, and three only fills render
+   * target mips when `generateMipmaps` is set. `_bake` copies ours in. Must
+   * run before the cube's first render, which allocates it.
+   */
+  private _takeOverSourceMips(srcSize: number): void {
+    const src: any = this._source
+    if (src.isCubeTexture !== true || src.mipmaps?.length) return
+    const levels = Math.log2(srcSize)
+    src.mipmaps = Array.from({ length: levels }, (_, i) => ({ width: srcSize >> (i + 1), height: srcSize >> (i + 1) }))
+    src.generateMipmaps = false
+    this._sourceMips = levels
+  }
+
+  private _restoreSourceMips(): void {
+    if (!this._sourceMips) return
+    // The levels stay allocated; three fills them again after each capture.
+    ;(this._source as any).generateMipmaps = true
+    this._sourceMips = 0
   }
 
   private _bake(): void {
@@ -218,8 +271,13 @@ export class SkyPmrem {
     const g = this._gpu!
     const backend = this._renderer.backend
     // Looked up every bake: three may recreate either GPU texture (resize, context loss).
-    const srcGpu = backend.get(this._source).texture
-    const dstGpu = backend.get((this._fallback.target as any).texture).texture
+    const srcGpu = backend.get(this._source)?.texture
+    const dstGpu = backend.get(this._target.texture)?.texture
+    if (!srcGpu || !dstGpu) {
+      // The cube hasn't been captured yet; try again after it is.
+      this._pending = true
+      return
+    }
 
     const encoder = g.device.createCommandEncoder({ label: 'SkyPmrem' })
     const n = g.srcSize
@@ -232,8 +290,67 @@ export class SkyPmrem {
     }
     pass.end()
     g.write(encoder, dstGpu)
+    // The source cube's mips, from the chain built above (see `_takeOverSourceMips`).
+    const mips = Math.min(this._sourceMips + 1, srcGpu.mipLevelCount)
+    for (let m = 1; m < mips; m++) {
+      const s = n >> m
+      encoder.copyTextureToTexture({ texture: g.src, mipLevel: m }, { texture: srcGpu, mipLevel: m }, [s, s, 6])
+    }
     g.device.queue.submit([encoder.finish()])
   }
+}
+
+/** Face size of a cube texture (`CubeTexture.image` is one entry per face). */
+function sourceSize(source: any): number {
+  const image = Array.isArray(source?.image) ? source.image[0] : source?.image
+  return image?.width ?? 0
+}
+
+/** three's PMREM cube size for a source cube: the largest power of two ≤ its face size (`_setSize`). */
+function cubeSizeFor(srcSize: number): number {
+  return Math.pow(2, Math.floor(Math.log2(srcSize)))
+}
+
+/** Smallest face three r187's cube PMREM keeps (`LOD_MIN`): 8². */
+const CUBE_LOD_MIN = 3
+
+/**
+ * The PMREM target three's own generator would allocate for this layout, so
+ * three's environment nodes sample it as one of theirs: r186's CubeUV atlas
+ * (`_createRenderTarget`) or r187's cube with a listed mip chain
+ * (`_allocateTarget`).
+ */
+function allocateTarget(layout: 'cube' | 'atlas', cubeSize: number): any {
+  if (layout === 'cube') {
+    const target = new CubeRenderTarget(cubeSize, {
+      minFilter: LinearMipmapLinearFilter,
+      generateMipmaps: false,
+      type: HalfFloatType,
+      colorSpace: LinearSRGBColorSpace,
+      depthBuffer: false,
+    })
+    const maxLod = Math.log2(cubeSize) - CUBE_LOD_MIN
+    for (let lod = 0; lod <= maxLod; lod++)
+      target.texture.mipmaps.push({ width: cubeSize >> lod, height: cubeSize >> lod } as any)
+    target.texture.name = 'PMREM'
+    ;(target.texture as any).isPMREMTexture = true
+    return target
+  }
+  const L = cubeUVLayout(cubeSize)
+  const target = new RenderTarget(L.width, L.height, {
+    magFilter: LinearFilter,
+    minFilter: LinearFilter,
+    generateMipmaps: false,
+    type: HalfFloatType,
+    format: RGBAFormat,
+    colorSpace: LinearSRGBColorSpace,
+    depthBuffer: false,
+  })
+  target.texture.mapping = CUBEUV_REFLECTION_MAPPING as any
+  target.texture.name = 'PMREM.cubeUv'
+  ;(target.texture as any).isPMREMTexture = true
+  target.scissorTest = true
+  return target
 }
 
 /** three's `CubeUVReflectionMapping` (r185/r186; the export is gone in r187). */
@@ -298,7 +415,7 @@ function newState(device: any, pipes: Pipes, srcSize: number): GpuState {
     size: [srcSize, srcSize, 6],
     format: 'rgba16float',
     mipLevelCount: mips,
-    usage: TEXTURE_STORAGE_BINDING | TEXTURE_BINDING | TEXTURE_COPY_DST,
+    usage: TEXTURE_STORAGE_BINDING | TEXTURE_BINDING | TEXTURE_COPY_DST | TEXTURE_COPY_SRC,
   })
   const g: GpuState = {
     device,

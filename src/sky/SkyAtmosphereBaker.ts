@@ -99,7 +99,14 @@ export class SkyAtmosphereBaker {
   cubeRenderTarget: CubeRenderTarget
   cubeCamera: CubeCamera
   _mirrorBelowHorizon: boolean
-  pmremGenerator: PMREMGenerator
+  private _pmremGenerator: PMREMGenerator | null = null
+  /** The shader warm-up started at construction (see `compileAsync`). */
+  private _compile: Promise<void> | null = null
+  /** False while that warm-up runs: `update()` then defers its bake instead of compiling synchronously. */
+  private _compiled = true
+  private _deferredBake = false
+  private _warnedDeferred = false
+  private _disposed = false
   /** IBL prefilter (compute every change, or three's generator throttled); owns the persistent PMREM target. */
   pmrem: SkyPmrem
   sunDirty: boolean
@@ -243,12 +250,11 @@ export class SkyAtmosphereBaker {
     this._mirrorBelowHorizon = mirrorBelowHorizon
 
     // --- PMREM ---
-    this.pmremGenerator = new PMREMGenerator(renderer)
-    this.pmremGenerator.compileCubemapShader()
-    // three's generator allocates the persistent target on the first bake and
-    // it is reused from then on, so `environmentTexture` keeps a stable
-    // identity (see update()).
-    this.pmrem = new SkyPmrem(renderer, this.pmremGenerator, this.cubeRenderTarget.texture, pmrem)
+    // On WebGPU, SkyPmrem allocates the persistent target now and compiles its
+    // compute pipelines in the background; three's generator is only created
+    // for WebGL or a fallback. `environmentTexture` keeps one identity (see
+    // update()).
+    this.pmrem = new SkyPmrem(renderer, () => this.pmremGenerator, this.cubeRenderTarget.texture, pmrem)
 
     // --- dirty flags (all true on construction → first update() does a full bake) ---
     this.sunDirty = true
@@ -290,6 +296,11 @@ export class SkyAtmosphereBaker {
     // SkyView bake-state comparisons.
     this._lastSunElevation = NaN
     this._lastSunAzimuth = NaN
+
+    // Compile every shader the first bake needs in the background, now: if
+    // the caller never awaits compileAsync(), update() waits for this rather
+    // than compiling them synchronously. Only with a renderer that can.
+    if (typeof renderer.compileAsync === 'function') this.compileAsync()
   }
 
   get texture(): Texture {
@@ -298,6 +309,16 @@ export class SkyAtmosphereBaker {
 
   get environmentTexture(): Texture | null {
     return this.pmrem.texture
+  }
+
+  /**
+   * three's `PMREMGenerator`, created on first use. On WebGPU the IBL comes
+   * from `SkyPmrem`'s compute path and this is never created; it serves the
+   * WebGL backend, `pmrem: { generator: 'three' }` and fallbacks.
+   */
+  get pmremGenerator(): PMREMGenerator {
+    if (!this._pmremGenerator) this._pmremGenerator = new PMREMGenerator(this.renderer)
+    return this._pmremGenerator
   }
 
   /** The persistent PMREM render target (kept for callers that read it directly). */
@@ -657,19 +678,41 @@ export class SkyAtmosphereBaker {
 
   /**
    * Compile the pipelines of the first bake without blocking: the three LUT
-   * passes, the cube capture of the sky and the aerial-perspective compute
-   * pass. Optional; await it once before the
-   * first `update()`, like `renderer.init()`.
+   * passes, the cube capture of the sky, the aerial-perspective compute pass
+   * and the IBL prefilter. Started by the constructor; this returns that same
+   * promise. `update()` defers its bakes until it settles (with one console
+   * warning), so await it before the render loop to bake on the first frame.
    *
    * Why: Chrome compiles WebGPU shaders in its GPU process. A pipeline three
    * first meets during a draw is created synchronously and stalls that
    * process until the compile finishes, right as the first frame is being
    * prepared; on Windows (WGSL → HLSL → DXC/FXC) that is hundreds of ms per
    * shader. These are off-scene draws, so `renderer.compileAsync(scene,
-   * camera)` never reaches them. three's PMREM generator still compiles its
-   * two small shaders on the first bake.
+   * camera)` never reaches them. On WebGPU nothing in the sky's bake then
+   * compiles synchronously.
    */
-  async compileAsync(): Promise<void> {
+  compileAsync(): Promise<void> {
+    if (!this._compile) {
+      this._compiled = false
+      const settle = () => {
+        this._compiled = true
+        // A bake skipped while compiling runs now, so a scene that called
+        // update() only once still gets its sky.
+        if (this._deferredBake && !this._disposed) {
+          this._deferredBake = false
+          this.update()
+        }
+      }
+      // A failed compile only means the bake compiles what is left itself.
+      this._compile = this._compileAll().then(settle, (err) => {
+        console.warn('@pmndrs/sky: compiling the sky’s shaders failed; they compile on first use instead.', err)
+        settle()
+      })
+    }
+    return this._compile
+  }
+
+  private async _compileAll(): Promise<void> {
     const renderer = this.renderer
     // Every compile below reads the renderer state synchronously, which only
     // holds once the backend exists (otherwise three awaits `init()` first).
@@ -688,6 +731,8 @@ export class SkyAtmosphereBaker {
       endSkyDraw(renderer, _drawState)
     }
     if (this.aerialPerspectiveLUT) pending.push(this.aerialPerspectiveLUT.compileAsync())
+    // SkyPmrem's compute pipelines, started at construction.
+    pending.push(this.pmrem.ready)
     await Promise.all(pending)
   }
 
@@ -703,6 +748,20 @@ export class SkyAtmosphereBaker {
    * retries it.
    */
   update(): void {
+    if (!this._compiled) {
+      // The shader warm-up is still running. Baking now would compile every
+      // pipeline it is compiling synchronously; bake when it settles instead.
+      this._deferredBake = true
+      if (!this._warnedDeferred) {
+        this._warnedDeferred = true
+        console.warn(
+          '@pmndrs/sky: update() ran before the sky’s shaders finished compiling, so the sky appears a few frames ' +
+            'late instead of compiling them synchronously. Await sky.compileAsync() before your render loop to ' +
+            'have it on the first frame.',
+        )
+      }
+      return
+    }
     const skyDirty = this.atmosDirty || this.sunDirty || this.cameraDirty
     if (!this.cubeDirty && !skyDirty) {
       // Nothing changed this frame — but a throttled or sliced IBL refresh
@@ -737,11 +796,10 @@ export class SkyAtmosphereBaker {
       // the next update() retries the whole bake.
       this._captureCube()
 
-      // 3. PMREM. On WebGPU with a cube-mip PMREM (three r187+), SkyPmrem
-      // re-filters it in one compute pass (~0.9 ms) on every change. Otherwise
-      // three's generator runs throttled and time-sliced (PmremScheduler),
-      // since a whole r185 bake is ~6 ms. Either way the first bake is
-      // synchronous and there is one persistent target so
+      // 3. PMREM. On WebGPU, SkyPmrem re-filters it in one compute pass
+      // (~1 ms) on every change, into a target it allocated up front. On
+      // WebGL, three's generator runs throttled and time-sliced
+      // (PmremScheduler). Either way there is one persistent target, so
       // `environmentTexture` never changes identity — a new texture object
       // every tick invalidates the TSL pipeline cache for every material that
       // references the environment node (see Changelog 0.1.3).
@@ -828,11 +886,13 @@ export class SkyAtmosphereBaker {
    * the caller's MRT and render target play no part in it.
    */
   async updateAerialPerspective(): Promise<void> {
-    if (!this.aerialPerspectiveLUT) return
+    // Nothing to sample yet while the shaders compile (see update()).
+    if (!this.aerialPerspectiveLUT || !this._compiled) return
     await this.aerialPerspectiveLUT.render()
   }
 
   dispose(): void {
+    this._disposed = true
     this.transmittanceLUT.dispose()
     this.multiScatterLUT.dispose()
     this.skyViewLUT.dispose()
@@ -840,7 +900,7 @@ export class SkyAtmosphereBaker {
 
     this.cubeRenderTarget.dispose()
     this.pmrem.dispose()
-    this.pmremGenerator.dispose()
+    this._pmremGenerator?.dispose()
 
     if (this.sky.material) (this.sky.material as Material).dispose()
     if (this.sky.geometry) this.sky.geometry.dispose()

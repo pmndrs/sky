@@ -125,11 +125,17 @@ where each shader goes through WGSL → HLSL → DXC (or FXC on older drivers),
 that can hold up the first frame by a second or more; on macOS it is much
 shorter. `compileAsync()` compiles them in the background instead.
 
-It is optional: skip it and the first `update()` compiles synchronously, as
-before. It covers the sky's own off-screen passes, which your
-`renderer.compileAsync(scene, camera)` never reaches. three's own PMREM
-generator still compiles its two small shaders on the first bake. The
-React `<Sky>` calls it for you and holds the first bake until it settles.
+The sky starts compiling them itself when it is constructed; `compileAsync()`
+returns that work, so awaiting it means the first `update()` bakes the whole
+sky, IBL included, with nothing compiled synchronously. It covers the sky's own
+off-screen passes, which your `renderer.compileAsync(scene, camera)` never
+reaches.
+
+If you skip the await, `update()` doesn't compile them synchronously either:
+it skips its bakes until they are ready and logs one warning. The sky then
+appears a few frames late, and the skipped bake runs as soon as the shaders
+are ready, even if you don't call `update()` again. The React `<Sky>` awaits
+it for you.
 
 ### `update(camera, opts?)`
 

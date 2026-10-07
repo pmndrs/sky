@@ -37,7 +37,7 @@ npm install @pmndrs/sky
 pnpm add @pmndrs/sky
 ```
 
-Peer-deps: `three` (≥0.185.0 — CI tests 0.185.x; the library also runs on
+Peer-deps: `three` (≥0.186.0 — CI tests 0.186.x; the library also runs on
 r187-dev), and optionally `react` + `@react-three/fiber`
 (≥10.0.0-alpha.4 — earlier 10.x canaries import a WebGL-only class from
 `three/webgpu` and fail to load) if you use the React bindings. Requires the WebGPU

@@ -245,7 +245,7 @@
       renderer.toneMapping = THREE.NoToneMapping
       renderer.outputColorSpace = THREE.LinearSRGBColorSpace
       renderer.shadowMap.enabled = true
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      renderer.shadowMap.type = THREE.PCFShadowMap
       document.getElementById('src-ours').appendChild(renderer.domElement)
       await renderer.init()
       const oursSide = createOursSide(renderer, {

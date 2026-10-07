@@ -79,14 +79,18 @@
       function buildParityNode() {
         return Fn(() => {
           const u = uv()
-          const cosT = u.x.mul(2.0).sub(1.0)
+          // Pinned before the band selects below. three r186 turns a TSL Fn's
+          // arguments into variables at the call site, so an unpinned cosT was
+          // assigned inside the Mie band's branch and read unassigned (0) in
+          // the HG band's: a 2.87 "parity failure" that was the harness.
+          const cosT = u.x.mul(2.0).sub(1.0).toVar()
           const g = float(0.8)
 
           // A unit-scale ray-sphere config so distances are O(1) and absolute
           // float diffs stay tiny — parity is about the two implementations
           // agreeing, not physical values.
           const zenith = acos(clamp(cosT, float(-1.0), float(1.0)))
-          const rd = normalize(vec3(sin(zenith), cos(zenith), float(0.0)))
+          const rd = normalize(vec3(sin(zenith), cos(zenith), float(0.0))).toVar()
           const ro = vec3(float(0.0), float(0.5), float(0.0))
           const center = vec3(float(0.0), float(0.0), float(0.0))
           const radius = float(1.0)

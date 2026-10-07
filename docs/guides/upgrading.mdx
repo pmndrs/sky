@@ -13,6 +13,20 @@ rough order of how likely you are to notice.
 Everything here is pre-1.0, so a minor version can change behaviour; the full
 list of changes is in the [changelog](https://github.com/pmndrs/sky/blob/main/CHANGELOG.md).
 
+## 0.4 → 0.5: three r186 or later
+
+0.5 needs `three` 0.186 or later (0.4 ran on r185). Upgrade three alongside it:
+
+```sh
+npm install three@^0.186.1 @pmndrs/sky
+```
+
+The sky itself renders the same on r186. Lit objects in your scene may not:
+r186 reworked three's own shading (the GGX specular and its lookup table, the
+environment lighting and shadow filtering), so rough, sunlit surfaces can come
+out a little darker. r186 also removed `PCFSoftShadowMap`; three falls back to
+`PCFShadowMap` with a console warning.
+
 ## 0.3 → 0.4 at a glance
 
 Check these against your project. Each links to the details below.
@@ -320,4 +334,4 @@ afterwards, even if a draw throws. If you cleared the MRT around
 0.3 failed to load against three's unreleased r187 (`dev`), because it
 imported an export r187 removed. 0.4 loads on it, and the per-frame IBL
 supports both PMREM formats: r185/r186's CubeUV atlas and r187's cube mips.
-CI tests against r185.
+CI tested against r185 then; from 0.5 it tests r186.

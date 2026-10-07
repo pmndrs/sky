@@ -14,7 +14,7 @@
   "dependencies": {
     "@pmndrs/sky": "workspace:*",
     "camera-controls": "^3.1.2",
-    "three": "^0.185.0"
+    "three": "^0.186.1"
   },
   "devDependencies": {
     "pixelmatch": "^7.2.0",

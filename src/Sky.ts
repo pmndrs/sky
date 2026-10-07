@@ -634,10 +634,12 @@ export class Sky {
   }
 
   /**
-   * Compile the sky's internal shaders without blocking, before the first
-   * `update()`. Optional, and safe to skip: without it the first `update()`
-   * compiles them synchronously, which on Windows can hold up the first frame
-   * by a second or more. Call it once, like `renderer.init()`:
+   * Wait for the sky's internal shaders to compile. The sky starts compiling
+   * them in the background when it is constructed, and `update()` holds its
+   * bakes until they are ready rather than compiling them synchronously,
+   * which on Windows can freeze a frame for a second or more. Await this once
+   * before the render loop to have the sky on the first frame; without it the
+   * sky appears a few frames late (with a console warning):
    *
    * ```js
    * await renderer.init()

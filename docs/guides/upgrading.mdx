@@ -27,11 +27,12 @@ environment lighting and shadow filtering), so rough, sunlit surfaces can come
 out a little darker. r186 also removed `PCFSoftShadowMap`; three falls back to
 `PCFShadowMap` with a console warning.
 
-### No shader compiles on the first frame: call `compileAsync()`
+### No shader compiles on the first frame: await `compileAsync()`
 
-0.5 compiles every shader the sky needs in the background, and on WebGPU it
-no longer uses three's `PMREMGenerator` at all: its own compute prefilter
-allocates the IBL texture and fills it. Add one line before your render loop:
+0.5 compiles every shader the sky needs in the background, starting when the
+sky is constructed, and on WebGPU it no longer uses three's `PMREMGenerator`
+at all: its own compute prefilter allocates the IBL texture and fills it. Add
+one line before your render loop:
 
 ```js
 await renderer.init()
@@ -41,13 +42,11 @@ await sky.compileAsync() // new
 renderer.setAnimationLoop(frame)
 ```
 
-The React `<Sky>` does this for you. What changes if you skip it:
-
-- The scene still renders straight away, but the first `update()` compiles the
-  lookup-table shaders synchronously, as in 0.4.
-- The environment lighting is **black for the first few frames**, until the
-  prefilter's pipelines are ready. 0.4 baked the first IBL synchronously with
-  three's generator instead.
+The React `<Sky>` does this for you. If you skip it, nothing breaks: `update()`
+skips its bakes until the shaders are ready and logs one warning, so **the sky
+and its lighting appear a few frames late** instead of on the first frame. 0.4
+compiled them synchronously inside the first `update()` instead, which could
+freeze that frame for a second or more on Windows.
 
 Smaller changes:
 

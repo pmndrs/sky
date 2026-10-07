@@ -100,6 +100,13 @@ export class SkyAtmosphereBaker {
   cubeCamera: CubeCamera
   _mirrorBelowHorizon: boolean
   private _pmremGenerator: PMREMGenerator | null = null
+  /** The shader warm-up started at construction (see `compileAsync`). */
+  private _compile: Promise<void> | null = null
+  /** False while that warm-up runs: `update()` then defers its bake instead of compiling synchronously. */
+  private _compiled = true
+  private _deferredBake = false
+  private _warnedDeferred = false
+  private _disposed = false
   /** IBL prefilter (compute every change, or three's generator throttled); owns the persistent PMREM target. */
   pmrem: SkyPmrem
   sunDirty: boolean
@@ -289,6 +296,11 @@ export class SkyAtmosphereBaker {
     // SkyView bake-state comparisons.
     this._lastSunElevation = NaN
     this._lastSunAzimuth = NaN
+
+    // Compile every shader the first bake needs in the background, now: if
+    // the caller never awaits compileAsync(), update() waits for this rather
+    // than compiling them synchronously. Only with a renderer that can.
+    if (typeof renderer.compileAsync === 'function') this.compileAsync()
   }
 
   get texture(): Texture {
@@ -667,9 +679,9 @@ export class SkyAtmosphereBaker {
   /**
    * Compile the pipelines of the first bake without blocking: the three LUT
    * passes, the cube capture of the sky, the aerial-perspective compute pass
-   * and the IBL prefilter. Optional; await it once before the first
-   * `update()`, like `renderer.init()`. Without it the IBL stays black for
-   * the few frames its pipelines take to compile.
+   * and the IBL prefilter. Started by the constructor; this returns that same
+   * promise. `update()` defers its bakes until it settles (with one console
+   * warning), so await it before the render loop to bake on the first frame.
    *
    * Why: Chrome compiles WebGPU shaders in its GPU process. A pipeline three
    * first meets during a draw is created synchronously and stalls that
@@ -679,7 +691,28 @@ export class SkyAtmosphereBaker {
    * camera)` never reaches them. On WebGPU nothing in the sky's bake then
    * compiles synchronously.
    */
-  async compileAsync(): Promise<void> {
+  compileAsync(): Promise<void> {
+    if (!this._compile) {
+      this._compiled = false
+      const settle = () => {
+        this._compiled = true
+        // A bake skipped while compiling runs now, so a scene that called
+        // update() only once still gets its sky.
+        if (this._deferredBake && !this._disposed) {
+          this._deferredBake = false
+          this.update()
+        }
+      }
+      // A failed compile only means the bake compiles what is left itself.
+      this._compile = this._compileAll().then(settle, (err) => {
+        console.warn('@pmndrs/sky: compiling the sky’s shaders failed; they compile on first use instead.', err)
+        settle()
+      })
+    }
+    return this._compile
+  }
+
+  private async _compileAll(): Promise<void> {
     const renderer = this.renderer
     // Every compile below reads the renderer state synchronously, which only
     // holds once the backend exists (otherwise three awaits `init()` first).
@@ -715,6 +748,20 @@ export class SkyAtmosphereBaker {
    * retries it.
    */
   update(): void {
+    if (!this._compiled) {
+      // The shader warm-up is still running. Baking now would compile every
+      // pipeline it is compiling synchronously; bake when it settles instead.
+      this._deferredBake = true
+      if (!this._warnedDeferred) {
+        this._warnedDeferred = true
+        console.warn(
+          '@pmndrs/sky: update() ran before the sky’s shaders finished compiling, so the sky appears a few frames ' +
+            'late instead of compiling them synchronously. Await sky.compileAsync() before your render loop to ' +
+            'have it on the first frame.',
+        )
+      }
+      return
+    }
     const skyDirty = this.atmosDirty || this.sunDirty || this.cameraDirty
     if (!this.cubeDirty && !skyDirty) {
       // Nothing changed this frame — but a throttled or sliced IBL refresh
@@ -839,11 +886,13 @@ export class SkyAtmosphereBaker {
    * the caller's MRT and render target play no part in it.
    */
   async updateAerialPerspective(): Promise<void> {
-    if (!this.aerialPerspectiveLUT) return
+    // Nothing to sample yet while the shaders compile (see update()).
+    if (!this.aerialPerspectiveLUT || !this._compiled) return
     await this.aerialPerspectiveLUT.render()
   }
 
   dispose(): void {
+    this._disposed = true
     this.transmittanceLUT.dispose()
     this.multiScatterLUT.dispose()
     this.skyViewLUT.dispose()

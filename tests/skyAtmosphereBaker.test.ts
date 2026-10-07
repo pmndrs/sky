@@ -275,13 +275,14 @@ describe('SkyAtmosphereBaker.compileAsync (issue #49)', () => {
 
   it('compiles each LUT pass and the cube capture against its own target, keyed by that target', async () => {
     const r = compilingRenderer()
-    const baker = new SkyAtmosphereBaker(r, { enableAerialPerspective: false })
     const callerMrt = { mrt: true }
     const callerTarget = { caller: true }
     r.mrt = callerMrt
     r.target = callerTarget
-
+    // The warm-up starts in the constructor; compileAsync() returns it.
+    const baker = new SkyAtmosphereBaker(r, { enableAerialPerspective: false })
     await baker.compileAsync()
+    expect(r.compileAsync).toHaveBeenCalledTimes(4)
 
     expect(r.init).toHaveBeenCalled()
     const targets = r.compiled.map((c: any) => c.target)
@@ -313,5 +314,39 @@ describe('SkyAtmosphereBaker.compileAsync (issue #49)', () => {
     const baker = new SkyAtmosphereBaker(r, { enableAerialPerspective: true })
     await baker.compileAsync()
     expect(r.compileComputeAsync).toHaveBeenCalledWith((baker.aerialPerspectiveLUT as any)._compute)
+  })
+
+  it('defers update() until the warm-up settles instead of compiling synchronously, warns once, then bakes by itself', async () => {
+    const r = compilingRenderer()
+    let finish!: () => void
+    const gate = new Promise<void>((done) => (finish = done))
+    r.compileAsync = vi.fn(() => gate)
+    const baker = new SkyAtmosphereBaker(r, { enableAerialPerspective: false })
+    stubRenderStages(baker)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    baker.update()
+    baker.update()
+    expect(baker.transmittanceLUT.render).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    finish()
+    await baker.compileAsync()
+    // The skipped bake ran when the compile settled, with no further update().
+    expect(baker.transmittanceLUT.render).toHaveBeenCalledTimes(1)
+    expect(baker.cubeCamera.update).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('bakes straight away once the warm-up has been awaited, with no warning', async () => {
+    const r = compilingRenderer()
+    const baker = new SkyAtmosphereBaker(r, { enableAerialPerspective: false })
+    stubRenderStages(baker)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await baker.compileAsync()
+    baker.update()
+    expect(baker.transmittanceLUT.render).toHaveBeenCalledTimes(1)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })

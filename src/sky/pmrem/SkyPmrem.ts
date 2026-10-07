@@ -94,8 +94,7 @@ export const lodToRoughness = (lod: number, maxLod: number) => (maxLod > 0 ? 1 -
  *
  * Its compute pipelines compile asynchronously from construction (`ready`);
  * nothing it does compiles a shader synchronously. Until they are ready the
- * texture is black, so await `ready` (or the sky's `compileAsync()`) before
- * the first frame to have IBL on it. It also takes over the source cube's mip
+ * texture is black; the baker waits for `ready` before its first bake. It also takes over the source cube's mip
  * chain: the mips it builds for its own sampling are copied into the cube, and
  * three's mipmap pass for it never runs.
  *

@@ -216,15 +216,15 @@ it explicitly (e.g. `turbidity={1}`).
 
 ## Lifecycle
 
-| Situation                  | Behaviour                                                                                                                                                                  |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Mount                      | One effect constructs the `Sky`, calls `attach(scene, { background, environment })`, then renders `children`. Live props are applied before the first frame.               |
-| Every frame                | `useFrame` calls `sky.update(camera)` with R3F's default camera. Once `applyHaze` has run, it also calls `sky.updateAerialPerspective()`.                                  |
-| Construction prop change   | The old instance is disposed and a new one built in the same commit. Nothing renders against the disposed instance; `children` remount and `useSky()` returns the new one. |
-| Unmount                    | `sky.dispose()`: detaches from the scene, removes the stars, disposes the baker. Synchronous, no timer.                                                                    |
-| `StrictMode`               | Safe. The replayed effect disposes the first instance and builds a second; children only ever see the live one.                                                            |
-| Suspense                   | Children render inside `<Suspense fallback={null}>` within `<Sky>`, so a child loading assets does not unmount or replay the `Sky` (fixed in 0.3.0).                       |
-| `<Activity mode="hidden">` | Hidden disposes the instance; shown builds a new one.                                                                                                                      |
+| Situation                  | Behaviour                                                                                                                                                                                                                                                                              |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mount                      | One effect constructs the `Sky`, calls `attach(scene, { background, environment })` and starts `sky.compileAsync()`, then renders `children`. Live props are applied before the first frame.                                                                                           |
+| Every frame                | Once `compileAsync()` has settled (the sky's shaders compiled without blocking a frame; see [Shader compilation](./sky#shader-compilation)), `useFrame` calls `sky.update(camera)` with R3F's default camera. Once `applyHaze` has run, it also calls `sky.updateAerialPerspective()`. |
+| Construction prop change   | The old instance is disposed and a new one built in the same commit. Nothing renders against the disposed instance; `children` remount and `useSky()` returns the new one.                                                                                                             |
+| Unmount                    | `sky.dispose()`: detaches from the scene, removes the stars, disposes the baker. Synchronous, no timer.                                                                                                                                                                                |
+| `StrictMode`               | Safe. The replayed effect disposes the first instance and builds a second; children only ever see the live one.                                                                                                                                                                        |
+| Suspense                   | Children render inside `<Suspense fallback={null}>` within `<Sky>`, so a child loading assets does not unmount or replay the `Sky` (fixed in 0.3.0).                                                                                                                                   |
+| `<Activity mode="hidden">` | Hidden disposes the instance; shown builds a new one.                                                                                                                                                                                                                                  |
 
 > **Helpers are yours to dispose.**
 > `sky.dispose()` does not dispose helpers made with `createSun`,

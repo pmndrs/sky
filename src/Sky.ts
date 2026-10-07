@@ -634,6 +634,27 @@ export class Sky {
   }
 
   /**
+   * Compile the sky's internal shaders without blocking, before the first
+   * `update()`. Optional, and safe to skip: without it the first `update()`
+   * compiles them synchronously, which on Windows can hold up the first frame
+   * by a second or more. Call it once, like `renderer.init()`:
+   *
+   * ```js
+   * await renderer.init()
+   * await sky.compileAsync()
+   * renderer.setAnimationLoop(frame)
+   * ```
+   *
+   * It covers the lookup-table passes, the background cube capture and the
+   * aerial-perspective pass. Objects in your own scene (the
+   * live sky mesh, stars, haze) are compiled by your
+   * `renderer.compileAsync(scene, camera)`.
+   */
+  compileAsync(): Promise<void> {
+    return this.baker.compileAsync()
+  }
+
+  /**
    * Per-frame entry point.
    *
    * @param {THREE.Camera} camera          active main camera

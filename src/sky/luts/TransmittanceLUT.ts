@@ -7,7 +7,7 @@ import {
   QuadMesh,
   RendererUtils,
 } from 'three/webgpu'
-import { Fn, uv, vec3, vec4, float, exp, sqrt, max } from 'three/tsl'
+import { Fn, Loop, uv, vec3, vec4, float, exp, sqrt, max } from 'three/tsl'
 
 import {
   computeScatteringAbsorption,
@@ -16,6 +16,7 @@ import {
 } from '../../backends/tsl/atmosphere.tsl'
 import { transmittanceLutColorNode } from '../../backends/wgsl/luts'
 import { LUT_RESOLUTIONS } from '../../core/resolutions'
+import { compileQuadAsync } from '../compileAsync'
 
 const _quadMesh = /*@__PURE__*/ new QuadMesh(null as any) // material is assigned per render
 let _rendererState: any
@@ -134,30 +135,34 @@ export class TransmittanceLUT {
 
       const opticalDepth = vec3(0.0, 0.0, 0.0).toVar()
       const tPrev = float(0.0).toVar()
-      const tCur = float(0.0).toVar()
 
       // Hillaire's fixed-step integrator with mid-step (SampleSegmentT = 0.3):
       //     t = tMax * (s + 0.3) / SampleCount
       //     dt = t - tPrev
       //     opticalDepth += extinction(P) * dt
-      // Unrolled at shader build time since SAMPLE_COUNT is a JS constant.
-      for (let s = 0; s < SAMPLE_COUNT; s++) {
-        const newT = tMax.mul(float(s + SAMPLE_SEGMENT_T).div(float(SAMPLE_COUNT)))
-        const dt = newT.sub(tPrev)
-        tCur.assign(newT)
-
-        const P = worldPos.add(worldDir.mul(tCur))
+      // A TSL loop: unrolled in JS this was a 40 KB shader (issue #49).
+      Loop({ start: 0, end: SAMPLE_COUNT, type: 'int' }, ({ i }: any) => {
+        const newT = tMax.mul(float(i).add(SAMPLE_SEGMENT_T).div(float(SAMPLE_COUNT))).toVar()
+        const P = worldPos.add(worldDir.mul(newT))
         const height = P.length().sub(params.bottomRadius)
 
         const medium = computeScatteringAbsorption(height, params)
-        opticalDepth.addAssign(medium.extinction.mul(dt))
+        opticalDepth.addAssign(medium.extinction.mul(newT.sub(tPrev)))
 
         tPrev.assign(newT)
-      }
+      })
 
       const transmittance = exp(opticalDepth.negate())
       return vec4(transmittance, float(1.0))
     })()
+  }
+
+  /**
+   * Compile this pass's pipeline without blocking, so the first `render()`
+   * finds it ready. See `SkyAtmosphereBaker.compileAsync`.
+   */
+  compileAsync(): Promise<void> {
+    return compileQuadAsync(this.renderer, this.material, this.renderTarget)
   }
 
   /**

@@ -168,6 +168,10 @@
       window.__camera = camera
       window.__controls = controls
 
+      // Compile the sky's internal shaders and the scene's before the first
+      // frame, so neither compiles synchronously inside it.
+      await Promise.all([sky.compileAsync(), renderer.compileAsync(scene, camera)])
+
       renderer.setAnimationLoop(() => {
         sky.update(camera)
         controls.update()

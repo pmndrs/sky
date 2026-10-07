@@ -74,6 +74,7 @@ new Sky(renderer, options?)
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `attach(scene, options?)`   | Sets `scene.background` and/or `scene.environment` (both by default) and adds the star sprites. See [Attach roles](#attach-roles). Returns `this`. |
 | `detach()`                  | Clears the slots it set (only if they still point at this sky's textures) and removes the stars. Returns `this`.                                   |
+| `compileAsync()`            | Compiles the sky's internal shaders without blocking. Await once before the first `update()`. See [Shader compilation](#shader-compilation).       |
 | `update(camera, opts?)`     | Per-frame entry point — see below.                                                                                                                 |
 | `updateAerialPerspective()` | Runs the AP LUT compute pass. Call every frame if you've wired `applyHaze`.                                                                        |
 | `flushEnvironment()`        | Finishes any throttled / time-sliced IBL refresh now, so `environmentTexture` matches the current sky (screenshots, hard cuts). Returns `this`.    |
@@ -104,6 +105,31 @@ Calling `attach()` again on the same scene with different roles releases a
 slot no longer requested and claims a newly requested one (claiming
 overwrites what is there). `detach()`, `dispose()` and attaching to another
 scene clear only claimed slots that still hold this sky's textures.
+
+### Shader compilation
+
+```js
+await renderer.init()
+const sky = new Sky(renderer, { timeOfDay: 16 })
+sky.attach(scene)
+await Promise.all([sky.compileAsync(), renderer.compileAsync(scene, camera)])
+renderer.setAnimationLoop(frame)
+```
+
+The first `update()` needs a handful of shaders: the three lookup-table passes,
+the background cube capture and, with haze, the aerial-perspective pass. three
+compiles a shader it first meets during a draw synchronously. Chrome compiles
+WebGPU shaders in its GPU process, so a synchronous compile stalls it until
+the shader is ready, right as the first frame is being prepared. On Windows,
+where each shader goes through WGSL → HLSL → DXC (or FXC on older drivers),
+that can hold up the first frame by a second or more; on macOS it is much
+shorter. `compileAsync()` compiles them in the background instead.
+
+It is optional: skip it and the first `update()` compiles synchronously, as
+before. It covers the sky's own off-screen passes, which your
+`renderer.compileAsync(scene, camera)` never reaches. three's own PMREM
+generator still compiles its two small shaders on the first bake. The
+React `<Sky>` calls it for you and holds the first bake until it settles.
 
 ### `update(camera, opts?)`
 

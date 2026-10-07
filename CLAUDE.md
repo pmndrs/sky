@@ -510,6 +510,33 @@ the same on r185 and r186 page for page, but any new code that hands one node
 to Fns in several branches must `.toVar()` it **before** the branch — the same
 rule as for loops (see "Shader size and synchronous compiles").
 
+### Shader size and synchronous compiles — Windows pays for both (#49, 2026-10-06)
+
+Chrome compiles WebGPU shaders in its GPU process; on Windows that is WGSL →
+HLSL → DXC (FXC on old drivers), ~0.1 s under 20 KB, ~1.8 s at 100–200 KB
+with DXC, and a cliff past ~60 KB with FXC (HomeFig's measurements). Two
+levers, both checked with `examples/vanilla/scripts/probe-shaders.mjs` (wraps
+`GPUDevice`: every pipeline's shader size, sync vs async, and whether the WGSL
+is byte-identical across reloads, which Chrome's shader cache needs — it is):
+
+- **Every TSL call site is inlined.** A JS `for` around a helper, or the same
+  helper called twice, emits it that many times. The haze slice refinement's
+  two marches made the planet-scale haze shader 60.6 KB (now 46.5 KB, one
+  `Loop` over both); the shafts' full-path integrand over five JS-loop points
+  made that pass 50 KB (now 24.5 KB). Route repeats through one TSL `Loop` and
+  pin what the loop reads with `.toVar()` _before_ it — a node first built
+  inside the loop body is declared in that scope and is out of scope after it.
+- **Off-scene draws compile synchronously on first use.** `sky.compileAsync()`
+  / `baker.compileAsync()` compile the LUT passes and the cube capture ahead
+  (and the AP compute, through r186's `compileComputeAsync`).
+  three r185–r186's `renderer.compileAsync` keys the render context from
+  `renderer.depth/stencil`, while `render()` uses the target's
+  `depthBuffer/stencilBuffer`; for a depth-less target (every LUT) the keys
+  differ and the draw recompiles synchronously. Compile through
+  `compileIntoTarget` (`src/sky/compileAsync.ts`), and confirm with the probe:
+  a warmed pipeline must show up once, as `async`. Still synchronous: three's
+  PMREM generator (two small shaders) and its mip generation.
+
 ### Vite HMR + WebGPU shader edits
 
 Editing a TSL helper while a page is open often leaves the previous shader

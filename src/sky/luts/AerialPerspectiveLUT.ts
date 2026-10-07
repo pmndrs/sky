@@ -212,6 +212,11 @@ export class AerialPerspectiveLUT {
     this._cameraMatrixWorld.value.copy(camera.matrixWorld)
   }
 
+  /** Compile the compute pipeline without blocking, so the first `render()` finds it ready. */
+  compileAsync(): Promise<void> {
+    return this.renderer.compileComputeAsync(this._compute)
+  }
+
   /** Dispatch the compute pass. Cheap (~1ms on a mid-tier GPU). */
   async render() {
     await this.renderer.computeAsync(this._compute)

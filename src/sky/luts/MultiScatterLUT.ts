@@ -36,6 +36,7 @@ import {
 } from '../../backends/tsl/atmosphere.tsl'
 import { multiScatterLutColorNode } from '../../backends/wgsl/luts'
 import { LUT_RESOLUTIONS } from '../../core/resolutions'
+import { compileQuadAsync } from '../compileAsync'
 import type { TransmittanceLUT } from './TransmittanceLUT'
 
 const _quadMesh = /*@__PURE__*/ new QuadMesh(null as any) // material is assigned per render
@@ -407,6 +408,14 @@ export class MultiScatterLUT {
       // we want per-atmosphere artistic control.
       return vec4(Lfinal, float(1.0))
     })()
+  }
+
+  /**
+   * Compile this pass's pipeline without blocking, so the first `render()`
+   * finds it ready. See `SkyAtmosphereBaker.compileAsync`.
+   */
+  compileAsync(): Promise<void> {
+    return compileQuadAsync(this.renderer, this.material, this.renderTarget)
   }
 
   render() {

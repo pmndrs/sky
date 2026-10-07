@@ -67,6 +67,7 @@ const sky = new Sky(renderer, {
 
 const scene = new THREE.Scene()
 sky.attach(scene) // sets scene.environment + scene.background ({ environment: false } keeps your own IBL)
+await sky.compileAsync() // the sky's shaders compile in the background; this has them ready for frame one
 
 renderer.setAnimationLoop(() => {
   sky.update(camera)
@@ -162,7 +163,7 @@ function CustomPipeline() {
 - **[Stylized looks](https://sky.docs.pmnd.rs/guides/looks)** — colour ramps over the physical sky, elevation-keyed tracks
 - **[Night sky](https://sky.docs.pmnd.rs/guides/night-sky)** — star sprites and the baked Milky Way
 - **[React reference](https://sky.docs.pmnd.rs/api/react)** — `<Sky>` props, `<AutoHaze>`, `useSky()`
-- **[Upgrading to 0.4](https://sky.docs.pmnd.rs/guides/upgrading)** — behaviour changes since 0.3
+- **[Upgrading](https://sky.docs.pmnd.rs/guides/upgrading)** — what changed in 0.5 (three r186, background shader compiles) and 0.4
 
 A condensed method table for the `Sky` facade:
 

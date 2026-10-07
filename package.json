@@ -1,6 +1,6 @@
 {
   "name": "@pmndrs/sky",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A hyper-efficient WebGPU sky system for three.js: physically based sky, image-based lighting, aerial perspective and night sky. Vanilla and React (R3F) entries.",
   "keywords": [
     "three",

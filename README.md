@@ -1,5 +1,5 @@
 <h1 align="center">@pmndrs/sky</h1>
-<p align="center">Production-quality Hillaire atmospheric sky for Three.js / TSL, on the WebGPU renderer.</p>
+<p align="center">A hyper-efficient WebGPU sky system for three.js.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@pmndrs/sky"><img src="https://img.shields.io/npm/v/@pmndrs/sky.svg?style=flat&colorA=000000&colorB=000000" alt="npm version" /></a>
@@ -8,15 +8,24 @@
   <a href="https://discord.gg/poimandres"><img src="https://img.shields.io/discord/740090768164651029?style=flat&colorA=000000&colorB=000000&label=discord&logo=discord&logoColor=ffffff" alt="Discord" /></a>
 </p>
 
-`@pmndrs/sky` ports Sébastien Hillaire's [_A Scalable and Production Ready
-Sky and Atmosphere Rendering Technique_](https://sebh.github.io/publications/egsr2020.pdf)
-(EGSR 2020) to Three.js TSL. Attach it to a scene and you get a
-physically-based sky driven by real solar position, correct at any camera
-altitude from ground level to orbit, with an opt-in aerial-perspective haze
-post-process for distant geometry (with optional light shafts) or a cheaper
-sky-coloured height fog, image-based
-lighting re-filtered on every sky change, a night sky, and stylized looks —
-vanilla and React (R3F) entry points, one `update()` call per frame.
+`@pmndrs/sky` is a physically based sky, lighting and atmosphere system for
+three.js on the WebGPU renderer. Attach it to a scene and you get a sky driven
+by real solar position, correct from ground level to orbit, whose image-based
+lighting follows every move of the sun.
+
+It is built for frame budgets. The sky is baked into a cube only when
+something changes, so a frame where nothing moved costs next to nothing; the
+environment lighting is re-filtered in one compute pass (about 1 ms, several
+times faster than three's `PMREMGenerator`), so time-of-day can animate every
+frame; and the per-pixel work is a handful of texture lookups.
+
+The atmosphere itself builds on Sébastien Hillaire's
+[_A Scalable and Production Ready Sky and Atmosphere Rendering Technique_](https://sebh.github.io/publications/egsr2020.pdf)
+(EGSR 2020), and is checked against his reference code and Bruneton's
+precomputed scattering. Around it you also get aerial-perspective haze for
+distant geometry (with optional light shafts) or a cheaper sky-coloured height
+fog, a night sky with pixel-sharp stars and the Milky Way, and stylized looks.
+Vanilla and React (R3F) entry points, one `update()` call per frame.
 
 **[Full docs →](https://sky.docs.pmnd.rs)** · **[Demo gallery →](https://sky.docs.pmnd.rs/examples/)**
 

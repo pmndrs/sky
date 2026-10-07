@@ -1,16 +1,22 @@
 ---
 title: Introduction
-description: Production-quality Hillaire atmospheric sky for Three.js / TSL on the WebGPU renderer.
+description: A hyper-efficient WebGPU sky system for three.js — physically based sky, image-based lighting and atmosphere.
 nav: 0
 ---
 
-`@pmndrs/sky` is a port of Sébastien Hillaire's [_A Scalable and Production
-Ready Sky and Atmosphere Rendering Technique_](https://sebh.github.io/publications/egsr2020.pdf)
-(EGSR 2020) to Three.js TSL, running on the WebGPU renderer. It gives you a
-physically-based sky that you drop into a scene as `scene.background` +
-`scene.environment` (IBL) with one class, and scales up to aerial-perspective
-haze on distant geometry and planet-scale (ground-to-orbit) rendering when
-you need it.
+`@pmndrs/sky` is a physically based sky, lighting and atmosphere system for
+three.js on the WebGPU renderer. You drop it into a scene as
+`scene.background` + `scene.environment` (image-based lighting) with one
+class, and it scales up to aerial-perspective haze on distant geometry and
+planet-scale (ground-to-orbit) rendering when you need it.
+
+Its atmosphere model builds on Sébastien Hillaire's
+[_A Scalable and Production Ready Sky and Atmosphere Rendering Technique_](https://sebh.github.io/publications/egsr2020.pdf)
+(EGSR 2020), checked against his reference code and Bruneton's precomputed
+scattering. The rest is designed around three.js and frame budgets: the sky
+is baked into a cube only when something changes, and the environment
+lighting is re-filtered with one compute pass, so a moving sun updates
+reflections in the same frame.
 
 ## Why
 

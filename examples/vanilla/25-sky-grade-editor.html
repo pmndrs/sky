@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>@pmndrs/sky — sky grade editor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="./grade-editor/editor.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="toolbar">
+        <span class="brand">Sky grade</span>
+        <label class="time">
+          <span>Time</span>
+          <input id="time" type="range" min="0" max="24" step="0.01" value="18.8" />
+          <output id="timeOut">18:48</output>
+        </label>
+        <button id="play" title="Play the day (Space)">▶</button>
+        <select id="speed" title="Playback speed">
+          <option value="0.25">¼ h/s</option>
+          <option value="1" selected>1 h/s</option>
+          <option value="3">3 h/s</option>
+        </select>
+        <span class="sep"></span>
+        <button id="bypass" class="toggle on" title="Compare with the physical sky (B)">Grade on</button>
+        <span class="sep"></span>
+        <select id="preset" title="Start from a preset"></select>
+        <button id="new" title="Remove every keyframe">New</button>
+        <button id="undo" title="Undo (⌘Z)">↶</button>
+        <button id="redo" title="Redo (⇧⌘Z)">↷</button>
+        <span class="grow"></span>
+        <input id="name" placeholder="untitled grade" spellcheck="false" />
+        <button id="load" title="Load a .json grade">Load</button>
+        <button id="save" title="Download as .json">Save</button>
+        <button id="copy" title="Copy the grade JSON">Copy JSON</button>
+        <input id="file" type="file" accept=".json,application/json" hidden />
+      </header>
+
+      <section id="view">
+        <canvas id="main"></canvas>
+        <div id="status"></div>
+        <div id="camera">
+          <button data-look="sun">Sun</button>
+          <button data-look="away">Away</button>
+          <button data-look="up">Up</button>
+          <button data-look="down">Ground</button>
+        </div>
+        <div id="toast"></div>
+      </section>
+
+      <section id="timeline">
+        <canvas id="timelineCanvas"></canvas>
+      </section>
+
+      <section id="bottom">
+        <div id="lut">
+          <div class="tabs" id="lutTabs">
+            <button data-mode="split" class="on">Split</button>
+            <button data-mode="graded">Graded</button>
+            <button data-mode="physical">Physical</button>
+            <button data-mode="grade">Grade only</button>
+            <span class="grow"></span>
+            <label class="check"><input id="guides" type="checkbox" checked /> Zone guides</label>
+          </div>
+          <div class="stack">
+            <canvas id="lutGpu"></canvas>
+            <canvas id="lutOverlay"></canvas>
+            <div id="lutHover"></div>
+          </div>
+        </div>
+        <aside id="inspector"></aside>
+      </section>
+    </div>
+    <script type="module" src="./grade-editor/main.js"></script>
+  </body>
+</html>

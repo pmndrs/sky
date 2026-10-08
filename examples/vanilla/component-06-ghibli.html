@@ -34,7 +34,7 @@
   <body>
     <div id="info">
       @pmndrs/sky · <b>Ghibli countryside</b> — a low, sky-dominant view over grass, with the
-      <code>ghibli-summer</code> look track. Drag to orbit; GUI has time-of-day, look, haze and camera controls.
+      <code>ghibli-summer</code> sky grade. Drag to orbit; GUI has time-of-day, grade, haze and camera controls.
     </div>
     <script type="module">
       import * as THREE from 'three/webgpu'
@@ -42,7 +42,7 @@
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky, looks, lookTracks, registerLook, registerLookTrack, resolveLook, sampleLook } from '@pmndrs/sky'
+      import { Sky, SkyGrade, grades } from '@pmndrs/sky'
 
       // -----------------------------------------------------------------
       // Renderer + Sky
@@ -51,7 +51,7 @@
       const renderer = new THREE.WebGPURenderer({ antialias: true })
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
       renderer.setSize(window.innerWidth, window.innerHeight)
-      // Neutral: looks are display-referred, and Neutral leaves mid-range
+      // Neutral: the grade's replace colours are display-referred, and Neutral leaves mid-range
       // values untouched, so the authored cerulean / peach / navy stops show
       // on screen as authored. ACES and AgX desaturate bright values, which
       // is what made the noon sky read white.
@@ -75,7 +75,7 @@
       sky.attach(scene)
 
       // -----------------------------------------------------------------
-      // Utility math (used by the look-track colours below and by the
+      // Utility math (used by the grade colours below and by the
       // terrain/prop builders further down).
       // -----------------------------------------------------------------
 
@@ -99,24 +99,20 @@
       }
 
       // -----------------------------------------------------------------
-      // `ghibli-summer` — a richer, more saturated companion to the
-      // built-in `ghibli` track, registered here (not in src/) per the
-      // brief. Deeper cerulean zenith, a luminous pale horizon band, and
-      // higher chroma than the built-ins. Has its own morning keyframe
-      // (distinct from dusk) so a mid-morning sun sits solidly inside a
-      // vivid "day" palette instead of extrapolating a washed-out blend
-      // between dusk and day — elevation-keyed tracks can't distinguish
-      // rising vs. setting sun, so the fix is giving the ~6-14° band its
-      // own well-saturated stops rather than trying to detect AM/PM.
+      // `ghibli-summer` — a sky grade, built here rather than registered in
+      // src/. Deeper cerulean zenith, a luminous pale horizon band, and strong
+      // hue swap. Has its own morning keyframe (distinct from dusk) so a
+      // mid-morning sun sits solidly inside a vivid "day" palette instead of a
+      // washed-out blend between dusk and day — elevation keys can't tell a
+      // rising sun from a setting one, so the ~6-14° band gets its own stops.
+      //
+      // Each keyframe is a gradient layer: stops at sin(elevation) (converted
+      // to degrees below), `amount` swaps the physical hue for the gradient's,
+      // `replace` mixes in the gradient's own brightness. The sun tint is the
+      // grade's sun-side and glow zones. `bandTop` is where the pale horizon
+      // band hands off to the cerulean.
       // -----------------------------------------------------------------
 
-      // The four summer looks are authored as plain stop lists, then all
-      // re-expressed on ONE shared set of positions before registering. A
-      // track resamples any keyframe whose stops differ from the union of all
-      // keyframes, and resampling turns eased segments linear — so without
-      // this alignment, easing on the horizon band never reached the track.
-      // `bandTop` is where the pale horizon band hands off to the cerulean;
-      // smooth easing on both segments meeting there removes the visible kink.
       const SUMMER = {
         night: {
           stops: [
@@ -169,8 +165,11 @@
       }
       const EASES = { linear: 'linear', smooth: 'smooth', 'late (pow 1.8)': 1.8, 'early (pow 0.6)': 0.6 }
 
-      function buildSummerLooks() {
-        // Daytime anchors follow the band controls; the other looks keep their colours.
+      const sinToDeg = (x) => (Math.asin(Math.max(-1, Math.min(1, x))) * 180) / Math.PI
+      const ELEVATIONS = { night: [-20], dusk: [-6, -1], morning: [6], day: [14] }
+
+      /** The summer grade from SUMMER + the band controls; `override` pins amount / replace on every keyframe. */
+      function buildSummerGrade(override = {}) {
         SUMMER.day.stops = [
           [0.0, band.horizonColor],
           [0.08, '#bfe3f7'],
@@ -183,26 +182,35 @@
           [band.bandTop, '#4f97dd'],
           [1.0, band.zenithColor],
         ]
-        const positions = [-0.08, 0.0, 0.09, band.bandTop, 1.0]
-        const eases = ['linear', 'linear', 'smooth', EASES[band.bandEase], EASES[band.zenithEase]]
+        const keys = []
         for (const [name, def] of Object.entries(SUMMER)) {
-          const source = resolveLook({ stops: def.stops.map(([at, color]) => ({ at, color })) })
-          registerLook(`ghibli-summer-${name}`, {
-            stops: positions.map((at, k) => ({ at, color: sampleLook(source, at), ease: eases[k] })),
-            chroma: def.chroma,
-            value: def.value,
-            sunTint: def.sunTint ?? null,
-          })
+          const n = def.stops.length
+          const stops = def.stops.map(([at, color], i) => ({
+            at: sinToDeg(at),
+            color,
+            // Ease the two segments that meet the band top (and the zenith run).
+            ease: i === n - 2 ? EASES[band.bandEase] : i === n - 1 ? EASES[band.zenithEase] : 'linear',
+          }))
+          const tint = def.sunTint
+          for (const elevation of ELEVATIONS[name]) {
+            keys.push({
+              elevation,
+              ease: 'smooth',
+              gradient: { stops, amount: override.amount ?? def.chroma, replace: override.replace ?? def.value },
+              zones: tint
+                ? {
+                    // A low sun warms the whole sunward horizon; a high one just glows.
+                    sunward: { color: tint.color, amount: elevation < 8 ? tint.strength : 0 },
+                    glow: { color: tint.color, amount: tint.strength * 0.7 },
+                  }
+                : {},
+              shape: { glowSize: tint ? 30 + tint.falloff * 40 : 30, sunwardWidth: 75 },
+            })
+          }
         }
-        registerLookTrack('ghibli-summer', [
-          { elevation: -20, look: 'ghibli-summer-night' },
-          { elevation: -6, look: 'ghibli-summer-dusk' },
-          { elevation: -1, look: 'ghibli-summer-dusk' },
-          { elevation: 6, look: 'ghibli-summer-morning' },
-          { elevation: 14, look: 'ghibli-summer-day' },
-        ])
+        return keys
       }
-      buildSummerLooks()
+      const summerGrade = new SkyGrade({ name: 'ghibli-summer', keys: buildSummerGrade() })
 
       // -----------------------------------------------------------------
       // Deterministic PRNG — stable prop placement across reloads.
@@ -1073,8 +1081,7 @@
         None: THREE.NoToneMapping,
       }
 
-      const trackNames = Object.keys(lookTracks)
-      const lookChoices = ['physical', ...trackNames.map((n) => `track:${n}`), ...Object.keys(looks)]
+      const gradeChoices = ['physical', 'ghibli-summer', ...Object.keys(grades)]
 
       const state = {
         timeOfDay: 9.5,
@@ -1083,34 +1090,23 @@
         exposure: 40,
         toneMapping: 'Neutral',
         toneExposure: renderer.toneMappingExposure,
-        look: 'track:ghibli-summer',
-        chroma: 0.88,
-        value: 0.32,
-        intensity: 1.0,
+        grade: 'ghibli-summer',
+        amount: 0.88,
+        replace: 0.32,
         hazeStrength: 1.0,
         cloudDrift: true,
         autoOrbit: false,
       }
 
-      /** Slider values the user has moved while a track is selected. */
-      const trackOverrides = {}
-      const applySelectedLook = () => {
-        if (state.look === 'physical') {
-          sky.setLook(null)
-        } else if (state.look.startsWith('track:')) {
-          sky.setLookTrack(state.look.slice('track:'.length), trackOverrides)
-        } else {
-          sky.setLook({ preset: state.look, chroma: state.chroma, value: state.value, intensity: state.intensity })
-        }
-      }
-
-      const syncSlidersFromPreset = () => {
-        if (state.look === 'physical' || state.look.startsWith('track:')) return
-        const look = looks[state.look]
-        if (!look) return
-        state.chroma = look.chroma
-        state.value = look.value
-        state.intensity = look.intensity
+      /** Slider values the user has moved; untouched ones keep each keyframe's own. */
+      const overrides = {}
+      const applySelectedGrade = () => {
+        if (state.grade === 'physical') sky.setGrade(null)
+        else if (state.grade === 'ghibli-summer') {
+          // Same SkyGrade instance: setKeys re-bakes it in place.
+          summerGrade.setKeys(buildSummerGrade(overrides))
+          sky.setGrade(summerGrade)
+        } else sky.setGrade(state.grade)
       }
 
       const timeGui = renderer.inspector.createParameters('Time & Sun')
@@ -1130,29 +1126,24 @@
         renderer.toneMappingExposure = v
       })
 
-      const lookGui = renderer.inspector.createParameters('Look')
-      lookGui.add(state, 'look', lookChoices).onChange(() => {
-        for (const k of Object.keys(trackOverrides)) delete trackOverrides[k]
-        syncSlidersFromPreset()
-        applySelectedLook()
+      const gradeGui = renderer.inspector.createParameters('Grade')
+      gradeGui.add(state, 'grade', gradeChoices).onChange(() => {
+        for (const k of Object.keys(overrides)) delete overrides[k]
+        applySelectedGrade()
       })
-      // On a track, a slider pins its field across the whole track only once
-      // it has been moved; untouched fields keep each keyframe's own value.
+      // A slider pins its field across the whole summer grade only once it has
+      // been moved; untouched fields keep each keyframe's own value.
       const touch = (key) => () => {
-        trackOverrides[key] = state[key]
-        applySelectedLook()
+        overrides[key] = state[key]
+        applySelectedGrade()
       }
-      lookGui.add(state, 'chroma', 0, 1, 0.01).onChange(touch('chroma'))
-      lookGui.add(state, 'value', 0, 1, 0.01).onChange(touch('value'))
-      lookGui.add(state, 'intensity', 0, 4, 0.01).onChange(touch('intensity'))
+      gradeGui.add(state, 'amount', 0, 1, 0.01).onChange(touch('amount'))
+      gradeGui.add(state, 'replace', 0, 1, 0.01).onChange(touch('replace'))
 
       // Horizon band: where the pale horizon hands off to the cerulean, and how
-      // the two segments meeting there ease. Rebuilds the summer looks + track.
+      // the two segments meeting there ease. Rebuilds the summer grade.
       const bandGui = renderer.inspector.createParameters('Horizon band')
-      const rebuildBand = () => {
-        buildSummerLooks()
-        applySelectedLook()
-      }
+      const rebuildBand = () => applySelectedGrade()
       bandGui.add(band, 'bandTop', 0.15, 0.8, 0.01).onChange(rebuildBand)
       bandGui.add(band, 'bandEase', Object.keys(EASES)).onChange(rebuildBand)
       bandGui.add(band, 'zenithEase', Object.keys(EASES)).onChange(rebuildBand)
@@ -1180,7 +1171,8 @@
       window.__camera = camera
       window.__controls = controls
       window.__state = state
-      window.__applyLook = applySelectedLook
+      window.__applyGrade = applySelectedGrade
+      window.__summerGrade = summerGrade
       window.__band = band
       window.__rebuildBand = rebuildBand
       window.__updateLighting = () => updateLighting(sky.sunElevation)
@@ -1188,7 +1180,7 @@
       window.__sunLight = sun.light
       window.__moonLight = moon
 
-      applySelectedLook()
+      applySelectedGrade()
 
       // -----------------------------------------------------------------
       // Animation loop

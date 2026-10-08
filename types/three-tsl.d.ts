@@ -19,6 +19,7 @@ export const Loop: any
 export const PI: any
 export const abs: any
 export const acos: any
+export const asin: any
 export const add: any
 export const cameraPosition: any
 export const cameraProjectionMatrix: any
@@ -60,7 +61,10 @@ export const rtt: any
 export const saturate: any
 export const screenSize: any
 export const screenCoordinate: any
+export const screenUV: any
+export const renderOutput: any
 export const select: any
+export const sign: any
 export const sin: any
 export const smoothstep: any
 export const sqrt: any

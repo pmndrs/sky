@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Color, PerspectiveCamera, Scene, Texture, Vector3 } from 'three/webgpu'
 
 import { Sky } from '../src/Sky'
-import { looks } from '../src/looks'
+import { MAX_GRADE_KEYS, SkyGrade, horizonToZenith } from '../src/grade'
 
 // Minimal renderer surface for constructing and disposing a Sky in node.
 function mockRenderer(): any {
@@ -236,19 +236,47 @@ describe('Sky', () => {
     sky.dispose()
   })
 
-  it('setLookTrack overrides survive sun changes and leave the registry untouched', () => {
-    const sky = new Sky(mockRenderer())
-    sky.setLookTrack('ghibli', { chroma: 0.2, value: 0.9 })
-    const u = sky.mesh.lookUniforms
-    expect(u.chroma.value).toBeCloseTo(0.2, 9)
-    expect(u.value.value).toBeCloseTo(0.9, 9)
-    sky.setTimeOfDay(19) // re-samples the track
-    expect(u.chroma.value).toBeCloseTo(0.2, 9)
-    expect(u.value.value).toBeCloseTo(0.9, 9)
-    // the built-in look objects the track references are not mutated
-    expect(looks['ghibli-day'].chroma).toBe(0.7)
-    sky.setLookTrack('ghibli') // no overrides → keyframe values again
-    expect(u.chroma.value).toBeCloseTo(0.7, 9)
+  it('setGrade uploads the tables, follows the sun, re-bakes on edits and clears', () => {
+    const sky = new Sky(mockRenderer(), { sunDirection: { elevation: 5, azimuth: 270 } })
+    const baker = sky.baker
+    const u = sky.mesh.gradeUniforms
+    expect(u.enabled.value).toBe(0)
+
+    const grade = sky.setGrade([{ elevation: 0, exposure: 1 }, { elevation: 10 }])!
+    expect(grade).toBeInstanceOf(SkyGrade)
+    expect(sky.grade).toBe(grade)
+    expect(u.enabled.value).toBe(1)
+    expect(u.uploadedKeys).toBe(2)
+    expect(baker.cubeDirty).toBe(true)
+    // Halfway between the two keyframes: w between slice centres 0 and 1.
+    expect(u.w.value).toBeCloseTo(1 / MAX_GRADE_KEYS, 6)
+
+    // The sun moves → the next update re-syncs the depth coordinate.
+    sky.setSunDirection({ elevation: 10, azimuth: 270 })
+    baker._syncGrade()
+    expect(u.w.value).toBeCloseTo(1.5 / MAX_GRADE_KEYS, 6)
+
+    // Editing the assigned grade re-uploads and marks the cube dirty.
+    baker.cubeDirty = false
+    const data = u.fillGainTexture.image.data as Uint16Array
+    const before = data[3]
+    grade.updateKey(0, { zones: { zenith: { brightness: 2 } }, exposure: 0 })
+    expect(baker.cubeDirty).toBe(true)
+    expect(u.fillGainTexture.version).toBeGreaterThan(0)
+    expect(data[3]).toBe(before) // horizon texel of slice 0: brightness unchanged there
+
+    // A different grade unsubscribes the first.
+    const fixed = sky.setGrade(horizonToZenith('#ffaa66', '#3355cc'))!
+    baker.cubeDirty = false
+    grade.updateKey(0, { exposure: -1 })
+    expect(baker.cubeDirty).toBe(false)
+    expect(u.uploadedKeys).toBe(1)
+    expect(fixed.keys[0].gradient?.replace).toBe(1)
+
+    sky.setGrade(null)
+    expect(sky.grade).toBeNull()
+    expect(u.enabled.value).toBe(0)
+    expect((u.matrix.value as any).elements).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1])
     sky.dispose()
   })
 

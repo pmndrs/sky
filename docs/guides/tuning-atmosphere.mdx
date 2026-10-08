@@ -198,6 +198,28 @@ A `createSun()` light's colour is its own colour multiplied by the sun
 colour. Set its own colour with `sun.setColor(...)`; a colour written straight
 to `sun.light.color` is replaced on the next `setSunColor` or sun move.
 
+## Unreal-parity knobs
+
+Three of Unreal's SkyAtmosphere artistic controls, for people porting a sky
+from there:
+
+```js
+sky.setMultiScatteringFactor(1.4) // gain on multiple scattering; rebakes LUTs
+sky.setSkyLuminanceFactor('#ffeedd') // per-channel tint after any grade; cube re-bake only
+sky.setAerialPerspectiveDistanceScale(2) // haze per metre; sample-time only, nothing rebakes
+```
+
+`setMultiScatteringFactor` is the one that feeds the LUT bake — set it when
+you load a preset, not per frame. The other two are uniforms.
+
+Unreal's `TransmittanceMinLightElevationAngle` is deliberately **not** here:
+it clamps the sun _light's_ transmittance colour, and this library's
+`DirectionalLight` helper (`SkySun`) takes its colour from `setSunColor` (its
+own base colour × the sun's colour), not from atmospheric transmittance, so
+there is nothing to clamp.
+
+For art direction beyond the physics, see [Sky grades](./sky-grades).
+
 ## Direct overrides
 
 ```js

@@ -25,8 +25,7 @@ export interface SkyContextValue {
   setHazeStrength(hazeStrength: number): void
   setHazePolicy(hazePolicy: any): void
   setHazeAltitudeBlend(hazeAltitudeBlend: any): void
-  setLook(look: any): void
-  setLookTrack(track: any, overrides?: any): void
+  setGrade(grade: any): any
   setSkyLuminanceFactor(factor: any): void
   setSunColor(color: any): void
   setAerialPerspectiveDistanceScale(value: number): void

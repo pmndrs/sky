@@ -24,7 +24,8 @@ The atmosphere itself builds on Sébastien Hillaire's
 (EGSR 2020), and is checked against his reference code and Bruneton's
 precomputed scattering. Around it you also get aerial-perspective haze for
 distant geometry (with optional light shafts) or a cheaper sky-coloured height
-fog, a night sky with pixel-sharp stars and the Milky Way, and stylized looks.
+fog, a night sky with pixel-sharp stars and the Milky Way, and sky grades: an
+authored, time-of-day lookup table over the physical sky, with an editor.
 Vanilla and React (R3F) entry points, one `update()` call per frame.
 
 **[Full docs →](https://sky.docs.pmnd.rs)** · **[Demo gallery →](https://sky.docs.pmnd.rs/examples/)**
@@ -130,7 +131,7 @@ depends on is only pulled into bundles that actually need it.
 
 `<Sky>` props mirror the facade: construction options (`preset`, `quality`,
 …) rebuild the instance, the rest (`timeOfDay`, `exposure`, `sunColor`,
-`look` / `lookTrack`, haze knobs, …) go through the setters live. See the
+`grade`, haze knobs, …) go through the setters live. See the
 [React reference](https://sky.docs.pmnd.rs/api/react) for the full props table.
 
 To compose with your own pipeline, skip `<AutoHaze />` and grab the instance
@@ -160,10 +161,11 @@ function CustomPipeline() {
 - **[Haze guide](https://sky.docs.pmnd.rs/guides/haze)** — aerial perspective, policies, known issues, height fog
 - **[Planet-scale guide](https://sky.docs.pmnd.rs/guides/planet-scale)** — `planetCenter`, radial frames, flight controls
 - **[Tuning the atmosphere](https://sky.docs.pmnd.rs/guides/tuning-atmosphere)** — `AtmosphereParams`, presets
-- **[Stylized looks](https://sky.docs.pmnd.rs/guides/looks)** — colour ramps over the physical sky, elevation-keyed tracks
+- **[Sky grades](https://sky.docs.pmnd.rs/guides/sky-grades)** — art-direct the sky across the day: keyframed grades, gradients, a night fill and ambient light, and the editor
+- **[Grade editor and demos](https://sky.docs.pmnd.rs/guides/grade-editor)** — author a grade, export it, load it in your app
 - **[Night sky](https://sky.docs.pmnd.rs/guides/night-sky)** — star sprites and the baked Milky Way
 - **[React reference](https://sky.docs.pmnd.rs/api/react)** — `<Sky>` props, `<AutoHaze>`, `useSky()`
-- **[Upgrading](https://sky.docs.pmnd.rs/guides/upgrading)** — what changed in 0.5 (three r186, background shader compiles) and 0.4
+- **[Upgrading](https://sky.docs.pmnd.rs/guides/upgrading)** — what changed in 0.6 (looks replaced by sky grades), 0.5 (three r186) and 0.4
 
 A condensed method table for the `Sky` facade:
 
@@ -176,7 +178,7 @@ A condensed method table for the `Sky` facade:
 | `setExposure(n)`                                                                             | Sky luminance scale (default 40)                                                                                               |
 | `setSunDisc(boolean \| { angularDiameter })`                                                 | Disc visibility + size in radians                                                                                              |
 | `setSunColor(color)`                                                                         | Colour of the sun as a light (`'neutral'`, `'bruneton'`, hex, `Color`, `[r,g,b]`)                                              |
-| `setLook(look)` / `setLookTrack(track)`                                                      | Stylized colour ramp over the physical sky, fixed or following sun elevation                                                   |
+| `setGrade(grade)`                                                                            | Sky grade: keyframed colour over the physical sky, or a gradient / solid sky (`horizonToZenith`, `gradientGrade`, `solidSky`)  |
 | `setTurbidity(n)`                                                                            | Mie scattering scalar (1 = Earth)                                                                                              |
 | `setGroundAlbedo(n \| Vector3)`                                                              | Multi-scatter LUT input                                                                                                        |
 | `setMirrorBelowHorizon(boolean)`                                                             | Bake a Y-mirrored sky on the cube's lower hemisphere instead of lit-ground albedo (clean sky HDRI for reflective-floor scenes) |
@@ -226,7 +228,7 @@ LUT debug views, and the numbered scratch demos used during development.
 ## Status
 
 Baked sky, aerial-perspective haze with light shafts, sky-coloured height fog,
-planet-scale (ground→orbit) rendering, the night sky, and stylized looks are
+planet-scale (ground→orbit) rendering, the night sky, and sky grades are
 all functional. Volumetric clouds are out of scope.
 
 ## Contributing

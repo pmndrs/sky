@@ -11,7 +11,7 @@
  *   BASE=http://localhost:5174/ node scripts/verify-mrt-isolation.mjs
  *
  * Chromium is launched with WebGPU flags; if no adapter is found headless it
- * retries headed (same pattern as verify-looks.mjs).
+ * retries headed.
  */
 import { chromium } from 'playwright'
 

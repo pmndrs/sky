@@ -1,0 +1,301 @@
+---
+title: Sky grades
+description: Art-direct the sky across the whole day with an authored, keyframed lookup table over the physical sky, a gradient or solid colour, plus a night fill and ambient light.
+---
+
+A **sky grade** is a lookup table an artist authors over the physical sky,
+keyed on the time of day. Each keyframe says how to colour the sky at one sun
+elevation, region by region; the sky blends the keyframes on either side of
+the sun as it moves. It is built for the workflow artists already know from
+time-of-day colour grading in game engines: scrub through the day, stop where
+it looks wrong, fix it there.
+
+```js
+import { Sky, SkyGrade } from '@pmndrs/sky'
+
+const sky = new Sky(renderer, { timeOfDay: 19 })
+const grade = sky.setGrade('storybook') // a built-in grade, as an editable SkyGrade
+
+// Change it live, from your own UI:
+grade.updateKey(2, { zones: { antisun: { color: '#e9a3c9', amount: 0.7 } } })
+
+// Save and load:
+localStorage.grade = JSON.stringify(grade)
+sky.setGrade(localStorage.grade)
+```
+
+Or skip keyframes entirely and hand it a gradient:
+
+```js
+import { horizonToZenith, gradientGrade, solidSky } from '@pmndrs/sky'
+
+sky.setGrade(horizonToZenith('#f3c98f', '#4f8fdb')) // two colours, fixed all day
+sky.setGrade(solidSky('#7f9fd0')) // one colour
+```
+
+## Why a grade, not a painted sky
+
+A grade never replaces the physics. It **grades** what the atmosphere
+integrator produces: it swaps hue, adjusts brightness and adds light, by
+region, but the sky underneath still reacts to the sun, altitude, turbidity
+and exposure. That has three consequences that a hand-painted sky would lose:
+
+- **It holds up when anything else changes.** Fly up, raise the turbidity or
+  change the exposure, and the graded sky follows instead of breaking.
+- **Haze matches it.** The grade is linear in the light it is applied to, so
+  [aerial-perspective haze](./haze) on distant geometry is graded by exactly
+  the same table. A mountain silhouette never shows a seam against the
+  graded sky behind it, and a fully hazed one fades into the graded sky,
+  night fill included.
+- **The lighting matches it.** The grade is applied in the sky shader, before
+  the cube bake, so `scene.background`, reflections and the environment
+  (IBL) lighting all carry it.
+
+## What a keyframe controls
+
+Keyframes sit on **sun elevation in degrees**, because elevation is what
+decides how a sky reads at any latitude and date: `time: 6` is full night at
+latitude 65° in December and hours into daylight there in June.
+
+| Group      | Controls                                                                                                                                              |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Whole sky  | `exposure` (EV), `saturation`, `temperature`, `tint`, `hue`                                                                                           |
+| Gradient   | `gradient: { stops, amount, replace }` — colour stops over elevation; see [Gradients](#gradients)                                                     |
+| Zones      | `zenith`, `horizon`, `sunward` (sun side of the horizon), `antisun` (away side), `glow` (around the sun), `ground` (below the horizon)                |
+| Each zone  | `color` (colorize target), `amount` (0..1, how far the hue is swapped), `brightness` (EV)                                                             |
+| Zone shape | `horizonHeight` (where the horizon zone hands over to the zenith), `sunwardWidth`, `antisunWidth` (azimuth half-widths), `glowSize` (radius), degrees |
+| Night fill | `fill: { zenith, horizon, intensity }` — light added to the sky so the night reads deep blue instead of black                                         |
+| Ambient    | `ambient: { color, groundColor, intensity }` — drives [`SkyAmbient`](#ambient-light) at this time of day                                              |
+
+`zenith` and `horizon` are the base layer. The other zones composite over it
+like layers whose opacity is their mask × `amount`, so a zone you leave at
+amount 0 is transparent: it never pulls the colour back to neutral.
+
+**Colorize keeps the channel average, not the luminance.** Swapping a bright
+sunset to a deep blue at the same luminance needs a blue channel about 14×
+the luminance, which every tonemapper clips into flat bands at sunset.
+Keeping the channel average costs at most
+3× on a pure primary, so a saturated target reads as a deeper colour, which
+is also what an artist picking it expects.
+
+**The fill is display-referred**: at intensity 1
+it reaches the tonemapper at its authored colour (the sky divides by
+`renderer.toneMappingExposure`), so `#0b1836` on the fill shows as about
+`#0b1836` on screen under neutral tone mapping.
+
+Easing (`ease: 'linear' | 'smooth'`) applies to the segment entering a
+keyframe. Past the first and last keyframes the grade holds their settings.
+
+## Gradients
+
+A keyframe can carry a colour gradient over elevation, with two strengths:
+
+- **`amount`** (0..1) swaps the physical hue for the gradient's and keeps the
+  physical brightness. The sky still brightens toward the sun, darkens at
+  night and responds to altitude; only the colours change.
+- **`replace`** (0..1) mixes the gradient in as the sky itself, at its
+  authored colour and brightness. At 1 the sky _is_ the gradient: the same at
+  any time of day, which is what you want for a stylized fixed sky or a solid
+  colour. Like the fill, it is display-referred, so the authored colours reach
+  the screen as authored.
+
+```js
+const grade = new SkyGrade([
+  {
+    elevation: -12,
+    gradient: {
+      stops: [
+        { at: 0, color: '#26365e' },
+        { at: 90, color: '#070c20', ease: 'smooth' },
+      ],
+      replace: 0.6,
+    },
+  },
+  {
+    elevation: 10,
+    gradient: {
+      stops: [
+        { at: -5, color: '#ff8a5c' },
+        { at: 6, color: '#ffcf8f' },
+        { at: 25, color: '#a685c9', ease: 'smooth' },
+        { at: 90, color: '#33448f' },
+      ],
+      amount: 0.9,
+    },
+  },
+])
+```
+
+Stops are `{ at, color, ease? }`: `at` is the view elevation in degrees (−90
+nadir, 0 horizon, 90 zenith), and `ease` shapes the segment entering the stop
+(`'linear'`, `'smooth'`, or a number `n` for `pow(t, n)`). Outside the first
+and last stop the colour holds. Zones still apply on top: their colorize
+grades the physical part, and their brightness scales the replaced gradient
+too, so a glow brightens a fixed sky around the sun.
+
+Replacing is still linear in the light (`physical × (1 − replace) + gradient
+× replace`), so haze stays coherent: distant geometry fades into the gradient
+as its haze opacity rises, and the environment lighting is lit by the
+gradient's colours.
+
+The helpers build a one-keyframe grade, which holds at every time of day:
+
+| Helper                                    | Builds                                                                                                                                             |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gradientGrade(stops, opts?)`             | A gradient from your stops.                                                                                                                        |
+| `horizonToZenith(horizon, zenith, opts?)` | Two colours; `opts.ease` (default `'smooth'`), `opts.height` (where the zenith colour is reached, default 90°), `opts.ground` (below the horizon). |
+| `solidSky(color, opts?)`                  | One colour everywhere.                                                                                                                             |
+
+All three take `amount` (default 1) and `replace` (default **1**, so the
+sky shows exactly your colours) and return an editable `SkyGrade`: add
+keyframes to it later and it starts following the time of day. Pass
+`replace: 0` for a tinted physical sky instead.
+
+## The editor
+
+A step-by-step walkthrough, export/import and the demos are in
+[Grade editor and demos](./grade-editor).
+
+`examples/vanilla/25-sky-grade-editor.html` is a complete authoring tool,
+built only on the public API:
+
+- **Top:** the scene, graded live: sky, haze on distant mountains, IBL on the
+  props, the ambient light, stars at night.
+- **Middle:** the time-of-day timeline, keyed on sun elevation, with the
+  twilight marks and a strip showing what the grade does at every elevation.
+  Drag to scrub, click a keyframe to jump to it, drag it to move it,
+  double-click to add one.
+- **Bottom left:** the whole sky dome, flattened (azimuth from the sun across,
+  elevation up), as `split` (physical | graded), `graded`, `physical`, or
+  `grade only` (the grade on a flat grey, physics out of the way). Zone guides
+  show where each zone sits; click the sky to jump to that zone's controls.
+- **Bottom right:** the keyframe inspector. Between keyframes it shows what
+  the grade interpolates there, and the first edit adds a keyframe at the
+  playhead.
+
+Undo/redo, autosave, Save/Load as JSON, and `B` to bypass the grade for an
+A/B with the physical sky. **Start from…** offers the built-in grades and the
+gradient helpers (a fixed gradient, a tinted one that keeps the physical
+light, a solid colour). A grade with a single keyframe holds all day, so the
+editor edits that keyframe wherever the playhead is; add a second one (`K`)
+to make it follow the time of day.
+
+## Save and load
+
+```js
+const json = JSON.stringify(grade) // or grade.toJSON()
+const loaded = SkyGrade.fromJSON(json) // string or parsed object
+sky.setGrade(json) // setGrade takes any of these directly
+```
+
+The file is versioned (`format: 'pmndrs-sky-grade'`, `version: 1`) and
+stores colours as sRGB hex, so it reads and diffs well. A newer version than
+the build understands is rejected rather than misread.
+
+## Building your own UI
+
+Everything the editor does is public:
+
+| API                                                           | Use                                                                                                                                 |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `new SkyGrade(input?)`                                        | `{ name?, keys: SkyGradeKeyInput[] }` or a key array.                                                                               |
+| `grade.addKey(input)` / `updateKey(i \| key, patch)`          | Nested fields merge: `updateKey(0, { zones: { glow: { amount: 0.4 } } })` leaves the glow's colour alone. Returns the new keyframe. |
+| `grade.removeKey(i \| key)` / `setKeys(keys)`                 | Keyframes stay sorted; at most `MAX_GRADE_KEYS` (16).                                                                               |
+| `grade.insertKeyAt(elevation)`                                | Adds a keyframe that starts from what the grade already does there.                                                                 |
+| `grade.keyAt(elevation, tol?)`                                | The keyframe at an elevation, if any.                                                                                               |
+| `grade.interpolatedKeyInput(elevation)`                       | The settings in force between keyframes, for showing them in a UI.                                                                  |
+| `grade.onChange(fn)` / `grade.revision`                       | Change notifications. A sky using the grade subscribes itself.                                                                      |
+| `grade.evaluate(sunElevation)`                                | Segment, global operator and ambient at a sun elevation.                                                                            |
+| `grade.apply(rgb, sunEl, viewEl, azimuth, opts?)`             | Grade a linear colour on the CPU — the twin of the shader, for swatches. `azimuth` is from the sun, 0..180.                         |
+| `gradeZoneWeights(key, viewEl, azimuth)`                      | How much each zone covers a direction — for hit-testing and guides.                                                                 |
+| `new SkyGradePreview(sky, { mode })`                          | The dome view as a full-screen quad, for any canvas or render target. `toDome` / `fromDome` map positions to directions.            |
+| `registerGrade(name, input)` / `resolveGrade(any)` / `grades` | The registry `setGrade(name)` reads.                                                                                                |
+
+`SkyGradePreview` renders into whatever target is current. For a second
+canvas, use three's `CanvasTarget`, and set its size while it is the active
+canvas target (the renderer resizes its depth buffer from that target's
+resize event, which it only listens to on the active one):
+
+```js
+const preview = new SkyGradePreview(sky, { mode: 'split' })
+const target = new THREE.CanvasTarget(previewCanvas)
+
+// each frame, after the main render:
+const main = renderer.getCanvasTarget()
+renderer.setCanvasTarget(target)
+target.setSize(previewCanvas.clientWidth, previewCanvas.clientHeight, false) // when it changed
+preview.render(renderer)
+renderer.setCanvasTarget(main)
+```
+
+In React, pass the grade as a prop. A `SkyGrade` instance is kept by
+reference, so editing it updates the sky live:
+
+```jsx
+<Sky grade={grade} />
+```
+
+## Ambient light
+
+The physical night is close to black, and the moon does not change that much
+(full moonlight is about 400,000× dimmer than the sun, and not blue: the
+"blue" of moonlight is the eye's rod vision). Film and games light night
+scenes blue anyway. `SkyAmbient` does that: a hemisphere fill light that fades
+in as the sun goes down.
+
+```js
+const ambient = sky.createAmbient() // a dim moonlit blue below −6°, off in daylight
+ambient.attach(scene)
+
+ambient.setNight({ color: '#7088c0', intensity: 1.2 })
+ambient.setFade(-8, 2) // full night at −8°, full day at 2°
+ambient.setDay({ intensity: 0.2 }) // a little fill in daylight too
+```
+
+When the sky's grade has keyframes with `ambient`, the light follows those
+instead, so the artist sets the night light on the same timeline as the sky.
+A keyframe without `ambient` counts as off between keyframes that have one.
+`setFollowGrade(false)` keeps the helper on its own values.
+
+The night fill does part of this job too: it is light in the cube, so the
+environment lighting turns blue with it. The ambient light covers materials
+without environment lighting, and gives direct control of how bright a night
+scene reads.
+
+## Banding: dither the output
+
+Skies are slow gradients, and a dusk or night sky is a slow gradient in the
+darkest few dozen 8-bit levels: one level can span 50 pixels, which reads as
+contour bands, especially in blues. three's WebGPU output does not dither.
+`ditherOutput` tone-maps, encodes and adds ±1 level of triangular noise, which
+is the only place it has the right size:
+
+```js
+import { ditherOutput } from '@pmndrs/sky'
+
+const pipeline = new THREE.RenderPipeline(renderer)
+pipeline.outputColorTransform = false // ditherOutput does the transform
+pipeline.outputNode = ditherOutput(sky.applyHaze(scenePass.getTextureNode(), { scenePass }))
+```
+
+On a dark dusk gradient in the editor, the longest run of identical pixels
+down a column went from 57 px to 2 px.
+
+## Cost
+
+- **At runtime:** two texture taps and a little arithmetic per sky pixel,
+  and nothing at all while no grade is assigned. A sun move writes two
+  uniforms. The shaders came out smaller than with the looks this replaced
+  (sky mesh 31.3 → 29.1 KB of WGSL, haze pass 48.1 → 47.3 KB).
+- **Per edit:** the bake is CPU work, about 1.3 ms for five keyframes
+  including the half-float upload, and the cube and IBL re-bake, the same
+  cost as moving the sun. The atmosphere LUTs are never rebuilt.
+- **Memory:** two 32 × 64 × 16 RGBA half-float tables, 512 KB together,
+  allocated once.
+
+## Verifying
+
+`examples/vanilla/scripts/verify-grade.mjs` renders the dome in `grade only`
+mode with tone mapping off and checks the GPU result against
+`SkyGrade.apply` at a keyframe and halfway between two (worst error within a
+few 8-bit levels).

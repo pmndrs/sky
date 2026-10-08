@@ -288,9 +288,9 @@ This bit `multiScatteringFactor` (2026-09-04): added to the TSL integrator,
 verified "no change" in the browser, root cause was the missing WGSL half.
 WGSL params are **positional fn args**, so adding one means (a) the fn
 signature in `luts.wgsl.ts`, (b) the multiply site, (c) the named key in the
-`backends/wgsl/luts.ts` wrapper call. The headless verify script
-(`examples/vanilla/scripts/verify-looks.mjs`) is what caught it — a diff of
-~0.0003 where >0 was expected. For any new atmosphere param: edit both twins,
+`backends/wgsl/luts.ts` wrapper call. A headless verify script (since
+removed with the looks) is what caught it — a diff of ~0.0003 where >0 was
+expected. For any new atmosphere param: edit both twins,
 then check `examples/vanilla/parity/` still agrees.
 
 ### Haze sky mask: test the raw depth, never `viewZ`/`linearDepth` against `far` (2026-09-26)
@@ -431,8 +431,10 @@ NoToneMapping + a tiny exposure, read the pixel back and divide by the
 exposure" returns clipped garbage ×(1/exposure). That exact trick produced a
 20× wrong measurement of the noon sky (read ~10.5, really ~0.5–1) and PR #10
 recalibrated look `intensity` against it, which pushed every `value > 0` look
-to white (fixed 2026-09-26: looks are now display-referred, ramp ÷
-toneMappingExposure). To read linear HDR values, scale the source instead
+to white (fixed 2026-09-26 by making looks display-referred, ramp ÷
+toneMappingExposure; looks are gone since 0.6, and the grade's fill and
+gradient `replace` are display-referred the same way, via the mesh's
+`displayScale`). To read linear HDR values, scale the source instead
 (e.g. `sky.setExposure(40 * k)` with a small k and NoToneMapping), or read a
 render target directly. Sanity-check any readback against a tonemapped render
 of the same pixel before trusting it.
@@ -539,6 +541,57 @@ is byte-identical across reloads, which Chrome's shader cache needs — it is):
   renderer whose `render` calls `compileAsync`). three's PMREM generator and
   the sky cube's mipmap pass are gone on WebGPU: `SkyPmrem` allocates the
   PMREM target itself and fills the cube's listed mips from its own chain.
+
+### Sky grades: keep the operator linear, and where each part lives (2026-10-08)
+
+`src/grade.ts` (data, bake, JSON, CPU twin) → `src/sky/GradeUniforms.ts` (two
+32×64×16 RGBA half `Data3DTexture`s, one depth slice per keyframe, allocated
+once and rewritten in place) → `src/backends/tsl/grade.tsl.ts` (sampled in the
+sky mesh and the haze pass). The sun's place between keyframes is a JS-side
+uniform `w = (index + fraction + 0.5) / 16`, so linear filtering in depth _is_
+the keyframe blend; the baker syncs it in `update()` from the sun's elevation
+against the camera's local up (planet mode follows).
+
+- **The operator must stay linear in the light** (`max(M·c, 0)`, colorize by
+  channel _average_, scalar gain). The haze grades AP inscatter and the shadow
+  deficit with the same table, and both rely on linearity; the fill is the one
+  affine term and is weighted by AP opacity on haze, 0 on the deficit. A new
+  control that is nonlinear in `c` belongs in the sky mesh only, or breaks
+  silhouettes.
+- **Colorizing at constant luminance bands.** Normalising a saturated blue target to unit
+  luminance needs a blue channel ~14× the luminance, which ACES clips into flat
+  regions — the sunset artefact of the looks this replaced. The average costs ≤3×.
+- `scripts/verify-grade.mjs` checks the GPU dome (`SkyGradePreview` `grade`
+  mode, NoToneMapping) against `SkyGrade.apply` (worst ~3 / 255).
+
+### Banding is 8-bit output, fixed by `ditherOutput` — after the tonemapper
+
+A dusk/night sky gradient spans a few dozen 8-bit levels; undithered, one
+level covered 57 px in the editor (visible contours in blues). three's
+WebGPU output has no dithering. `ditherOutput(node)` calls `renderOutput`
+then adds ±1 LSB triangular noise; the pipeline needs
+`outputColorTransform = false` or the transform runs twice. Dither added
+before the tonemapper (or baked into the cube) is the wrong size or filtered
+away.
+
+### `CanvasTarget`: resize it while it is the active target
+
+A second canvas on the same renderer (`renderer.setCanvasTarget(target)`,
+r186) gets its depth buffer from the renderer, which resizes it from the
+target's `resize` event — and only listens to the _active_ target. A
+`setSize` from a ResizeObserver while the main canvas is active leaves the
+depth at 300×150: "depth stencil attachment size does not match". Queue the
+size and apply it right after `setCanvasTarget(target)` (the grade editor's
+`lutSize`).
+
+### Comparing renders across branches: three's UUIDs consume `Math.random`
+
+Seeding `Math.random` does not make two branches build the same random
+geometry if one creates more three objects first (each `generateUUID` draws
+from it). Compare geometry-free regions (sky, a hazed ground strip), or
+remove the randomness. And if a page warns `compileComputeAsync is not a
+function`, `node_modules` still has three r185: `pnpm install`, then restart
+Vite with `--force` (its dep cache pins the old build).
 
 ### Vite HMR + WebGPU shader edits
 
@@ -665,6 +718,9 @@ src/
 ├── sky/
 │   ├── SkyAtmosphereBaker.js   public API (setSun, setAtmosphereParams, update)
 │   ├── SkyAtmosphereMesh.js    visible sky, samples SkyView LUT
+│   ├── GradeUniforms.ts        sky grade tables (3D, slice per keyframe) + uniforms
+│   ├── SkyGradePreview.ts      flat dome view (physical/graded/split/grade) for UIs
+│   ├── SkyAmbient.ts           night fill HemisphereLight, follows grade keyframes
 │   ├── AtmosphereUniforms.js   create/updateAtmosphereUniforms (TSL uniform bundle)
 │   ├── luts/
 │   │   ├── TransmittanceLUT.js 256×64, on atmos change
@@ -678,6 +734,7 @@ examples/
 ├── 10-transmittance-lut.html  fullscreen TLUT view + readback
 ├── 11-multiscatter-lut.html   TLUT|MS split + ?debug=<mode> bisection
 ├── 12-skyview-lut.html        fullscreen SkyView LUT view (40× scaled)
+├── 25-sky-grade-editor.html   split-screen grade editor (grade-editor/*.js)
 └── parity/                    WGSL-core vs TSL-twin numeric parity harness
     ├── 00-leaf-helpers.html   phases, ray-sphere
     └── 01-uv-maps.html        SkyView UV maps, spherical dir

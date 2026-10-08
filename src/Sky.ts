@@ -12,9 +12,11 @@ import { compassToTheta, northHeading } from './sky/compass'
 import { mergeAtmosphereParams } from './core/AtmosphereParams'
 import { LUT_RESOLUTIONS } from './core/resolutions'
 import { presets, resolvePreset } from './presets'
-import { resolveLook, resolveLookTrack, sampleLookTrack } from './looks'
+import { resolveGrade } from './grade'
+import { SkyAmbient } from './sky/SkyAmbient'
 
-import type { Look, LookInput, LookKeyframe, LookTrack } from './looks'
+import type { SkyGrade, SkyGradeInput, SkyGradeJSON, SkyGradeKeyInput } from './grade'
+import type { SkyAmbientOptions } from './sky/SkyAmbient'
 import type { SkyPmremOptions } from './sky/pmrem/SkyPmrem'
 import { applyHaze, policyToHazeMode } from './applyHaze'
 import { createHazeShadowState, disposeHazeShadowState, updateHazeShadowState } from './sky/hazeShadows'
@@ -29,13 +31,6 @@ import type { SkyNightOptions } from './sky/SkyNight'
 import type { SkyNorth } from './sky/compass'
 
 export type { SkyNorth }
-
-/** Per-track scalar overrides for `Sky.setLookTrack`. */
-export interface LookTrackOverrides {
-  chroma?: number
-  value?: number
-  intensity?: number
-}
 
 /**
  * Which scene slots `Sky.attach` claims. Both default to `true`. The star
@@ -132,9 +127,6 @@ export class Sky {
   _sunRaw = false
   /** Mie coefficients at turbidity 1, so `setTurbidity` is absolute. */
   _baseMie!: { scattering: Vector3; extinction: Vector3; absorption: Vector3 }
-  _lookTrack: LookTrack | null = null
-  /** Scalar overrides applied on top of every track sample. */
-  _lookTrackOverrides: LookTrackOverrides | null = null
   _apDistanceScale: any = null
   _cameraFar?: any
   _hazeStrength?: any
@@ -359,61 +351,29 @@ export class Sky {
     this._sunRaw = raw
     const theta = raw ? azimuth : compassToTheta(azimuth, this._north)
     this.baker.setSun({ elevation, azimuth: theta })
-    // Every sun path — setTimeOfDay, setLatitude, setDayOfYear, setNorth —
-    // funnels through here, so this is the one place a track needs to
-    // re-evaluate. Plain JS over a handful of keys; it only writes uniforms.
-    this._applyLookTrack()
     return this
   }
 
   /**
-   * Assign a stylized look — a registered name, or an inline definition which
-   * may name a `preset` to inherit from. Pass `null` to return to the purely
-   * physical sky.
+   * Assign a sky grade — an authored, per-time-of-day lookup table over the
+   * physical sky (see `SkyGrade`). Accepts a `SkyGrade` (kept by reference:
+   * editing it updates the sky live), a registered name, a definition, or a
+   * saved grade as an object or JSON string. `null` clears it.
    *
-   * Costs a cube + PMREM re-bake, never a LUT rebuild, so this is cheap enough
-   * to drive from a slider. Assigning a look clears any active look track.
+   * For a quick gradient, solid colour or fixed sky, see `gradientGrade`,
+   * `horizonToZenith` and `solidSky`. Changing or editing a grade re-bakes
+   * the cube and its IBL, never the atmosphere LUTs. Returns
+   * the assigned `SkyGrade`, so `sky.setGrade(json).updateKey(...)` works.
    */
-  setLook(look: string | LookInput | Look | null) {
-    this._lookTrack = null
-    this.baker.setLook(look === null ? null : resolveLook(look))
-    return this
+  setGrade(grade: string | SkyGrade | SkyGradeInput | SkyGradeKeyInput[] | SkyGradeJSON | null): SkyGrade | null {
+    const resolved = grade === null ? null : resolveGrade(grade)
+    this.baker.setGrade(resolved)
+    return resolved
   }
 
-  /**
-   * Drive the look from a keyframe track, re-evaluated whenever the sun moves.
-   *
-   * Tracks key on **sun elevation** by default rather than clock time, because
-   * elevation is what actually determines how the sky reads — `time: 6` is full
-   * night at latitude 65° in December and hours into daylight there in June.
-   * Pass `{ by: 'time' }` to `createLookTrack` for fictional scenes.
-   *
-   * `overrides` pins `chroma` / `value` / `intensity` across the whole track
-   * (e.g. a GUI slider); omitted fields keep each keyframe's own value.
-   */
-  setLookTrack(track: string | LookKeyframe[] | LookTrack | null, overrides: LookTrackOverrides | null = null) {
-    this._lookTrack = track === null ? null : resolveLookTrack(track)
-    this._lookTrackOverrides = overrides
-    if (this._lookTrack === null) this.baker.setLook(null)
-    else this._applyLookTrack()
-    return this
-  }
-
-  _applyLookTrack() {
-    if (!this._lookTrack) return
-    const sampled = sampleLookTrack(this._lookTrack, { elevation: this._elevation, time: this._timeOfDay })
-    const o = this._lookTrackOverrides
-    // `sampleLookTrack` can return a registry look by reference, so override on a copy.
-    this.baker.setLook(
-      o
-        ? {
-            ...sampled,
-            chroma: o.chroma ?? sampled.chroma,
-            value: o.value ?? sampled.value,
-            intensity: o.intensity ?? sampled.intensity,
-          }
-        : sampled,
-    )
+  /** The assigned sky grade, or `null`. */
+  get grade(): SkyGrade | null {
+    return this.baker.grade
   }
 
   /**
@@ -557,7 +517,7 @@ export class Sky {
 
   /**
    * Colour of the sun as a light source. Tints everything the sun lights:
-   * the sky (before any look), AP haze, the sun disc and the light of every
+   * the sky (before any grade), AP haze, the sun disc and the light of every
    * `createSun()` helper. Accepts a name from `SUN_COLORS` (`'neutral'`,
    * `'bruneton'`), a hex string / number (sRGB, converted to linear), a
    * `Color`, a `Vector3`, or `[r, g, b]` (linear). Default is `'neutral'`.
@@ -582,7 +542,7 @@ export class Sky {
 
   /**
    * Unreal's `SkyLuminanceFactor` — a per-channel tint applied to the sky
-   * after any look, as a final grade. Accepts a hex string / number (sRGB,
+   * after any grade, as a final tint. Accepts a hex string / number (sRGB,
    * converted to linear), a `Color`, a `Vector3`, or `[r, g, b]` (linear).
    * Cube + PMREM re-bake only; haze inherits it through the same uniform.
    */
@@ -672,16 +632,16 @@ export class Sky {
       if (this._cameraFar) this._cameraFar.value = camera.far
     }
 
-    // Keep looks display-referred: the ramp is divided by the renderer's
-    // tone-mapping exposure (which three ignores under NoToneMapping), so a
-    // look's authored colours survive exposure changes. The cube holds the
-    // look, so a change re-bakes it.
+    // Keep the grade's display-referred terms (fill, gradient `replace`)
+    // display-referred: they are divided by the renderer's tone-mapping
+    // exposure (which three ignores under NoToneMapping), so authored colours
+    // survive exposure changes. The cube holds them, so a change re-bakes it.
     const r = this._renderer
     const toneExposure = r && r.toneMapping !== NoToneMapping ? (r.toneMappingExposure ?? 1) : 1
     const displayScale = 1 / Math.max(toneExposure, 1e-4)
-    const lookU = this.baker.sky.lookUniforms
-    if (lookU.displayScale.value !== displayScale) {
-      lookU.displayScale.value = displayScale
+    const displayScaleU = this.baker.sky.displayScale
+    if (displayScaleU.value !== displayScale) {
+      displayScaleU.value = displayScale
       this.baker.cubeDirty = true
     }
     this.baker.update()
@@ -832,6 +792,16 @@ export class Sky {
   }
 
   /**
+   * Convenience: build a `SkyAmbient` bound to this Sky — a hemisphere fill
+   * light that fades in as the sun goes down (a dim blue by default), or
+   * follows the grade's keyframed ambient when the grade has one. Call
+   * `ambient.attach(scene)`. Caller-owned, like the other helpers.
+   */
+  createAmbient(opts?: SkyAmbientOptions) {
+    return new SkyAmbient(this, opts)
+  }
+
+  /**
    * Convenience: build a `SkyMoon` bound to this Sky. Owns a
    * `THREE.DirectionalLight` representing moonlight; auto-tracks the sun
    * (anti-sun + lunar phase offset) by default. Does not feed the
@@ -901,7 +871,7 @@ export class Sky {
    * haze uniforms. Idempotent and terminal: afterwards access to `baker` and
    * methods that rely on it throw, while the haze and star setters become
    * no-ops. Helpers from `createSun` / `createGround` /
-   * `createGroundedSkybox` / `createMoon` are caller-owned and not disposed
+   * `createGroundedSkybox` / `createMoon` / `createAmbient` are caller-owned and not disposed
    * here.
    */
   dispose() {

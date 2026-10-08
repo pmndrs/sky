@@ -19,7 +19,6 @@ class FakeSky {
   scene: any = null
   disposed = false
   calls: string[] = []
-  _lookTrackOverrides: any = null
   constructor(_renderer: any, options: any) {
     this.options = options
     instances.push(this)
@@ -49,14 +48,6 @@ class FakeSky {
   update() {
     this.updates++
   }
-  // Mirrors the vanilla contract: overrides are stored with the track, and a
-  // missing second argument resets them.
-  setLookTrack(track: any, overrides: any = null) {
-    if (this.disposed) throw new Error('setLookTrack() after dispose()')
-    this.calls.push(`setLookTrack:${JSON.stringify([track, overrides])}`)
-    this._lookTrackOverrides = overrides
-    return this
-  }
 }
 for (const m of [
   'setTimeOfDay',
@@ -74,7 +65,7 @@ for (const m of [
   'setHazePolicy',
   'setHazeAltitudeBlend',
   'setFog',
-  'setLook',
+  'setGrade',
 ]) {
   ;(FakeSky.prototype as any)[m] = function (this: FakeSky, ...args: any[]) {
     if (this.disposed) throw new Error(`${m}() after dispose()`)
@@ -425,100 +416,48 @@ describe('<Sky>', () => {
     expect(order(sky.calls.slice(mark))).toEqual(['setTurbidity'])
   })
 
-  it('clears the track when lookTrack is removed', () => {
+  it('applies a grade prop, clears it when removed, and ignores a re-created equal one', () => {
+    const def = { keys: [{ elevation: -12, fill: { intensity: 0.5 } }] }
     render(
       <StrictMode>
-        <Sky lookTrack="ghibli" />
+        <Sky grade="storybook" />
       </StrictMode>,
     )
     const [sky] = live()
-    expect(sky.calls.at(-1)).toBe('setLookTrack:["ghibli",null]')
+    expect(live()).toHaveLength(1)
+    expect(sky.calls.at(-1)).toBe('setGrade:["storybook"]')
 
-    // No `look` to fall back to: back to the physical sky.
+    // An inline definition re-created every render is applied once.
+    render(
+      <StrictMode>
+        <Sky grade={{ ...def }} />
+      </StrictMode>,
+    )
+    let mark = sky.calls.length
+    render(
+      <StrictMode>
+        <Sky grade={{ ...def, keys: [...def.keys] }} />
+      </StrictMode>,
+    )
+    expect(sky.calls.slice(mark).filter((c) => c.startsWith('setGrade'))).toEqual([])
+
+    // Removing the prop clears the grade it set.
     render(
       <StrictMode>
         <Sky />
       </StrictMode>,
     )
-    expect(sky.calls.at(-1)).toBe('setLookTrack:[null,null]')
+    expect(sky.calls.at(-1)).toBe('setGrade:[null]')
 
-    // With a `look`, removing the track applies it.
+    // Without a grade prop ever set, nothing is cleared (an imperative grade stays).
+    mark = sky.calls.length
     render(
       <StrictMode>
-        <Sky look="noir" lookTrack="ghibli" />
+        <Sky timeOfDay={9} />
       </StrictMode>,
     )
-    render(
-      <StrictMode>
-        <Sky look="noir" />
-      </StrictMode>,
-    )
-    expect(sky.calls.at(-1)).toBe('setLook:["noir"]')
-  })
-
-  it('leaves a track set through the instance alone when no look props are given', () => {
-    render(
-      <StrictMode>
-        <Sky exposure={40} />
-      </StrictMode>,
-    )
-    const [sky] = live()
-    render(
-      <StrictMode>
-        <Sky exposure={20} />
-      </StrictMode>,
-    )
-    expect(sky.calls.some((c) => c.startsWith('setLookTrack:') || c.startsWith('setLook:'))).toBe(false)
-  })
-
-  it('keeps look-track overrides set through the instance when look props change', () => {
-    render(
-      <StrictMode>
-        <Sky lookTrack="ghibli" />
-      </StrictMode>,
-    )
-    const [sky] = live()
-    // A GUI slider pinning chroma through `useSky()`.
-    sky.setLookTrack('ghibli', { chroma: 0.2 })
-
-    render(
-      <StrictMode>
-        <Sky look="noir" lookTrack="ghibli" />
-      </StrictMode>,
-    )
-    expect(sky.calls.at(-1)).toBe('setLookTrack:["ghibli",{"chroma":0.2}]')
-    render(
-      <StrictMode>
-        <Sky lookTrack="ghibli-night" />
-      </StrictMode>,
-    )
-    expect(sky.calls.at(-1)).toBe('setLookTrack:["ghibli-night",{"chroma":0.2}]')
-  })
-
-  it('passes lookTrackOverrides through, and clears them when the prop is removed', () => {
-    render(
-      <StrictMode>
-        <Sky lookTrack="ghibli" lookTrackOverrides={{ value: 0.9 }} />
-      </StrictMode>,
-    )
-    const [sky] = live()
-    expect(sky.calls.at(-1)).toBe('setLookTrack:["ghibli",{"value":0.9}]')
-
-    // Structurally equal inline object: no re-call.
-    const mark = sky.calls.length
-    render(
-      <StrictMode>
-        <Sky lookTrack="ghibli" lookTrackOverrides={{ value: 0.9 }} />
-      </StrictMode>,
-    )
-    expect(sky.calls).toHaveLength(mark)
-
-    render(
-      <StrictMode>
-        <Sky lookTrack="ghibli" />
-      </StrictMode>,
-    )
-    expect(sky.calls.at(-1)).toBe('setLookTrack:["ghibli",null]')
+    expect(sky.calls.slice(mark).filter((c) => c.startsWith('setGrade'))).toEqual([])
+    expect(live()).toEqual([sky])
   })
 
   it('disposes when hidden by <Activity> and comes back live when shown', () => {

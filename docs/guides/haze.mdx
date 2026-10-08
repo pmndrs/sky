@@ -354,12 +354,15 @@ writes a depth just below `1.0` can raise `sky.baker.skyDepthEpsilon.value`
 instead; the library's own sky leaves it at `0`.) See the
 [Planet-scale guide](../guides/planet-scale).
 
-## Stylized looks and haze
+## Sky grades and haze
 
-If a [look](./looks) is assigned, AP inscatter is remapped through the same
-look uniforms the sky mesh uses, chroma axis only, so haze and sky agree at
-silhouettes. `setSkyLuminanceFactor` is applied to haze the same way. Nothing
-to configure — `applyHaze` wires both automatically.
+If a [sky grade](./sky-grades) is assigned, AP inscatter is graded by the same
+table the sky uses. The grade is linear in the light, so a partial-path
+inscatter is graded exactly like the full sky; its added light (the night fill
+and a gradient's `replace`) is weighted by the haze opacity, so a fully hazed
+silhouette lands on the graded sky behind it. `setSkyLuminanceFactor` is
+applied to haze the same way. Nothing to configure — `applyHaze` wires both
+automatically.
 
 `setAerialPerspectiveDistanceScale(n)` (Unreal's
 `AerialPerspectiveViewDistanceScale`) stretches the optical path fed into the

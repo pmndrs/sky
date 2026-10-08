@@ -56,8 +56,9 @@ lookup textures (LUTs) once per sun/atmosphere change, so you get:
   (~1 ms on the WebGPU backend). See [Baker: Environment (PMREM) refresh](<../api/baker#environment-(pmrem)-refresh>).
 - **Night sky** — resolved stars and the Milky Way, placed from the same
   time, date and latitude as the sun. See [Night sky](../guides/night-sky).
-- **Stylized looks** — artist colour ramps over the physical sky that the
-  IBL and haze follow. See [Stylized looks](../guides/looks).
+- **Sky grades** — an artist-authored, time-of-day lookup table over the
+  physical sky (or a plain gradient or solid colour), with a split-screen
+  editor; the IBL and haze follow it. See [Sky grades](../guides/sky-grades).
 - **Planet-scale support** via `planetCenter` — fly from a few metres off
   the ground to orbit with one continuous atmosphere model. See the
   [Planet-scale guide](../guides/planet-scale).
@@ -78,6 +79,6 @@ dependency versions and WebGPU browser support notes.
 ## Status
 
 Baked sky, aerial-perspective haze with light shafts, height fog,
-planet-scale (ground→orbit) rendering, the night sky, and stylized looks are
+planet-scale (ground→orbit) rendering, the night sky, and sky grades are
 all functional today. Volumetric clouds are out of scope for this library.
 Coming from 0.3? See [Upgrading to 0.4](../guides/upgrading).

@@ -39,7 +39,7 @@
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky, presets, SkyHelper } from '@pmndrs/sky'
+      import { Sky, presets, SkyHelper, ditherOutput } from '@pmndrs/sky'
 
       const renderer = new THREE.WebGPURenderer({ antialias: true })
       renderer.setPixelRatio(window.devicePixelRatio)
@@ -124,11 +124,17 @@
       // Vanilla post-process pipeline using `applyHaze` as the output node.
       const scenePass = pass(scene, camera)
       const post = new THREE.RenderPipeline(renderer)
-      post.outputNode = sky.applyHaze(scenePass.getTextureNode(), {
+      // Dither the 8-bit output (`ditherOutput` tone-maps, encodes, then adds
+      // ±1 level of noise): dusk and stylized gradients band without it.
+      // `?dither=0` turns it off for pixel-exact comparisons.
+      const dither = new URLSearchParams(location.search).get('dither') !== '0'
+      const hazed = sky.applyHaze(scenePass.getTextureNode(), {
         scenePass,
         policy: 'auto',
         strength: 1.0,
       })
+      post.outputColorTransform = !dither
+      post.outputNode = dither ? ditherOutput(hazed) : hazed
 
       let skyHelper = null
 

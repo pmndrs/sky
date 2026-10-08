@@ -1,5 +1,6 @@
 import * as fiberWebGPU from '@react-three/fiber/webgpu'
 
+import { ditherOutput } from '../dither'
 import { useSky } from './SkyContext'
 
 // `useRenderPipeline` lives on the R3F v10 alpha/canary line; the installed
@@ -13,6 +14,14 @@ export interface AutoHazeProps {
    * skips `updateAerialPerspective()`. Read once, like the other props.
    */
   mode?: 'haze' | 'fog'
+  /**
+   * Dither the 8-bit output (default `true`): `ditherOutput` tone-maps and
+   * encodes the result, then adds ±1 level of noise, which removes the
+   * contour bands in dusk, night and stylized gradients. The pipeline's own
+   * output transform is turned off while it is on. `false` restores three's
+   * plain output. Read once, like the other props.
+   */
+  dither?: boolean
   [key: string]: any
 }
 
@@ -35,7 +44,8 @@ export interface AutoHazeProps {
  * `policy`, `strength`, `altitudeBlend`, `raymarchFallback`, `apRefineSteps`,
  * `shadows`); `scenePass` is supplied. With
  * `mode="fog"` they go to `sky.applyFog` instead (`density`,
- * `heightFalloff`, `baseHeight`, `maxOpacity`, `nightBlur`).
+ * `heightFalloff`, `baseHeight`, `maxOpacity`, `nightBlur`). `dither` (default
+ * on) dithers the final 8-bit output; see {@link AutoHazeProps.dither}.
  *
  * `useRenderPipeline` does not currently support reactive callback
  * bodies — the callback closes over its initial deps. The `sky`
@@ -43,14 +53,16 @@ export interface AutoHazeProps {
  * prop changes still take effect through `sky.setHaze*` setters even
  * without rebuilding the callback).
  */
-export function AutoHaze({ mode = 'haze', ...options }: AutoHazeProps = {}) {
+export function AutoHaze({ mode = 'haze', dither = true, ...options }: AutoHazeProps = {}) {
   const sky = useSky()
 
   useRenderPipeline(({ renderPipeline, passes }: any) => {
     if (!sky) return
     const color = passes.scenePass.getTextureNode()
     const opts = { ...options, scenePass: passes.scenePass }
-    renderPipeline.outputNode = mode === 'fog' ? sky.applyFog(color, opts) : sky.applyHaze(color, opts)
+    const node = mode === 'fog' ? sky.applyFog(color, opts) : sky.applyHaze(color, opts)
+    renderPipeline.outputColorTransform = !dither
+    renderPipeline.outputNode = dither ? ditherOutput(node) : node
   })
 
   return null

@@ -281,6 +281,21 @@ pipeline.outputNode = ditherOutput(sky.applyHaze(scenePass.getTextureNode(), { s
 On a dark dusk gradient in the editor, the longest run of identical pixels
 down a column went from 57 px to 2 px.
 
+`<AutoHaze>` in React dithers by default (`dither={false}` turns it off), and
+the editor and the component demos dither their output (`?dither=0` in the
+URL turns it off for comparison). A scene without a post-processing pipeline
+(`renderer.render(scene, camera)` with the sky as `scene.background`) has no
+place to dither; a minimal pipeline adds one at the cost of a full-screen
+pass:
+
+```js
+const scenePass = pass(scene, camera)
+const pipeline = new THREE.RenderPipeline(renderer)
+pipeline.outputColorTransform = false
+pipeline.outputNode = ditherOutput(scenePass.getTextureNode())
+// per frame: pipeline.render() instead of renderer.render(scene, camera)
+```
+
 ## Cost
 
 - **At runtime:** two texture taps and a little arithmetic per sky pixel,

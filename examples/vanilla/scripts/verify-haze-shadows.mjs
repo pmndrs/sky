@@ -155,7 +155,8 @@ const check = (name, ok, detail) => {
 const baselinePairs = [
   ['22-haze-shadows.html?ui=0&shadows=0', 'baseline-22-off', null],
   ['22-haze-shadows.html?ui=0&shadows=0&scene=towers', 'baseline-22-towers-off', null],
-  ['component-02-haze.html', 'baseline-c2-haze', [820, 0, 959, 50]],
+  // `dither=0`: the saved baseline predates the demo's output dither.
+  ['component-02-haze.html?dither=0', 'baseline-c2-haze', [820, 0, 959, 50]],
 ]
 
 if (SAVE_BASELINE) {

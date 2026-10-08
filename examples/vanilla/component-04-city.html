@@ -40,7 +40,7 @@
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky, presets } from '@pmndrs/sky'
+      import { Sky, presets, ditherOutput } from '@pmndrs/sky'
 
       // ---------------------------------------------------------------------
       // Simplified port of the paris-mini-site-hero "hero demo" (Stage 1):
@@ -270,8 +270,15 @@
       // is set — assigning outputNode alone silently keeps the old shader.
       const scenePass = pass(scene, camera)
       const post = new THREE.RenderPipeline(renderer)
-      const plainNode = scenePass.getTextureNode('output')
-      const hazeNode = sky.applyHaze(plainNode, { scenePass, policy: 'auto', strength: 1.0 })
+      const scenePlain = scenePass.getTextureNode('output')
+      // Dither the 8-bit output (`ditherOutput` tone-maps, encodes, then adds
+      // ±1 level of noise): dusk and stylized gradients band without it.
+      // `?dither=0` turns it off for pixel-exact comparisons.
+      const dither = new URLSearchParams(location.search).get('dither') !== '0'
+      post.outputColorTransform = !dither
+      const present = (node) => (dither ? ditherOutput(node) : node)
+      const plainNode = present(scenePlain)
+      const hazeNode = present(sky.applyHaze(scenePlain, { scenePass, policy: 'auto', strength: 1.0 }))
 
       const state = {
         haze: true,

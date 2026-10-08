@@ -38,7 +38,7 @@
       import { Inspector } from 'three/addons/inspector/Inspector.js'
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-      import { Sky, presets, looks } from '@pmndrs/sky'
+      import { Sky, presets, grades, horizonToZenith } from '@pmndrs/sky'
 
       const renderer = new THREE.WebGPURenderer({ antialias: true })
       renderer.setPixelRatio(window.devicePixelRatio)
@@ -113,26 +113,22 @@
         turbidity: 1.0,
         groundAlbedo: 0.1, // the preset default (EARTH.groundAlbedo); the slider applies it
         toneExposure: renderer.toneMappingExposure,
-        // Stylized look (ROADMAP 4.4). 'physical' = no look assigned;
-        // 'ghibli (track)' follows sun elevation through the built-in track.
-        look: 'physical',
-        chroma: 0.7,
-        value: 0.25,
-        intensity: 1.0,
+        // Sky grade: 'physical' = none; a built-in grade follows the sun;
+        // 'gradient' is the horizonToZenith helper with the colours below.
+        grade: 'physical',
+        horizon: '#f3c98f',
+        zenith: '#4f8fdb',
+        replace: 1,
       }
 
-      // Re-apply the selected look with the live chroma/value/intensity
-      // overrides. All three are uniforms, so this costs a cube + PMREM
+      // Grades are uniforms + a small table: assigning one costs a cube + PMREM
       // re-bake and never touches the LUT chain.
-      const applySelectedLook = () => {
-        if (state.look === 'physical') return sky.setLook(null)
-        if (state.look === 'ghibli (track)') return sky.setLookTrack('ghibli')
-        return sky.setLook({
-          preset: state.look,
-          chroma: state.chroma,
-          value: state.value,
-          intensity: state.intensity,
-        })
+      const applySelectedGrade = () => {
+        if (state.grade === 'physical') return sky.setGrade(null)
+        if (state.grade === 'gradient') {
+          return sky.setGrade(horizonToZenith(state.horizon, state.zenith, { replace: state.replace }))
+        }
+        return sky.setGrade(state.grade)
       }
       const gui = renderer.inspector.createParameters('Sky')
       gui.add(state, 'preset', Object.keys(presets)).onChange((v) => sky.setPreset(v))
@@ -148,13 +144,13 @@
         renderer.toneMappingExposure = v
       })
 
-      const lookGui = renderer.inspector.createParameters('Look')
-      lookGui.add(state, 'look', ['physical', 'ghibli (track)', ...Object.keys(looks)]).onChange(applySelectedLook)
-      // chroma swaps hue but keeps physical luminance (and is what haze can
-      // share); value additionally overrides luminance, scaled by intensity.
-      lookGui.add(state, 'chroma', 0, 1, 0.01).onChange(applySelectedLook)
-      lookGui.add(state, 'value', 0, 1, 0.01).onChange(applySelectedLook)
-      lookGui.add(state, 'intensity', 0, 4, 0.01).onChange(applySelectedLook)
+      const gradeGui = renderer.inspector.createParameters('Grade')
+      gradeGui.add(state, 'grade', ['physical', 'gradient', ...Object.keys(grades)]).onChange(applySelectedGrade)
+      // The 'gradient' choice: replace 1 shows exactly these colours all day;
+      // 0 keeps the physical brightness and swaps only the hue.
+      gradeGui.addColor(state, 'horizon').onChange(applySelectedGrade)
+      gradeGui.addColor(state, 'zenith').onChange(applySelectedGrade)
+      gradeGui.add(state, 'replace', 0, 1, 0.01).onChange(applySelectedGrade)
 
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight
@@ -162,7 +158,7 @@
         renderer.setSize(window.innerWidth, window.innerHeight)
       })
 
-      // Exposed for scripted verification / console poking (SKY_LOOKS_PLAN.md §1).
+      // Exposed for scripted verification / console poking.
       window.__sky = sky
       window.__renderer = renderer
       window.__camera = camera

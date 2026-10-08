@@ -39,6 +39,20 @@ glow need opposite treatment:
 Stars are **not** in the cube: at the cube's resolution a star smears into a
 blurry blob several pixels wide.
 
+## Lighting the night
+
+The physical night is close to black, so a night scene rendered with it is
+black too. Two opt-in tools make it read as a moonlit blue instead:
+
+```js
+sky.createAmbient().attach(scene) // hemisphere fill light, fades in after sunset
+sky.setGrade('blue-night') // a deep-blue sky fill, keyed on the sun, in the cube and IBL
+```
+
+Both are covered in [Sky grades](./sky-grades#ambient-light). Stars and the
+Milky Way fade against the sky behind them, so a filled sky keeps the
+brightest stars and holds back the faint ones, as a real moonlit sky does.
+
 ## Driven by the sky's time and place
 
 Both layers are oriented from the same inputs as the sun — `timeOfDay`,

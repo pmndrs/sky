@@ -2,7 +2,7 @@
 //
 // The 90% surface — most users only need these:
 export { Sky, SUN_COLORS } from './Sky'
-export type { SkyState, SkyAttachOptions, LookTrackOverrides, SkyNorth } from './Sky'
+export type { SkyState, SkyAttachOptions, SkyNorth } from './Sky'
 export { SkySun } from './sky/SkySun'
 export { SkyMoon } from './sky/SkyMoon'
 export { SkyGround } from './sky/SkyGround'
@@ -17,34 +17,65 @@ export { generateStarCatalog } from './sky/stars/catalog'
 export type { StarCatalog, StarCatalogOptions } from './sky/stars/catalog'
 export { applyHaze } from './applyHaze'
 export { applyFog } from './applyFog'
+export { ditherOutput } from './dither'
+export type { DitherOutputOptions } from './dither'
 export type { ApplyFogOptions } from './applyFog'
 export { presets, resolvePreset } from './presets'
+export type { ColorInput } from './color'
 export {
-  looks,
-  lookTracks,
-  registerLook,
-  registerLookTrack,
-  resolveLook,
-  resolveLookTrack,
-  sampleLook,
-  sampleLookTrack,
-  createLookTrack,
-  lerpLooks,
-  packLook,
-  applyEase,
-  MAX_LOOK_STOPS,
-} from './looks'
+  SkyGrade,
+  grades,
+  registerGrade,
+  resolveGrade,
+  resolveGradeKey,
+  gradientGrade,
+  horizonToZenith,
+  solidSky,
+  sampleGradient,
+  evaluateGradeTexel,
+  gradeZoneWeights,
+  applyGradeOperator,
+  gradeKeyMatrix,
+  gradeAzimuthToU,
+  gradeElevationToV,
+  GRADE_ZONES,
+  GRADE_FORMAT,
+  GRADE_VERSION,
+  MAX_GRADE_KEYS,
+  GRADE_AZIMUTH_RES,
+  GRADE_ELEVATION_RES,
+} from './grade'
 export type {
-  Look,
-  LookInput,
-  LookStop,
-  LookEase,
-  LookSunTint,
-  LookKeyframe,
-  LookTrack,
-  PackedLook,
-  ColorInput,
-} from './looks'
+  SkyGradeInput,
+  SkyGradeKeyInput,
+  SkyGradeKey,
+  SkyGradeJSON,
+  SkyGradeKeyJSON,
+  SkyGradeEvaluation,
+  SkyGradeBake,
+  GradeZoneName,
+  GradeZoneWeights,
+  GradeZoneInput,
+  GradeZone,
+  GradeShape,
+  GradeFill,
+  GradeFillInput,
+  GradeAmbient,
+  GradeAmbientInput,
+  GradeEase,
+  GradientEase,
+  GradeGradient,
+  GradeGradientInput,
+  GradeGradientStop,
+  GradeGradientStopInput,
+  GradientGradeOptions,
+  HorizonToZenithOptions,
+  GradeTexel,
+} from './grade'
+export { SkyAmbient } from './sky/SkyAmbient'
+export { SkyGradePreview } from './sky/SkyGradePreview'
+export type { SkyGradePreviewMode, SkyGradePreviewOptions } from './sky/SkyGradePreview'
+export type { SkyAmbientOptions, SkyAmbientLevel } from './sky/SkyAmbient'
 export { solarPosition, solarEquatorial, localSiderealTime } from './solarPosition'
 export { EARTH, mergeAtmosphereParams } from './core/AtmosphereParams'
 

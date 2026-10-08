@@ -1,0 +1,120 @@
+---
+title: Grade editor and demos
+description: Author a sky grade in the split-screen editor, export it, and load it in your app — plus the demos and scripts that ship with sky grades.
+---
+
+This page is the workflow: open the editor, author a grade across the day,
+save it, and load it in an app. For what a grade _is_ and every field it
+takes, see [Sky grades](./sky-grades).
+
+## Run it
+
+```sh
+pnpm install
+pnpm --filter @pmndrs/sky-example-vanilla dev
+```
+
+Then open `http://localhost:5173/25-sky-grade-editor.html`. The editor needs a
+browser with WebGPU (current Chrome, Edge or Safari).
+
+## The layout
+
+| Area                | What it is                                                                                                                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Toolbar             | Time of day, play (with speed), **Grade on / Physical** bypass, **Start from…** presets, New, undo / redo, the grade's name, **Load**, **Save**, **Copy JSON**.                                                                            |
+| Top: the scene      | The graded sky with haze on mountains 3–45 km out, props lit by the sky's environment lighting, the sun light, the night ambient light and stars. Drag to look around; the **Sun / Away / Up / Ground** buttons aim the camera.            |
+| Middle: timeline    | Sun elevation, with the twilight marks (civil −6°, nautical −12°, astronomical −18°). The strip shows what the grade does at every elevation — zenith, the sun side and the away side, applied to a flat grey. The diamonds are keyframes. |
+| Bottom left: dome   | The whole sky flattened: azimuth from the sun across (the sun in the middle), elevation up. **Split** shows physical on the left and graded on the right — the sky is mirror-symmetric about the sun, so the halves compare like for like. |
+| Bottom right: panel | The keyframe inspector: whole-sky controls, the gradient, the six zones, zone shape, night fill and ambient light.                                                                                                                         |
+
+The dome has four modes: **Split**, **Graded**, **Physical**, and **Grade
+only** (the grade on a flat grey sky, so you see its colours with the physics
+out of the way). **Zone guides** draw where each zone sits for the keyframe
+you are editing — the horizon/zenith hand-over line, the sun-side and away-side
+widths, the glow circle — and coloured ticks on the right edge mark gradient
+stops.
+
+## Authoring a grade
+
+1. **Pick a starting point** from **Start from…**: a built-in grade
+   (`storybook`, `blue-night`), a fixed gradient, a tinted gradient that keeps
+   the physical light, a solid colour, or **Physical** (no keyframes).
+2. **Scrub to a time that looks wrong.** Drag on the timeline, or use the
+   time slider, ← / → (⇧ for bigger steps), or play the day with Space.
+3. **Edit.** On a keyframe, the panel edits it. Between keyframes it shows
+   what the grade does there, and your first edit adds a keyframe at the
+   playhead. A grade with a single keyframe holds all day, so the editor edits
+   that keyframe wherever the playhead is — press `K` to add a second one and
+   make the sky follow the time of day.
+4. **Find the zone you need** by clicking the sky in the dome view: the
+   inspector scrolls to that zone and flashes it.
+5. **Compare** with `B` (or the **Grade on** button) to flip to the physical
+   sky and back.
+6. **Check the night.** Scrub below −6°: the **night fill** keeps the sky
+   blue instead of black, and **ambient light** keyed on the same keyframes
+   lights the scene.
+
+Keyframes: click one to jump to it, drag it to move it (⇧ snaps to whole
+degrees), double-click empty timeline to add one, ⌫ to delete the selected
+one. Double-click a slider to reset it. Undo / redo is ⌘Z / ⇧⌘Z (Ctrl on
+Windows and Linux), and the grade autosaves in the browser.
+
+## Getting a grade into your app
+
+**Save** downloads `<name>.json`; **Copy JSON** puts the same text on the
+clipboard. It is the whole interface — any bundler imports JSON:
+
+```js
+import { Sky, registerGrade } from '@pmndrs/sky'
+import dusk from './dusk.json'
+
+const sky = new Sky(renderer, { timeOfDay: 19 })
+const grade = sky.setGrade(dusk) // an editable SkyGrade
+grade.updateKey(0, { exposure: 0.2 }) // tweak at runtime
+
+registerGrade('dusk', dusk) // or by name: sky.setGrade('dusk')
+```
+
+`sky.setGrade` also takes the JSON as a string (from `fetch`, `localStorage`,
+a CMS field). In React:
+
+```jsx
+<Sky grade={dusk} />
+```
+
+For the night light, add `sky.createAmbient().attach(scene)`: it follows the
+grade's ambient keyframes when the grade has them. To keep dusk and night
+gradients from banding at 8 bits, end your post-processing with
+[`ditherOutput`](./sky-grades#banding-dither-the-output).
+
+The file is versioned (`format: 'pmndrs-sky-grade'`, `version: 1`) and stores
+colours as sRGB hex, so it diffs and reviews well in a repo.
+
+## A grade UI in your own app
+
+Everything the editor does goes through the public API, so an app can offer
+its own (smaller) grading UI:
+
+- **Data and edits:** `SkyGrade` — `updateKey`, `insertKeyAt`,
+  `interpolatedKeyInput`, `onChange`, `toJSON` / `fromJSON`.
+- **The dome view:** `new SkyGradePreview(sky, { mode: 'split' })` renders the
+  flattened sky into any canvas or render target (use three's `CanvasTarget`
+  for a second canvas, and set its size while it is the active target).
+- **Swatches and hit-testing:** `grade.apply(...)` grades a colour on the CPU
+  exactly as the shader does; `gradeZoneWeights(...)` says which zone covers a
+  direction.
+
+The editor's own source (`examples/vanilla/grade-editor/`) is plain JS split by
+panel — `timeline.js`, `inspector.js`, `overlay.js` — and meant to be copied
+from.
+
+## Demos and scripts
+
+| Page / script               | What it shows                                                                                                                                         |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `25-sky-grade-editor.html`  | The editor.                                                                                                                                           |
+| `component-01-baked.html`   | The drop-in baked sky with a **Grade** panel: physical, the built-in grades, or `horizonToZenith` with two colour pickers and a `replace` slider.     |
+| `component-06-ghibli.html`  | A stylized countryside on a five-keyframe gradient grade (`ghibli-summer`), with amount / replace overrides and horizon-band controls.                |
+| `14-night-sky.html`         | Stars and the Milky Way through twilight — pair with `blue-night` or `createAmbient()` for a lit night.                                               |
+| `scripts/verify-grade.mjs`  | Headless check that the GPU grade matches `SkyGrade.apply` at a keyframe and between two (worst error a few 8-bit levels). Run with `BASE=<dev url>`. |
+| `scripts/probe-shaders.mjs` | Shader sizes and sync/async compiles per page, for keeping an eye on what the grade adds.                                                             |

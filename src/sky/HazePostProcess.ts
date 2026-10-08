@@ -31,7 +31,7 @@ import {
   moveToTopAtmosphere,
   raySphereIntersectNearest,
 } from '../backends/tsl/atmosphere.tsl'
-import { applyLook } from '../backends/tsl/look.tsl'
+import { applyGrade } from '../backends/tsl/grade.tsl'
 import { createHazeDepthNodes, distanceAlongViewRay, rawDepthIsSky, viewRayFromUv } from './hazeScenePassDepth'
 import { createShadowDeficitPass, upsampleShadowDeficit } from './hazeShadows'
 import type { HazeShadowState } from './hazeShadows'
@@ -79,20 +79,21 @@ interface CreateHazeOutputNodeArgs {
   apRefineSteps?: number
   atmosphereUniforms?: any
   sunDirection?: any
-  /** Stylized look uniforms (`baker.sky.lookUniforms`). Retints AP inscatter
-   *  so haze agrees with the styled sky instead of staying physical. */
-  lookUniforms?: any
+  /** Sky grade uniforms (`baker.sky.gradeUniforms`). Grades AP inscatter with
+   *  the same table as the sky, its fill weighted by the haze opacity, so a
+   *  fully hazed surface lands on the graded sky. */
+  gradeUniforms?: any
   /** Y-up world-space up vector (`baker.sky.upVector`). Required with
-   *  `lookUniforms`. */
+   *  `gradeUniforms`. */
   upVector?: any
-  /** Sun colour applied to AP inscatter before the look
+  /** Sun colour applied to AP inscatter before the grade
    *  (`baker.sky.sunColor`), so haze is lit by the same sun as the sky. */
   sunColor?: any
   /** Uniform: how far below 1.0 a depth value still counts as sky
    *  (`baker.skyDepthEpsilon`). 0 by default: backgrounds and the live sky
    *  mesh leave the cleared 1.0. */
   skyDepthEpsilon?: any
-  /** Per-channel grade applied to AP inscatter after the look
+  /** Per-channel tint applied to AP inscatter after the grade
    *  (`baker.sky.skyLuminanceFactor`), so haze matches the graded sky. */
   skyLuminanceFactor?: any
   /** Unreal `AerialPerspectiveViewDistanceScale`: scales the distance fed
@@ -233,7 +234,7 @@ export function createHazeOutputNode({
   apRefineSteps = 4,
   atmosphereUniforms = null,
   sunDirection = null,
-  lookUniforms = null,
+  gradeUniforms = null,
   upVector = null,
   skyLuminanceFactor = null,
   skyDepthEpsilon: skyDepthEpsilonNode = null,
@@ -260,13 +261,13 @@ export function createHazeOutputNode({
     throw new Error('createHazeOutputNode: cameraWorldUniform is required when skyCube is provided.')
   }
 
-  if (lookUniforms) {
+  if (gradeUniforms) {
     const missing: string[] = []
     if (!cameraWorldUniform) missing.push('cameraWorldUniform')
     if (!sunDirection) missing.push('sunDirection')
     if (!upVector) missing.push('upVector')
     if (missing.length) {
-      throw new Error(`createHazeOutputNode: lookUniforms requires ${missing.join(', ')}.`)
+      throw new Error(`createHazeOutputNode: gradeUniforms requires ${missing.join(', ')}.`)
     }
   }
 
@@ -385,7 +386,7 @@ export function createHazeOutputNode({
     // so build and sample now agree by construction (`viewRayFromUv`).
     const rayDirView = viewRayFromUv(u, invProjUniform)
     // World-space ray direction, reconstructed once and shared by the raymarch
-    // fallback, the look retint and the sky-cube shim (TSL does not CSE
+    // fallback, the grade and the sky-cube shim (TSL does not CSE
     // distinct node instances). w = 0 so the camera translation is ignored.
     // Every consumer requires `cameraWorldUniform`, checked above.
     const worldRayDir = cameraWorldUniform
@@ -757,39 +758,41 @@ export function createHazeOutputNode({
       })
     }
 
-    // Sun colour, ahead of the look — same order as the sky mesh.
+    // Sun colour, ahead of the grade — same order as the sky mesh.
     if (sunColor) apRgbScaled.mulAssign(sunColor)
 
-    // Stylized look retint. Applied to AP inscatter after both the LUT and
-    // raymarch paths have merged, so haze agrees with the styled sky rather
-    // than staying physical — otherwise the two disagree at exactly the
-    // silhouette boundary this file already fights hardest to keep clean.
-    //
-    // `valueScale: 0` forces the look's value axis off here. Only the chroma
-    // axis is scale-invariant, and AP inscatter is a *partial-path* integral —
-    // far dimmer than the full sky integral the ramp's `intensity` is
-    // calibrated against. Pushing its luminance toward the ramp would blow out
-    // near geometry. Chroma replacement keeps the magnitude AP computed and
-    // swaps only the hue, which is what makes sky and haze land on the same
-    // colour without double-integrating anything.
-    if (lookUniforms) {
-      const lookWorldDir = worldRayDir
-      const lookUp = tslNormalize(upVector)
-      const lookSun = tslNormalize(sunDirection)
-      apRgbScaled.assign(
-        applyLook({
-          color: apRgbScaled,
-          viewZenithCosAngle: clamp(dot(lookWorldDir, lookUp), float(-1.0), float(1.0)),
-          lightViewCosAngle: computeLightViewCosAngle(lookWorldDir, lookUp, lookSun),
-          sunViewCosAngle: dot(lookWorldDir, lookSun),
-          sunZenithCosAngle: dot(lookSun, lookUp),
-          look: lookUniforms,
-          valueScale: float(0.0),
-        }),
-      )
+    // Sky grade, applied to AP inscatter after the LUT and raymarch paths have
+    // merged, so haze agrees with the graded sky — otherwise the two disagree
+    // at exactly the silhouette boundary this file fights hardest to keep
+    // clean. The grade is linear in the light, so a partial-path inscatter is
+    // graded exactly like the full sky; its affine part (fill, gradient
+    // `replace`) is weighted by the haze opacity, so a fully hazed surface
+    // lands on the graded sky and a clear one keeps its own colour.
+    const gradeDirs = gradeUniforms
+      ? (() => {
+          const gUp = tslNormalize(upVector)
+          const gSun = tslNormalize(sunDirection)
+          return {
+            vzc: clamp(dot(worldRayDir, gUp), float(-1.0), float(1.0)).toVar(),
+            lvc: computeLightViewCosAngle(worldRayDir, gUp, gSun).toVar(),
+          }
+        })()
+      : null
+    if (gradeUniforms && gradeDirs) {
+      If(gradeUniforms.enabled.greaterThan(0.5), () => {
+        apRgbScaled.assign(
+          applyGrade({
+            color: apRgbScaled,
+            viewZenithCosAngle: gradeDirs.vzc,
+            lightViewCosAngle: gradeDirs.lvc,
+            grade: gradeUniforms,
+            fillWeight: apA,
+          }),
+        )
+      })
     }
 
-    // Final per-channel grade, same uniform the sky mesh applies after its look.
+    // Final per-channel tint, same uniform the sky mesh applies after its grade.
     if (skyLuminanceFactor) apRgbScaled.mulAssign(skyLuminanceFactor)
 
     // Raymarch debug modes — useful at altitude when isolating where
@@ -825,29 +828,29 @@ export function createHazeOutputNode({
       // in-scatter, applied to the AP value itself — already graded, and the
       // fraction is scale-free, so no further grading is needed. Sky pixels
       // get the absolute deficit, graded exactly like AP inscatter
-      // (luminanceScale — applied in the pass — strength, look chroma, sky
-      // luminance factor, sun colour); with `valueScale: 0` the look is linear in its
-      // input, so grading the deficit separately equals grading the
-      // difference. Rays that miss the shadow frustum read exactly 0.
+      // (luminanceScale — applied in the pass — strength, sun colour, the
+      // grade's linear part, sky luminance factor); all linear, so grading the
+      // deficit separately equals grading the difference. Rays that miss the shadow frustum read exactly 0.
       const upsampled = upsampleShadowDeficit({ pass: shadowPass, uvNode: u, distanceM: distAlongRayM, isSky })
       if (debugMode === 'shadow-occlusion') return vec4(upsampled, 1.0)
 
       let skyShaft = upsampled
       if (hazeStrength !== null) skyShaft = skyShaft.mul(hazeStrength)
-      // Same order as AP inscatter: sun colour ahead of the look.
+      // Same order as AP inscatter: sun colour ahead of the grade.
       if (sunColor) skyShaft = skyShaft.mul(sunColor)
-      if (lookUniforms) {
-        const lookUp = tslNormalize(upVector)
-        const lookSun = tslNormalize(sunDirection)
-        skyShaft = applyLook({
-          color: skyShaft,
-          viewZenithCosAngle: clamp(dot(worldRayDir, lookUp), float(-1.0), float(1.0)),
-          lightViewCosAngle: computeLightViewCosAngle(worldRayDir, lookUp, lookSun),
-          sunViewCosAngle: dot(worldRayDir, lookSun),
-          sunZenithCosAngle: dot(lookSun, lookUp),
-          look: lookUniforms,
-          valueScale: float(0.0),
-        })
+      if (gradeUniforms && gradeDirs) {
+        // Linear part only: the deficit is a difference of light, and the fill
+        // is not light the shadow removes.
+        skyShaft = gradeUniforms.enabled.greaterThan(0.5).select(
+          applyGrade({
+            color: skyShaft,
+            viewZenithCosAngle: gradeDirs.vzc,
+            lightViewCosAngle: gradeDirs.lvc,
+            grade: gradeUniforms,
+            fillWeight: float(0.0),
+          }),
+          skyShaft,
+        )
       }
       if (skyLuminanceFactor) skyShaft = skyShaft.mul(skyLuminanceFactor)
       // Never remove more than was there.

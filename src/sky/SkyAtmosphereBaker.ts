@@ -27,7 +27,9 @@ import { SkyPmrem } from './pmrem/SkyPmrem'
 import { compileIntoTarget } from './compileAsync'
 import { beginSkyDraw, createSkyDrawState, endSkyDraw } from './drawState'
 
-import type { Look } from '../looks'
+import { applyGradeEvaluation, disposeGradeUniforms, uploadGrade } from './GradeUniforms'
+
+import type { SkyGrade } from '../grade'
 import type { SkyPmremOptions } from './pmrem/SkyPmrem'
 
 import type { AtmosphereParams } from '../core/AtmosphereParams'
@@ -124,6 +126,12 @@ export class SkyAtmosphereBaker {
   skyDepthEpsilon: any
   _sunColorListeners: Set<(sunColor: Vector3) => void>
   _bakeListeners: Set<() => void>
+  /** Assigned sky grade (`setGrade`), its change subscription, and what the uniforms were last synced to. */
+  _grade: SkyGrade | null = null
+  _gradeUnsubscribe: (() => void) | null = null
+  _gradeSyncedZenith = NaN
+  _gradeSyncedRevision = -1
+  _gradeListeners = new Set<(grade: SkyGrade | null) => void>()
   _camera: PerspectiveCamera | null
   _cameraPositionKm: Vector3
   _cameraUp: Vector3
@@ -567,17 +575,64 @@ export class SkyAtmosphereBaker {
   }
 
   /**
-   * Assign (or clear) the stylized look on the sky mesh.
-   *
-   * Marks only `cubeDirty` — the look lives entirely in uniforms on the sky
-   * mesh's colour node, so the Transmittance / MultiScatter / SkyView chain is
-   * untouched and only the cube + PMREM need re-baking. That is what keeps
-   * artist sliders live: scrubbing a look costs the same as scrubbing the sun,
-   * which already re-bakes cube + PMREM every frame.
+   * Assign (or clear) a sky grade — the authored per-time-of-day table in
+   * `src/grade.ts`. Bakes it into the sky mesh's tables (CPU, sub-millisecond)
+   * and subscribes to its changes, so editing the grade re-bakes the tables
+   * and the cube. It lives in uniforms and tables on the sky mesh, so it
+   * never touches the atmosphere LUTs: editing costs what moving the sun does.
    */
-  setLook(look: Look | null): void {
-    this.sky.setLook(look)
+  setGrade(grade: SkyGrade | null): void {
+    if (grade === this._grade) return
+    this._gradeUnsubscribe?.()
+    this._gradeUnsubscribe = null
+    this._grade = grade
+    const u = this.sky.gradeUniforms
+    uploadGrade(u, grade)
+    if (grade) {
+      this._gradeUnsubscribe = grade.onChange(() => {
+        uploadGrade(u, grade)
+        this._gradeSyncedRevision = -1
+        this.cubeDirty = true
+        for (const fn of this._gradeListeners) fn(grade)
+      })
+    } else {
+      applyGradeEvaluation(u, { index: 0, fraction: 0, w: 0, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1], ambient: null })
+    }
+    this._gradeSyncedRevision = -1
+    this._syncGrade()
     this.cubeDirty = true
+    for (const fn of this._gradeListeners) fn(grade)
+  }
+
+  get grade(): SkyGrade | null {
+    return this._grade
+  }
+
+  /**
+   * Subscribe to grade changes: fires when a grade is assigned or cleared and
+   * after every edit to the assigned one. `SkyAmbient` uses it.
+   *
+   * @returns unsubscribe function
+   */
+  addGradeListener(fn: (grade: SkyGrade | null) => void): () => void {
+    this._gradeListeners.add(fn)
+    return () => this._gradeListeners.delete(fn)
+  }
+
+  /**
+   * Point the grade uniforms at the sun's place between keyframes. Keyed on
+   * the sun's elevation against the camera's local up (the same angle the
+   * Sky-View LUT is built for), so a grade follows the sun around a planet.
+   */
+  _syncGrade(): void {
+    const grade = this._grade
+    if (!grade) return
+    const zenith = this._skyViewSunZenith
+    if (zenith === this._gradeSyncedZenith && grade.revision === this._gradeSyncedRevision) return
+    this._gradeSyncedZenith = zenith
+    this._gradeSyncedRevision = grade.revision
+    const elevationDeg = MathUtils.radToDeg(Math.asin(MathUtils.clamp(zenith, -1, 1)))
+    applyGradeEvaluation(this.sky.gradeUniforms, grade.evaluate(elevationDeg))
   }
 
   /**
@@ -595,7 +650,7 @@ export class SkyAtmosphereBaker {
 
   /**
    * Colour of the sun as a light source (linear RGB). Uniform on the sky
-   * mesh — tints the sky before the look and the sun disc — so only cube +
+   * mesh — tints the sky before the grade and the sun disc — so only cube +
    * PMREM re-bake. Haze shares the uniform via `applyHaze`; `SkySun` follows
    * through `addSunColorListener`.
    */
@@ -762,6 +817,10 @@ export class SkyAtmosphereBaker {
       }
       return
     }
+    // Cheap (a comparison unless the sun moved or the grade changed), and the
+    // live sky mesh reads these uniforms too, so it runs before the early-out.
+    this._syncGrade()
+
     const skyDirty = this.atmosDirty || this.sunDirty || this.cameraDirty
     if (!this.cubeDirty && !skyDirty) {
       // Nothing changed this frame — but a throttled or sliced IBL refresh
@@ -823,7 +882,7 @@ export class SkyAtmosphereBaker {
   /**
    * Subscribe to cube re-bakes. The listener fires at the end of every
    * `update()` that re-baked the cube, i.e. after any change to what the sky
-   * shows: sun, atmosphere, exposure (`luminanceScale`), sun colour, look, or
+   * shows: sun, atmosphere, exposure (`luminanceScale`), sun colour, grade, or
    * a camera move large enough to change the baked sky (100 m, or 2 % of the
    * altitude). A physical `SkySun` uses it to follow the exposure, the
    * atmosphere and the camera's altitude without per-frame work.
@@ -906,6 +965,10 @@ export class SkyAtmosphereBaker {
     if (this.sky.geometry) this.sky.geometry.dispose()
     // The Milky Way placeholder is a GPU-uploaded DataTexture owned by the mesh.
     this.sky._milkyWayPlaceholder.dispose()
+    this._gradeUnsubscribe?.()
+    this._gradeUnsubscribe = null
+    this._grade = null
+    disposeGradeUniforms(this.sky.gradeUniforms)
 
     this.skyScene.remove(this.sky)
     this.skyScene.remove(this.cubeCamera)
@@ -915,5 +978,6 @@ export class SkyAtmosphereBaker {
     this._sunListeners.clear()
     this._sunColorListeners.clear()
     this._bakeListeners.clear()
+    this._gradeListeners.clear()
   }
 }

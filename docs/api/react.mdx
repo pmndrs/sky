@@ -133,29 +133,15 @@ the other.
 | `multiScatteringFactor` | `number`                       | `1`           | Full rebake | Unreal `MultiScatteringFactor`. `1` is physical. Set it once rather than per frame.                                                  |
 | `mirrorBelowHorizon`    | `boolean`                      | `false`       | Cube rebake | Bakes a Y-mirror of the sky into the cube's lower hemisphere instead of lit ground, for reflective floors.                           |
 
-### Appearance and looks
+### Appearance and grades
 
-| Prop                 | Type                                                               | Default     | Cost        | Notes                                                                                                                        |
-| -------------------- | ------------------------------------------------------------------ | ----------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `exposure`           | `number`                                                           | `40`        | Cube rebake | Sky luminance scale; see the [`ILLUMINANCE_IS_ONE` note](./luts).                                                            |
-| `sunDisc`            | `boolean`                                                          | `true`      | Uniform     | Show the in-shader sun disc.                                                                                                 |
-| `sunColor`           | `'neutral' \| 'bruneton' \| string \| Color \| Vector3 \| [r,g,b]` | `'neutral'` | Cube rebake | Colour of the sun as a light. Tints the sky, haze, sun disc and `createSun` lights. Hex strings are sRGB; arrays are linear. |
-| `skyLuminanceFactor` | `string \| Color \| Vector3 \| [r,g,b]`                            | white       | Cube rebake | Unreal `SkyLuminanceFactor`: per-channel grade on the sky after any look. Haze inherits it.                                  |
-| `look`               | `string \| object \| null`                                         | —           | Cube rebake | A registered look name or an inline definition. `null` returns to the physical sky. See [Looks](../guides/looks).            |
-| `lookTrack`          | `string \| keyframe[] \| null`                                     | —           | Cube rebake | Look keyed on sun elevation (e.g. `'ghibli'`). Overrides `look` while set.                                                   |
-| `lookTrackOverrides` | `{ chroma?, value?, intensity? } \| null`                          | —           | Cube rebake | Pins those fields across the whole `lookTrack` (`LookTrackOverrides`). Omit to keep overrides set through `useSky()`.        |
-
-How the look props combine:
-
-- A `lookTrack` wins over `look` while it is set. Removing it (or setting it
-  to `null`) applies `look`, or returns to the physical sky when `look` is
-  unset.
-- `lookTrackOverrides` applies to whichever track is set. Left unset, the
-  overrides the instance already has are kept, so ones set with
-  `useSky().setLookTrack(track, overrides)` survive a change of `look` or
-  `lookTrack`. `null` clears them, and so does removing the prop.
-- With none of the three props set, `<Sky>` never calls `setLook` or
-  `setLookTrack`, so a look driven through `useSky()` is left alone.
+| Prop                 | Type                                                               | Default     | Cost        | Notes                                                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------ | ----------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exposure`           | `number`                                                           | `40`        | Cube rebake | Sky luminance scale; see the [`ILLUMINANCE_IS_ONE` note](./luts).                                                                                                       |
+| `sunDisc`            | `boolean`                                                          | `true`      | Uniform     | Show the in-shader sun disc.                                                                                                                                            |
+| `sunColor`           | `'neutral' \| 'bruneton' \| string \| Color \| Vector3 \| [r,g,b]` | `'neutral'` | Cube rebake | Colour of the sun as a light. Tints the sky, haze, sun disc and `createSun` lights. Hex strings are sRGB; arrays are linear.                                            |
+| `skyLuminanceFactor` | `string \| Color \| Vector3 \| [r,g,b]`                            | white       | Cube rebake | Unreal `SkyLuminanceFactor`: per-channel tint on the sky after any grade. Haze inherits it.                                                                             |
+| `grade`              | `SkyGrade \| string \| object \| null`                             | —           | Cube rebake | A [sky grade](../guides/sky-grades): an instance (kept by reference, edits apply live), a name, a definition or a saved grade. Removing the prop clears a grade it set. |
 
 `turbidity` is applied after `atmosphere`, and again whenever `atmosphere`
 changes. Mie fields in `atmosphere` reset the vanilla turbidity baseline (see
@@ -185,7 +171,7 @@ and can be set before it.
 ### Object props compare by value
 
 Since 0.4, object-valued props (`sunDirection`, `groundAlbedo`, `atmosphere`,
-`look`, `lookTrack`, `lookTrackOverrides`, `sunColor`, `skyLuminanceFactor`,
+`grade`, `sunColor`, `skyLuminanceFactor`,
 `hazeAltitudeBlend`) are compared by value, not by reference. An inline
 object is a new reference on every parent render; before 0.4 that re-ran the
 setter and re-baked the sky each render. Now the setter only runs when the contents change, so this
@@ -210,8 +196,7 @@ Removing a live prop, or setting it to `undefined`, does **not** reset the
 instance: it keeps the last value applied. The exceptions are props with a
 default in `<Sky>` itself (`exposure`, `sunDisc`, `north`,
 `mirrorBelowHorizon`, `background`, `environment`), which go back to that
-default, and `lookTrack` / `lookTrackOverrides`, which clear what they set (see
-[Appearance and looks](#appearance-and-looks)). To return to a default, pass
+default, and `grade`, which clears a grade it set. To return to a default, pass
 it explicitly (e.g. `turbidity={1}`).
 
 ## Lifecycle
@@ -255,7 +240,7 @@ cast but untyped.
 | `update(camera)`                                                                                              | Called by `<Sky>` every frame.                                                           |
 | `setTimeOfDay` / `setLatitude` / `setDayOfYear` / `setSunDirection` / `setNorth`                              | Same as the time-and-place props.                                                        |
 | `setExposure` / `setSunDisc` / `setTurbidity` / `setGroundAlbedo` / `setAtmosphere` / `setMirrorBelowHorizon` | Same as the matching props.                                                              |
-| `setLook` / `setLookTrack` / `setSkyLuminanceFactor` / `setSunColor`                                          | Same as the matching props.                                                              |
+| `setGrade` / `setSkyLuminanceFactor` / `setSunColor`                                                          | Same as the matching props.                                                              |
 | `setHazeStrength` / `setHazePolicy` / `setHazeAltitudeBlend`                                                  | Same as the haze props.                                                                  |
 | `setAerialPerspectiveDistanceScale` / `setMultiScatteringFactor`                                              | Same as `apDistanceScale` / `multiScatteringFactor`.                                     |
 | `applyHaze(sceneColorNode, options?)`                                                                         | Builds the haze output node. See [`<AutoHaze>`](#autohaze).                              |
@@ -265,8 +250,6 @@ cast but untyped.
 
 A setter called through the instance holds until the matching prop changes,
 at which point the prop is applied again. Drive each setting from one place.
-The exception is look-track overrides: with `lookTrackOverrides` unset, a
-change of `look` or `lookTrack` keeps the overrides set through the instance.
 
 ## AutoHaze
 

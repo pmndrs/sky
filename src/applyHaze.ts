@@ -206,10 +206,10 @@ export function applyHaze(
     apRefineSteps,
     atmosphereUniforms: baker.atmosphereUniforms,
     sunDirection: baker.sky.sunDirection,
-    // Same uniform bundle the sky mesh binds, so a look assigned via
-    // `sky.setLook()` retints AP inscatter with no extra plumbing and no
+    // Same uniform bundle the sky mesh binds, so a grade assigned via
+    // `sky.setGrade()` reaches AP inscatter with no extra plumbing and no
     // chance of the two drifting out of sync.
-    lookUniforms: baker.sky.lookUniforms,
+    gradeUniforms: baker.sky.gradeUniforms,
     upVector: baker.sky.upVector,
     skyLuminanceFactor: baker.sky.skyLuminanceFactor,
     skyDepthEpsilon: baker.skyDepthEpsilon,

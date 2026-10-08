@@ -15,7 +15,8 @@ import { useFrame, useThree } from '@react-three/fiber/webgpu'
 import { Sky as VanillaSky } from '../Sky'
 import type { SkyPmremOptions } from '../sky/pmrem/SkyPmrem'
 import type { FogOptions } from '../sky/FogPostProcess'
-import type { LookTrackOverrides, SkyNorth } from '../Sky'
+import type { SkyNorth } from '../Sky'
+import type { SkyGrade, SkyGradeInput, SkyGradeJSON } from '../grade'
 import { SkyContext } from './SkyContext'
 import { useStableValue } from './useStableValue'
 
@@ -52,16 +53,13 @@ export interface SkyProps {
    * `<AutoHaze mode="fog" />` (or your own `applyFog`) is wired.
    */
   fog?: FogOptions
-  /** Stylized look: a registered name, an inline definition, or `null` for physical. See the looks guide. */
-  look?: string | Record<string, any> | null
-  /** Keyframed look that follows sun elevation (e.g. `'ghibli'`). Overrides `look` while set. */
-  lookTrack?: string | any[] | null
   /**
-   * Pins `chroma` / `value` / `intensity` across the whole `lookTrack`. Omit to keep
-   * overrides set on the instance; `null` clears them.
+   * Sky grade: a `SkyGrade` (kept by reference, so editing it updates the sky
+   * live), a registered name, a definition or a saved grade (object or JSON
+   * string). `null` clears it. See the sky grades guide.
    */
-  lookTrackOverrides?: LookTrackOverrides | null
-  /** Unreal `SkyLuminanceFactor`: per-channel grade after the look. Hex string, Color, Vector3 or [r,g,b]. */
+  grade?: SkyGrade | string | SkyGradeInput | SkyGradeJSON | null
+  /** Unreal `SkyLuminanceFactor`: per-channel tint after the grade. Hex string, Color, Vector3 or [r,g,b]. */
   skyLuminanceFactor?: any
   /** Colour of the sun as a light: tints sky, haze, sun disc and `createSun` lights. `'neutral'`, `'bruneton'`, hex string, Color, Vector3 or [r,g,b]. */
   sunColor?: any
@@ -121,7 +119,7 @@ function sameConfig(a: SkyConfig, b: SkyConfig) {
  *   `timeOfDay`, `latitude`, `dayOfYear`, `sunDirection`, `north`,
  *   `exposure`, `sunDisc`, `turbidity`, `groundAlbedo`, `atmosphere`,
  *   `hazeStrength`, `hazePolicy`, `hazeAltitudeBlend`, `fog`, `mirrorBelowHorizon`,
- *   `look`, `lookTrack`, `lookTrackOverrides`, `skyLuminanceFactor`, `sunColor`,
+ *   `grade`, `skyLuminanceFactor`, `sunColor`,
  *   `apDistanceScale`, `multiScatteringFactor`
  *
  * Aerial-perspective haze post-process: render an `<AutoHaze />` child
@@ -246,9 +244,7 @@ function SkyController({
   hazePolicy,
   hazeAltitudeBlend: hazeAltitudeBlendProp,
   fog: fogProp,
-  look: lookProp,
-  lookTrack: lookTrackProp,
-  lookTrackOverrides: lookTrackOverridesProp,
+  grade: gradeProp,
   skyLuminanceFactor: skyLuminanceFactorProp,
   sunColor: sunColorProp,
   apDistanceScale,
@@ -264,9 +260,9 @@ function SkyController({
   const sunDirection = useStableValue(sunDirectionProp)
   const groundAlbedo = useStableValue(groundAlbedoProp)
   const atmosphere = useStableValue(atmosphereProp)
-  const look = useStableValue(lookProp)
-  const lookTrack = useStableValue(lookTrackProp)
-  const lookTrackOverrides = useStableValue(lookTrackOverridesProp)
+  // A SkyGrade serialises through its toJSON, so an instance edited in place
+  // re-runs the effect, and `setGrade` early-outs on the same instance.
+  const grade = useStableValue(gradeProp)
   const skyLuminanceFactor = useStableValue(skyLuminanceFactorProp)
   const sunColor = useStableValue(sunColorProp)
   const hazeAltitudeBlend = useStableValue(hazeAltitudeBlendProp)
@@ -337,24 +333,18 @@ function SkyController({
     if (hazePolicy) sky.setHazePolicy(hazePolicy)
   }, [sky, hazePolicy])
 
-  // A track wins over a single look while set. Removing `lookTrack` falls back
-  // to `look`, or to the physical sky when `look` is unset. An absent
-  // `lookTrackOverrides` keeps the instance's own (`useSky().setLookTrack(t, o)`);
-  // removing the prop clears the overrides it had set.
-  const lookPropsSet = useRef({ track: false, overrides: false })
+  // Removing the prop clears a grade it set; one assigned imperatively
+  // (`useSky().setGrade`) is left alone.
+  const gradePropSet = useRef(false)
   useEffect(() => {
-    const prev = lookPropsSet.current
-    if (lookTrack != null) {
-      const overrides =
-        lookTrackOverrides !== undefined ? lookTrackOverrides : prev.overrides ? null : sky._lookTrackOverrides
-      sky.setLookTrack(lookTrack, overrides)
-    } else if (look !== undefined) {
-      sky.setLook(look)
-    } else if (prev.track) {
-      sky.setLookTrack(null)
+    if (grade !== undefined) {
+      sky.setGrade(grade)
+      gradePropSet.current = grade !== null
+    } else if (gradePropSet.current) {
+      sky.setGrade(null)
+      gradePropSet.current = false
     }
-    lookPropsSet.current = { track: lookTrack != null, overrides: lookTrackOverrides != null }
-  }, [sky, look, lookTrack, lookTrackOverrides])
+  }, [sky, grade])
 
   useEffect(() => {
     if (skyLuminanceFactor != null) sky.setSkyLuminanceFactor(skyLuminanceFactor)

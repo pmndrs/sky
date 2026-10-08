@@ -43,11 +43,9 @@ import {
   skyViewLutParamsToUv,
   transmittanceLutParamsToUv,
 } from '../backends/tsl/atmosphere.tsl'
-import { applyLook } from '../backends/tsl/look.tsl'
+import { applyGrade } from '../backends/tsl/grade.tsl'
 import { lutTextureSize } from '../core/resolutions'
-import { clearLookUniforms, createLookUniforms, updateLookUniforms } from './LookUniforms'
-
-import type { Look } from '../looks'
+import { createGradeUniforms } from './GradeUniforms'
 
 interface SkyAtmosphereMeshOptions {
   atmosphereUniforms?: any
@@ -123,7 +121,8 @@ export class SkyAtmosphereMesh extends Mesh {
   moonColor: any
   viewHeight: any
   luminanceScale: any
-  lookUniforms: ReturnType<typeof createLookUniforms>
+  displayScale: any
+  gradeUniforms: ReturnType<typeof createGradeUniforms>
   skyLuminanceFactor: any
   sunColor: any
   /** Last rim softness passed to `setSunAngularRadius` (fraction of the radius). */
@@ -345,16 +344,22 @@ export class SkyAtmosphereMesh extends Mesh {
     this.luminanceScale = uniform(40.0)
 
     /**
-     * Stylized look uniforms. Created in the identity state (chroma 0,
-     * value 0), so a mesh with no look assigned renders exactly as before.
-     * Populated by `setLook`; every field is a uniform, so look changes
-     * never rebuild the LUT chain or recompile the node graph.
+     * `1 / renderer.toneMappingExposure` (1 under NoToneMapping). Multiplies
+     * the grade's display-referred terms (fill, gradient `replace`) so they
+     * reach the tonemapper at their authored value. `Sky.update` keeps it
+     * current; standalone mesh users can set it directly.
      */
-    this.lookUniforms = createLookUniforms()
+    this.displayScale = uniform(1)
+
+    /**
+     * Sky grade tables and uniforms (`src/grade.ts`). Allocated once, identity
+     * until `SkyAtmosphereBaker.setGrade` uploads a grade.
+     */
+    this.gradeUniforms = createGradeUniforms(this.displayScale)
 
     /**
      * Unreal's `SkyLuminanceFactor`: a per-channel multiplier applied to the
-     * sky colour *after* the look, as a final grade. Distinct from
+     * sky colour *after* the grade, as a final tint. Distinct from
      * `luminanceScale`, which is the scalar ILLUMINANCE_IS_ONE normalisation —
      * keep them separate or the units story gets muddled. Excludes the
      * sun/moon/star discs, matching Unreal. Default white = no-op.
@@ -364,7 +369,7 @@ export class SkyAtmosphereMesh extends Mesh {
     /**
      * Colour of the sun as a light source (linear RGB, green-normalised).
      * The LUTs store sky response per unit white sun illuminance, so this
-     * multiplies everything the sun lights: the sky *before* the look, the
+     * multiplies everything the sun lights: the sky *before* the grade, the
      * sun disc, and (via `applyHaze`) AP inscatter. `SkySun` tints its
      * DirectionalLight from the same value. Default white = no-op, which is
      * Hillaire's reference behaviour.
@@ -464,17 +469,6 @@ export class SkyAtmosphereMesh extends Mesh {
     return this
   }
 
-  /**
-   * Assign (or clear) the stylized look. Pure uniform writes — no material
-   * rebuild, no LUT invalidation. Callers that bake to a cube must still mark
-   * the cube dirty; `SkyAtmosphereBaker.setLook` does that.
-   */
-  setLook(look: Look | null): this {
-    if (look) updateLookUniforms(this.lookUniforms, look)
-    else clearLookUniforms(this.lookUniforms)
-    return this
-  }
-
   _buildColorNode(): any {
     const params = this.atmosphereUniforms
     const skyViewTex = this.skyViewLUT.texture
@@ -501,7 +495,7 @@ export class SkyAtmosphereMesh extends Mesh {
     const moonDiscCosU = this.moonDiscCos
     const moonColorU = this.moonColor
     const mirrorBelowHorizonU = this.mirrorBelowHorizon
-    const lookU = this.lookUniforms
+    const gradeU = this.gradeUniforms
     const skyLuminanceFactorU = this.skyLuminanceFactor
     const sunColorU = this.sunColor
 
@@ -530,11 +524,14 @@ export class SkyAtmosphereMesh extends Mesh {
       const viewHeight = max(viewHeightU, params.bottomRadius.add(float(0.01)))
 
       // View-zenith cosine.
-      const viewZenithCosAngle = clamp(dot(viewDir, upVec), float(-1.0), float(1.0))
+      // Pinned: both are read inside the grade branch below, and r186 turns a
+      // shared Fn argument into a var assigned only in the first branch that
+      // builds it.
+      const viewZenithCosAngle = clamp(dot(viewDir, upVec), float(-1.0), float(1.0)).toVar()
 
       // Sun azimuth relative to the view direction. Shared with the haze
-      // pass so the look's sun tint lands identically on sky and on haze.
-      const lightViewCosAngle = computeLightViewCosAngle(viewDir, upVec, sunDir)
+      // pass so the grade lands identically on sky and on haze.
+      const lightViewCosAngle = computeLightViewCosAngle(viewDir, upVec, sunDir).toVar()
 
       // Ground intersection test (planet at origin, camera along local up).
       const earthO = vec3(0.0, 0.0, 0.0)
@@ -616,32 +613,20 @@ export class SkyAtmosphereMesh extends Mesh {
       }
 
       // Sun colour: the LUTs assume a white sun, so the source colour is a
-      // plain multiply on the scattered light, ahead of any look.
+      // plain multiply on the scattered light, ahead of any grade.
       skyColor.mulAssign(sunColorU)
 
-      // Stylized look remap. Applied here — after the LUT/raymarch branches
-      // have merged, and before Milky Way/sun/moon are added — so it covers both
-      // sky paths and excludes the discs by construction. Identity while no
-      // look is assigned. The cube camera renders this same mesh, so the cube
-      // background and its PMREM'd IBL inherit the look for free.
-      //
-      // Uniform branch: with no look assigned (chroma = value = 0) applyLook
-      // is an exact identity, but its 8-stop ramp walk still costs real ALU
-      // per pixel — noticeable once the mesh is drawn live at screen res.
-      If(lookU.chroma.greaterThan(0.0).or(lookU.value.greaterThan(0.0)), () => {
-        skyColor.assign(
-          applyLook({
-            color: skyColor,
-            viewZenithCosAngle,
-            lightViewCosAngle,
-            sunViewCosAngle: dot(viewDir, sunDir),
-            sunZenithCosAngle: dot(sunDir, upVec),
-            look: lookU,
-          }),
-        )
+      // Sky grade (`src/grade.ts`): the authored per-time-of-day table.
+      // Applied here — after the LUT/raymarch branches have merged, and before
+      // the Milky Way and the discs are added — so it covers both sky paths
+      // and excludes the discs. The cube camera renders this same mesh, so the
+      // cube background and its IBL inherit it, fill included. Uniform branch:
+      // no grade, no table taps.
+      If(gradeU.enabled.greaterThan(0.5), () => {
+        skyColor.assign(applyGrade({ color: skyColor, viewZenithCosAngle, lightViewCosAngle, grade: gradeU }))
       })
-      // Final per-channel grade (Unreal SkyLuminanceFactor). After the look so
-      // a tint is not partially undone by the chroma remap.
+
+      // Final per-channel tint (Unreal SkyLuminanceFactor), after the grade.
       skyColor.mulAssign(skyLuminanceFactorU)
 
       // Camera→space transmittance along this view ray. Shared by the Milky Way

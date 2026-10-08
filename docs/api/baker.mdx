@@ -70,12 +70,12 @@ render target, keyed the way the draw will be. Optional; see
 The baker tracks four independent dirty flags so `update()` skips work
 whose inputs haven't changed:
 
-| Flag          | Set by                                                                                                                                                                                                                                                                                    | Triggers on next `update()`                                                  |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `atmosDirty`  | `setAtmosphereParams(partial)`, when a value actually changed                                                                                                                                                                                                                             | Transmittance + MultiScatter + SkyView + cube bake + PMREM (full chain)      |
-| `sunDirty`    | `setSun({ elevation, azimuth })`, when either value changed                                                                                                                                                                                                                               | SkyView + cube bake + PMREM (Transmittance/MultiScatter don't depend on sun) |
-| `cubeDirty`   | The two above; `markCubeDirty()`; `setLook` / `setSunColor` / `setSkyLuminanceFactor` / `setMirrorBelowHorizon`; a `displayScale` change (`Sky` only); and from `setCamera`: altitude moved more than 100 m (or 2 % of altitude, if larger) or the local sun zenith cosine drifted > 1e-3 | Cube bake + PMREM only                                                       |
-| `cameraDirty` | `setCamera(camera, opts)`, when altitude moved more than 1 m (or 0.5 % of altitude, if larger) or the local sun zenith cosine changed                                                                                                                                                     | SkyView (viewHeight) — the AP LUT is refreshed separately, see below         |
+| Flag          | Set by                                                                                                                                                                                                                                                                                     | Triggers on next `update()`                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `atmosDirty`  | `setAtmosphereParams(partial)`, when a value actually changed                                                                                                                                                                                                                              | Transmittance + MultiScatter + SkyView + cube bake + PMREM (full chain)      |
+| `sunDirty`    | `setSun({ elevation, azimuth })`, when either value changed                                                                                                                                                                                                                                | SkyView + cube bake + PMREM (Transmittance/MultiScatter don't depend on sun) |
+| `cubeDirty`   | The two above; `markCubeDirty()`; `setGrade` / `setSunColor` / `setSkyLuminanceFactor` / `setMirrorBelowHorizon`; a `displayScale` change (`Sky` only); and from `setCamera`: altitude moved more than 100 m (or 2 % of altitude, if larger) or the local sun zenith cosine drifted > 1e-3 | Cube bake + PMREM only                                                       |
+| `cameraDirty` | `setCamera(camera, opts)`, when altitude moved more than 1 m (or 0.5 % of altitude, if larger) or the local sun zenith cosine changed                                                                                                                                                      | SkyView (viewHeight) — the AP LUT is refreshed separately, see below         |
 
 The `setCamera` thresholds compare against the state at the last SkyView
 render / cube bake, not the previous frame, so slow drift still re-bakes
@@ -290,32 +290,33 @@ PMREM (`cubeDirty`), never the LUTs — cheap enough to scrub per frame. The
 haze picks up the same uniforms through `applyHaze`. `Sky`'s versions also
 accept names and hex strings; the baker's take resolved values.
 
-| Method                                  | Notes                                                                                                                                                                                                          |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `setLook(look \| null)`                 | Assign a resolved `Look` (`resolveLook('ghibli-day')`) or clear it. See the [Looks guide](../guides/looks).                                                                                                    |
-| `setSkyLuminanceFactor(v)`              | Per-channel grade on the sky and haze, after the look (Unreal `SkyLuminanceFactor`). Excludes the sun, moon and star discs. `Vector3`, `{x, y, z}` or `[r, g, b]`.                                             |
-| `setSunColor(v)`                        | Colour of the sun as a light source, linear RGB (`Vector3`, `{x, y, z}` or `[r, g, b]`). Tints the sky (before the look), the sun disc and the haze. See [Sun colour](../guides/tuning-atmosphere#sun-colour). |
-| `addSunColorListener(fn)` → unsubscribe | `fn(sunColor: Vector3)` fires on every `setSunColor` (by reference; clone to keep). `SkySun` uses it to tint its light.                                                                                        |
+| Method                                  | Notes                                                                                                                                                                                                           |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setGrade(grade \| null)`               | Assign a `SkyGrade` (kept by reference; edits re-bake its tables and the cube) or clear it. `addGradeListener(fn)` reports assignments and edits. See [Sky grades](../guides/sky-grades).                       |
+| `setSkyLuminanceFactor(v)`              | Per-channel tint on the sky and haze, after the grade (Unreal `SkyLuminanceFactor`). Excludes the sun, moon and star discs. `Vector3`, `{x, y, z}` or `[r, g, b]`.                                              |
+| `setSunColor(v)`                        | Colour of the sun as a light source, linear RGB (`Vector3`, `{x, y, z}` or `[r, g, b]`). Tints the sky (before the grade), the sun disc and the haze. See [Sun colour](../guides/tuning-atmosphere#sun-colour). |
+| `addSunColorListener(fn)` → unsubscribe | `fn(sunColor: Vector3)` fires on every `setSunColor` (by reference; clone to keep). `SkySun` uses it to tint its light.                                                                                         |
 
-### Keeping looks display-referred
+### Keeping the grade display-referred
 
-A look's ramp is multiplied by `baker.sky.lookUniforms.displayScale`, which
-must equal `1 / renderer.toneMappingExposure` (`1` under `NoToneMapping`) so
-a look shows its authored colours at any exposure. `Sky.update` keeps it in
+A grade's added light (the night fill and a gradient's `replace`) is
+multiplied by `baker.sky.displayScale`, which must equal
+`1 / renderer.toneMappingExposure` (`1` under `NoToneMapping`) so authored
+colours reach the screen as authored at any exposure. `Sky.update` keeps it in
 sync; with the baker alone, do it yourself before `update()`:
 
 ```js
 const exposure = renderer.toneMapping === NoToneMapping ? 1 : renderer.toneMappingExposure
 const displayScale = 1 / Math.max(exposure, 1e-4)
-const u = baker.sky.lookUniforms.displayScale
+const u = baker.sky.displayScale
 if (u.value !== displayScale) {
   u.value = displayScale
-  baker.markCubeDirty() // the cube holds the look
+  baker.markCubeDirty() // the cube holds the graded sky
 }
 baker.update()
 ```
 
-It has no effect while no look is set.
+It has no effect while no grade (or no fill / `replace`) is set.
 
 ## Mesh access
 

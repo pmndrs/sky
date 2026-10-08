@@ -1,6 +1,6 @@
 ---
-title: Upgrading to 0.4
-description: What changes for existing scenes when moving from @pmndrs/sky 0.3 to 0.4, and how to keep the old behaviour where you need it.
+title: Upgrading
+description: What changes for existing scenes between @pmndrs/sky minor versions (0.3 → 0.4 → 0.5 → 0.6), and how to keep the old behaviour where you need it.
 ---
 
 0.4 is mostly new features: per-frame image-based lighting, pixel-sharp stars
@@ -12,6 +12,38 @@ rough order of how likely you are to notice.
 
 Everything here is pre-1.0, so a minor version can change behaviour; the full
 list of changes is in the [changelog](https://github.com/pmndrs/sky/blob/main/CHANGELOG.md).
+
+## 0.5 → 0.6: looks are replaced by sky grades
+
+Looks (`setLook`, `setLookTrack`, `registerLook`, …) are removed. [Sky
+grades](./sky-grades) do the same job with better results: they are keyed per
+region of the dome rather than one elevation ramp, their colour swap keeps
+the channel average instead of the luminance (the old one clipped saturated
+targets into flat bands at sunset), and a gradient can now replace the sky
+outright for a fixed or solid-colour sky. There is also an
+[editor](./sky-grades#the-editor) for authoring them.
+
+| 0.5                                                   | 0.6                                                                                                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `sky.setLook({ stops, chroma, value, sunTint })`      | `sky.setGrade(gradientGrade(stops, { amount: chroma, replace: value }))`; a `sunTint` becomes the `sunward` / `glow` zones of a keyframe |
+| `sky.setLook('ghibli-day')`, `setLookTrack('ghibli')` | `sky.setGrade('storybook')` — or author your own in the editor                                                                           |
+| `setLookTrack([{ elevation, look }, …])`              | `new SkyGrade([{ elevation, gradient: { stops, amount, replace } }, …])`                                                                 |
+| look stop `at`: sin(elevation), −1…1                  | gradient stop `at`: elevation in **degrees**, −90…90 (`asin(at) × 180 / π`)                                                              |
+| look stop `ease: 1.8`                                 | the same (`'linear'`, `'smooth'` or a number)                                                                                            |
+| `intensity`                                           | scale the stop colours, or the keyframe's `exposure`                                                                                     |
+| `registerLook` / `registerLookTrack`                  | `registerGrade(name, grade)`                                                                                                             |
+| `setLook(null)` / `setLookTrack(null)`                | `setGrade(null)`                                                                                                                         |
+| React `look`, `lookTrack`, `lookTrackOverrides`       | React `grade`                                                                                                                            |
+| `baker.sky.lookUniforms.displayScale`                 | `baker.sky.displayScale`                                                                                                                 |
+| `createHazeOutputNode({ lookUniforms })`              | `createHazeOutputNode({ gradeUniforms: baker.sky.gradeUniforms })` (`applyHaze` wires it for you)                                        |
+
+A look's `value` axis pulled the sky's brightness toward the ramp's; a
+gradient's `replace` mixes the gradient in whole, colour and brightness, which
+is close at low values and exact at 1. A look at `chroma: 1, value: 0` maps to
+`amount: 1, replace: 0` exactly in hue, but keeps the channel average rather
+than the luminance, so saturated blues read deeper than before.
+
+`ColorInput` is still exported.
 
 ## 0.4 → 0.5: three r186 or later
 
@@ -277,7 +309,8 @@ A look's colour ramp is now multiplied by `1 / renderer.toneMappingExposure`,
 which `Sky.update()` keeps in sync, so at `value: 1` the authored colours
 reach the screen as authored, whatever the sky's exposure. Looks with
 `value: 0` (chroma only) are unaffected. The built-in Ghibli palettes were
-retuned. See [Stylized looks](./looks).
+retuned. (Looks were replaced by sky grades in 0.6; see
+[0.5 → 0.6](#0.5-→-0.6:-looks-are-replaced-by-sky-grades).)
 
 Custom looks that use `value > 0` and were tuned against 0.3 render
 differently. To get exactly the 0.3 result, multiply the look's `intensity`
@@ -288,9 +321,9 @@ A look's `sunTint` also changed shape with the sun high: it used to tint
 every view toward the sun's azimuth, from the horizon to the zenith, and is
 now a round glow around the sun from about 30° up. Sunsets look the same.
 
-If you drive `SkyAtmosphereBaker` directly instead of `Sky`, keep
-`baker.sky.lookUniforms.displayScale` in sync with the exposure yourself; see
-the [baker docs](../api/baker#keeping-looks-display-referred).
+If you drive `SkyAtmosphereBaker` directly instead of `Sky`, keep the
+display scale in sync with the exposure yourself (`baker.sky.displayScale`
+since 0.6; see the [baker docs](../api/baker#keeping-the-grade-display-referred)).
 
 ## Sun colour, and `SkySun` follows it
 

@@ -9,7 +9,7 @@ Sagami Bay is a practical example of an authored sky grade inside a styled app. 
 
 ## Try a grade in context
 
-1. Select **Adjust print**, then **Sky grade**. This is the packaged editor embedded in the app's sidebar.
+1. Select **Adjust print**, then **Sky grade**. This is the packaged editor embedded in the floating Print studio. Drag the studio's header to move it, its bottom-right corner to resize it, or select the expand button for more room. Scene & print opens by default.
 2. Choose **Haze**, **Dusk** or **Night** below the print. The lighting transitions over 1.8 seconds while your authored grade remains attached. Reduced-motion preferences switch immediately.
 3. Select a keyframe or navigate the sun in the editor, then adjust a zone colour or gradient. Watch the sky, reflected light and distant terrain together.
 4. Use **Physical** to compare the ungraded atmosphere. Undo/redo, grade presets, Load, Save grade and Copy JSON work through the same editor as the generic demos.
@@ -26,7 +26,7 @@ Open `http://127.0.0.1:5191`. Source lives in `examples/fuji/` and needs a WebGP
 
 ## Integration pattern
 
-The app owns its React Three Fiber scene and render pipeline. A child component obtains the existing `Sky` with `useSky()` and calls `createSkyEditor` with `layout: 'embedded'`, its initialized renderer, and a React-owned sidebar container. The editor runs its clock before the sky update and draws its preview after the app render.
+The app owns its React Three Fiber scene and render pipeline. A child component obtains the existing `Sky` with `useSky()` and calls `createSkyEditor` with `layout: 'embedded'`, its initialized renderer, and a React-owned studio container. The studio handles movement and resizing; the editor switches between a preview/inspector split and a stacked layout according to its container width. The editor runs its clock before the sky update and draws its preview after the app render.
 
 One starting `SkyGrade` is supplied to the sky. Light editions change the physical sun, exposure, turbidity and depth rather than reassigning the grade. Editor sun navigation cancels an in-flight edition transition; choosing another edition returns control to the app. The editor's physical settings callback synchronizes the app's exposure/turbidity values without taking back the editor's solar clock.
 

@@ -6,6 +6,7 @@ import { Atmosphere } from './sky/Atmosphere'
 import { Coast } from './scene/Coast'
 import { CameraRig } from './scene/CameraRig'
 import { PrintFrame } from './print/PrintFrame'
+import { PrintStudio } from './print/PrintStudio'
 import { waterDefaults, fogDefaults, shadowDefaults, presets, type Preset, type Settings } from './settings'
 import type { SkySettings } from '@pmndrs/sky'
 import { GradeEditor, type EditorSession } from './sky/GradeEditor'
@@ -59,7 +60,7 @@ function FrameMeter() {
 export function App() {
   const [preset, setPreset] = useState<Preset>('dusk')
   const [controlsOpen, setControlsOpen] = useState(false)
-  const [studioTab, setStudioTab] = useState<'grade' | 'scene'>('grade')
+  const [studioTab, setStudioTab] = useState<'grade' | 'scene'>('scene')
   const [editorHost, setEditorHost] = useState<HTMLDivElement | null>(null)
   const [editorFocused, setEditorFocused] = useState(false)
   const [gpu, setGpu] = useState<boolean | null>(null)
@@ -350,20 +351,7 @@ export function App() {
           )}
         </SceneBoundary>
       </PrintFrame>
-      <aside id="print-studio" className="print-studio" hidden={!controlsOpen} aria-label="Print studio">
-        <header className="studio-header">
-          <div>
-            <span className="studio-eyebrow">SAGAMI BAY · SKY 0.6</span>
-            <h2>Print studio</h2>
-          </div>
-          <button
-            type="button"
-            className="studio-close"
-            onClick={() => setControlsOpen(false)}
-            aria-label="Close print studio">
-            ×
-          </button>
-        </header>
+      <PrintStudio open={controlsOpen} onClose={() => setControlsOpen(false)}>
         <div className="studio-tabs" role="tablist" aria-label="Studio panels">
           <button
             id="grade-tab"
@@ -424,7 +412,7 @@ export function App() {
             }}
           />
         </div>
-      </aside>
+      </PrintStudio>
       <output id="frame-meter" className="frame-meter" aria-label="Rendering performance">
         WEBGPU · SKY 0.6
       </output>

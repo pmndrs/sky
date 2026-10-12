@@ -16,7 +16,7 @@ type Props = {
   onSettingsCommit: (settings: SkySettings) => void
 }
 
-/** The public vanilla editor, mounted into the print's React-owned sidebar. */
+/** The public vanilla editor, mounted into the print's floating studio. */
 export function GradeEditor(props: Props) {
   const sky = useSky() as Sky | null
   const renderer = useThree((state) => state.renderer)
@@ -41,8 +41,8 @@ export function GradeEditor(props: Props) {
       onSettingsCommit: ({ settings }) => latest.current.onSettingsCommit(settings),
       onFocusChange: (focused) => latest.current.onFocus(focused),
     })
-    // Keep the packaged editor's behavior. Theme its host and adapt the
-    // preview/inspector stack to a narrow sidebar instead of a floating window.
+    // Theme the packaged editor and respond to the studio's width, so resizing
+    // keeps the inspector readable without recreating the editor or its grade.
     Object.assign(editor.element.style, {
       height: '100%',
       colorScheme: 'light',
@@ -58,7 +58,7 @@ export function GradeEditor(props: Props) {
     }))
       editor.element.style.setProperty(`--sky-editor-${name}`, value)
     const style = document.createElement('style')
-    style.textContent = `.header{display:none}.window{border:0;border-radius:0;box-shadow:none}.body{display:block;overflow:auto}.preview-area{height:170px;min-height:170px}.inspector{overflow:visible;border-left:0;border-top:1px solid var(--sky-editor-line)}.row label,.zname,h4,.banner,.hint,.notice{color:#817965}.toolbar,.solar,.tabs,.preview-tabs{padding:8px 10px}@container(min-width:500px){.body{display:grid;grid-template-columns:minmax(0,0.8fr) minmax(0,1fr)}.preview-area{height:auto;min-height:0}.inspector{overflow:auto;border-top:0;border-left:1px solid var(--sky-editor-line)}}`
+    style.textContent = `.header{display:none}.window{border:0;border-radius:0;box-shadow:none}.body{display:block;overflow:auto}.preview-area{height:220px;min-height:220px}.inspector{overflow:visible;border-left:0;border-top:1px solid var(--sky-editor-line)}.row label,.zname,h4,.banner,.hint,.notice{color:#817965}.toolbar,.solar,.tabs,.preview-tabs{padding:8px 10px}@container(min-width:760px){.body{display:grid;grid-template-columns:minmax(0,1fr) 420px}.preview-area{height:auto;min-height:0}.inspector{overflow:auto;border-top:0;border-left:1px solid var(--sky-editor-line)}}`
     editor.element.shadowRoot?.append(style)
     const observer = new MutationObserver(() => {
       if (!editor.isOpen && latest.current.active) latest.current.onClose()

@@ -1,0 +1,37 @@
+---
+title: Sagami Bay grade showcase
+description: Use the embedded Sky Editor to art-direct a coastal print, with one grade reaching the sky, sea lighting and atmospheric distance.
+---
+
+[Open the Sagami Bay demo](https://sky.docs.pmnd.rs/examples/fuji/).
+
+Sagami Bay is a practical example of an authored sky grade inside a styled app. A paper print frames Fuji, layered hills, a small island and an animated sea. The same live grade colours the sky, water lighting and depth haze.
+
+## Try a grade in context
+
+1. Select **Adjust print**, then **Sky grade**. This is the packaged editor embedded in the app's sidebar.
+2. Choose **Haze**, **Dusk** or **Night** below the print. The lighting transitions over 1.8 seconds while your authored grade remains attached. Reduced-motion preferences switch immediately.
+3. Select a keyframe or navigate the sun in the editor, then adjust a zone colour or gradient. Watch the sky, reflected light and distant terrain together.
+4. Use **Physical** to compare the ungraded atmosphere. Undo/redo, grade presets, Load, Save grade and Copy JSON work through the same editor as the generic demos.
+5. Open **Scene & print** to tune paper, water and atmospheric depth. These edits leave your grade intact. **Restore Fuji grade** returns to the starting grade and can be undone.
+
+## Run it locally
+
+```sh
+pnpm install
+pnpm example:fuji
+```
+
+Open `http://127.0.0.1:5191`. Source lives in `examples/fuji/` and needs a WebGPU browser. The docs deployment publishes it alongside the examples gallery at `/examples/fuji/`.
+
+## Integration pattern
+
+The app owns its React Three Fiber scene and render pipeline. A child component obtains the existing `Sky` with `useSky()` and calls `createSkyEditor` with `layout: 'embedded'`, its initialized renderer, and a React-owned sidebar container. The editor runs its clock before the sky update and draws its preview after the app render.
+
+One starting `SkyGrade` is supplied to the sky. Light editions change the physical sun, exposure, turbidity and depth rather than reassigning the grade. Editor sun navigation cancels an in-flight edition transition; choosing another edition returns control to the app. The editor's physical settings callback synchronizes the app's exposure/turbidity values without taking back the editor's solar clock.
+
+Grade changes reach the sky's IBL and the app's cached reflection captures through the existing bake listener. The scene's paper finish runs after haze and tone mapping, preserving the grade's linear-light operation.
+
+The coastal geometry is composed, rather than surveyed. Distant land is excluded from water captures as art direction for the reference composition. Nearby rocks and structures still reflect; terrain visibility still removes the direct sun highlight as the sun sets. Water simulation retains Tidewater's MIT attribution.
+
+See [Embedded Sky Editor](./sky-editor) for the public API and [Sky grades](./sky-grades) for the grade data format.

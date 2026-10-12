@@ -1,0 +1,433 @@
+import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useFrame, useThree } from '@react-three/fiber/webgpu'
+import { WebGPUCanvas } from './WebGPUCanvas'
+import { Leva, useControls, folder, button } from 'leva'
+import { Atmosphere } from './sky/Atmosphere'
+import { Coast } from './scene/Coast'
+import { CameraRig } from './scene/CameraRig'
+import { PrintFrame } from './print/PrintFrame'
+import { waterDefaults, fogDefaults, shadowDefaults, presets, type Preset, type Settings } from './settings'
+import type { SkySettings } from '@pmndrs/sky'
+import { GradeEditor, type EditorSession } from './sky/GradeEditor'
+import { blendLight, lightSettings, type LightSettings } from './sky/lightTransition'
+import { createPrintGrade } from './sky/grade'
+
+const fixedWaterKeys = new Set(['waterSlick', 'waterFoam', 'waterFoamBias', 'waterFoamColor'])
+const editableWaterDefaults = Object.fromEntries(
+  Object.entries(waterDefaults).filter(([key]) => !fixedWaterKeys.has(key)),
+)
+
+class SceneBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  state = { error: null as string | null }
+  static getDerivedStateFromError(error: Error) {
+    return { error: error.message }
+  }
+  render() {
+    return this.state.error ? (
+      <div className="scene-message">
+        <span>THE PRINT COULD NOT DEVELOP</span>
+        <p>{this.state.error}</p>
+        <button onClick={() => window.location.reload()}>Try again</button>
+      </div>
+    ) : (
+      this.props.children
+    )
+  }
+}
+
+function FrameMeter() {
+  const gl = useThree((s) => s.renderer)
+  const meter = useRef({ elapsed: 0, frames: 0 })
+  useEffect(() => {
+    const canvas = gl.domElement
+    canvas.setAttribute('aria-label', 'Animated view of Mount Fuji across Sagami Bay')
+    canvas.setAttribute('role', 'img')
+  }, [gl])
+  useFrame((_, delta) => {
+    meter.current.elapsed += delta
+    meter.current.frames++
+    if (meter.current.elapsed >= 1) {
+      const element = document.getElementById('frame-meter')
+      if (element) element.textContent = `${Math.round(meter.current.frames / meter.current.elapsed)} FPS · WEBGPU`
+      meter.current.elapsed = 0
+      meter.current.frames = 0
+    }
+  })
+  return null
+}
+
+export function App() {
+  const [preset, setPreset] = useState<Preset>('dusk')
+  const [controlsOpen, setControlsOpen] = useState(false)
+  const [studioTab, setStudioTab] = useState<'grade' | 'scene'>('grade')
+  const [editorHost, setEditorHost] = useState<HTMLDivElement | null>(null)
+  const [editorFocused, setEditorFocused] = useState(false)
+  const [gpu, setGpu] = useState<boolean | null>(null)
+  const session = useRef<EditorSession | null>(null)
+  const renderedLight = useRef(lightSettings(presets.dusk))
+  const [displayedLight, setDisplayedLight] = useState<LightSettings | null>(null)
+  const [transition, setTransition] = useState<{ from: LightSettings; to: LightSettings } | null>(null)
+  const onEditorReady = useCallback((value: EditorSession | null) => {
+    session.current = value
+  }, [])
+  const [values, set] = useControls(
+    () => ({
+      // The embedded editor owns these controls. Retain app values for edition
+      // transitions without showing a duplicate set of sun/atmosphere sliders.
+      elevation: { value: presets.dusk.elevation, render: () => false },
+      azimuth: { value: presets.dusk.azimuth, render: () => false },
+      exposure: { value: presets.dusk.exposure, render: () => false },
+      turbidity: { value: presets.dusk.turbidity, render: () => false },
+      'Shadowed haze': folder(
+        {
+          shadowHaze: { value: false, label: 'Enable haze shadows' },
+          shadowStrength: { value: 0.5, min: 0, max: 2, step: 0.05, label: 'Shadow strength' },
+          shadowSamples: { value: 32, min: 8, max: 96, step: 8, label: 'March samples' },
+          shadowResolution: { value: 0.5, options: { Quarter: 0.25, Half: 0.5, Full: 1 }, label: 'Resolution' },
+          shadowDistance: { value: 90000, min: 1000, max: 110000, step: 1000, label: 'Distance (m)' },
+        },
+        { collapsed: true },
+      ),
+      'Atmospheric depth': folder({
+        haze: { value: presets.dusk.haze, min: 0, max: 1.5, step: 0.05, label: 'Haze density' },
+        stars: { value: true, label: 'Stars' },
+      }),
+      'Ground fog': folder(
+        {
+          groundFog: { value: fogDefaults.groundFog, label: 'Enable ground fog' },
+          fogDensity: { value: fogDefaults.fogDensity, min: 0, max: 2, step: 0.005, label: 'Density / km' },
+          fogHeight: { value: fogDefaults.fogHeight, min: 10, max: 2000, step: 10, label: 'Height falloff (m)' },
+          fogBase: { value: fogDefaults.fogBase, min: -100, max: 1000, step: 10, label: 'Base height (m)' },
+          fogOpacity: { value: fogDefaults.fogOpacity, min: 0, max: 1, step: 0.01, label: 'Opacity limit' },
+        },
+        { collapsed: true },
+      ),
+      Print: folder({
+        paper: { value: presets.dusk.paper, min: 0, max: 1, step: 0.01, label: 'Paper grain' },
+        ink: { value: presets.dusk.ink, min: 0, max: 1, step: 0.01, label: 'Ink absorption' },
+      }),
+      Water: folder({
+        waveStrength: { value: waterDefaults.waveStrength, min: 0, max: 1.5, step: 0.01, label: 'Wave height' },
+        waterSlopeScale: { value: waterDefaults.waterSlopeScale, min: 0, max: 2, step: 0.01, label: 'Ripple normals' },
+        waterReflection: {
+          value: waterDefaults.waterReflection,
+          min: 0,
+          max: 3,
+          step: 0.01,
+          label: 'Scene reflection',
+        },
+        waterPaused: { value: false, label: 'Pause water' },
+        'Reflection & color': folder(
+          {
+            waterRoughness: {
+              value: waterDefaults.waterRoughness,
+              min: 0.005,
+              max: 0.5,
+              step: 0.005,
+              label: 'Micro roughness',
+            },
+            waterRoughnessScale: {
+              value: waterDefaults.waterRoughnessScale,
+              min: 0,
+              max: 3,
+              step: 0.01,
+              label: 'Ripple blur',
+            },
+            waterSpecular: {
+              value: waterDefaults.waterSpecular,
+              min: 0,
+              max: 2,
+              step: 0.01,
+              label: 'Specular strength',
+            },
+            waterIor: { value: waterDefaults.waterIor, min: 1, max: 2, step: 0.001, label: 'IOR' },
+            waterColor: { value: waterDefaults.waterColor, label: 'Water color' },
+          },
+          { collapsed: true },
+        ),
+        'Wind waves': folder(
+          {
+            waterWindSpeed: {
+              value: waterDefaults.waterWindSpeed,
+              min: 0.1,
+              max: 15,
+              step: 0.1,
+              label: 'Wind speed (m/s)',
+            },
+            waterWindDirection: {
+              value: waterDefaults.waterWindDirection,
+              min: 0,
+              max: 360,
+              step: 1,
+              label: 'Wind heading',
+            },
+            waterFetch: { value: waterDefaults.waterFetch, min: 1, max: 500, step: 1, label: 'Wind fetch (km)' },
+            waterWindScale: {
+              value: waterDefaults.waterWindScale,
+              min: 0,
+              max: 2,
+              step: 0.01,
+              label: 'Wind wave energy',
+            },
+            waterChoppiness: {
+              value: waterDefaults.waterChoppiness,
+              min: 0,
+              max: 1.5,
+              step: 0.01,
+              label: 'Choppiness',
+            },
+            waterSpeed: { value: waterDefaults.waterSpeed, min: 0, max: 2, step: 0.01, label: 'Animation speed' },
+          },
+          { collapsed: true },
+        ),
+        Swell: folder(
+          {
+            waterSwellScale: {
+              value: waterDefaults.waterSwellScale,
+              min: 0,
+              max: 2,
+              step: 0.01,
+              label: 'Swell energy',
+            },
+            waterSwellDirection: {
+              value: waterDefaults.waterSwellDirection,
+              min: 0,
+              max: 360,
+              step: 1,
+              label: 'Swell heading',
+            },
+            waterSwellWindSpeed: {
+              value: waterDefaults.waterSwellWindSpeed,
+              min: 0.1,
+              max: 15,
+              step: 0.1,
+              label: 'Source wind (m/s)',
+            },
+            waterSwellFetch: {
+              value: waterDefaults.waterSwellFetch,
+              min: 1,
+              max: 2000,
+              step: 1,
+              label: 'Swell fetch (km)',
+            },
+          },
+          { collapsed: true },
+        ),
+        'Surface detail': folder(
+          {
+            waterGust: { value: waterDefaults.waterGust, min: 0, max: 2, step: 0.01, label: 'Gust patches' },
+            waterStreak: { value: waterDefaults.waterStreak, min: 0, max: 1, step: 0.01, label: 'Wind streaks' },
+          },
+          { collapsed: true },
+        ),
+        'Reset water': button(() => set(editableWaterDefaults)),
+      }),
+      Camera: folder({
+        drift: { value: true, label: 'Follow cursor' },
+        manualCamera: { value: false, label: 'Unlock camera' },
+      }),
+      'Reset this light': button(() => choosePreset(preset)),
+    }),
+    [preset],
+  )
+  function choosePreset(next: Preset) {
+    session.current?.editor.followApp()
+    const current = session.current?.sky.getSettings()
+    const from = {
+      ...renderedLight.current,
+      ...(current
+        ? {
+            elevation: current.sun.elevation,
+            azimuth: current.sun.azimuth,
+            exposure: current.exposure,
+            turbidity: current.turbidity,
+          }
+        : {}),
+    }
+    const { preset: _, ...nextValues } = presets[next]
+    // Keep the authored grade, water and local fog while comparing light.
+    const lightValues = Object.fromEntries(
+      Object.entries(nextValues).filter(
+        ([key]) => !(key in waterDefaults) && !(key in fogDefaults) && !(key in shadowDefaults),
+      ),
+    )
+    set(lightValues)
+    setPreset(next)
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setTransition(null)
+      setDisplayedLight(null)
+    } else {
+      setDisplayedLight(from)
+      setTransition({ from, to: lightSettings(presets[next]) })
+    }
+  }
+  function stopTransition() {
+    if (transition) set(renderedLight.current)
+    setTransition(null)
+    setDisplayedLight(null)
+  }
+  function onSettingsCommit(settings: SkySettings) {
+    stopTransition()
+    // Sun navigation stays with the editor until an edition button acquires it.
+    set({ exposure: settings.exposure, turbidity: settings.turbidity })
+  }
+  useEffect(() => {
+    if (!transition) return
+    const started = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - started) / 1800)
+      setDisplayedLight(blendLight(transition.from, transition.to, progress))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+      else {
+        setDisplayedLight(null)
+        setTransition(null)
+      }
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [transition])
+  const settings = {
+    ...presets.dusk,
+    ...values,
+    ...displayedLight,
+    preset,
+    waterSlick: 0,
+    waterFoam: 0,
+    drift: values.drift && !editorFocused,
+  } as Settings
+  renderedLight.current = lightSettings(settings)
+  useEffect(() => {
+    const nav = navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }
+    if (!nav.gpu) {
+      setGpu(false)
+      return
+    }
+    nav.gpu
+      .requestAdapter()
+      .then((adapter) => setGpu(!!adapter))
+      .catch(() => setGpu(false))
+  }, [])
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setControlsOpen(false)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+  return (
+    <>
+      <PrintFrame
+        settings={settings}
+        onPreset={choosePreset}
+        controlsOpen={controlsOpen}
+        onToggleControls={() => setControlsOpen((v) => !v)}>
+        <SceneBoundary>
+          {gpu === true ? (
+            <WebGPUCanvas>
+              <CameraRig settings={settings} />
+              <Atmosphere settings={settings}>
+                <Coast settings={settings} />
+                <GradeEditor
+                  container={editorHost}
+                  active={controlsOpen && studioTab === 'grade'}
+                  onReady={onEditorReady}
+                  onClose={() => setControlsOpen(false)}
+                  onFocus={setEditorFocused}
+                  onSunControl={stopTransition}
+                  onSettingsCommit={onSettingsCommit}
+                />
+              </Atmosphere>
+              <FrameMeter />
+            </WebGPUCanvas>
+          ) : (
+            <div className="scene-message">
+              <span>{gpu === null ? 'PREPARING THE PRINT' : 'WEBGPU IS REQUIRED'}</span>
+              <p>
+                {gpu === null ? 'Gathering the evening light…' : 'Open this print in a browser with WebGPU enabled.'}
+              </p>
+            </div>
+          )}
+        </SceneBoundary>
+      </PrintFrame>
+      <aside id="print-studio" className="print-studio" hidden={!controlsOpen} aria-label="Print studio">
+        <header className="studio-header">
+          <div>
+            <span className="studio-eyebrow">SAGAMI BAY · SKY 0.6</span>
+            <h2>Print studio</h2>
+          </div>
+          <button
+            type="button"
+            className="studio-close"
+            onClick={() => setControlsOpen(false)}
+            aria-label="Close print studio">
+            ×
+          </button>
+        </header>
+        <div className="studio-tabs" role="tablist" aria-label="Studio panels">
+          <button
+            id="grade-tab"
+            role="tab"
+            aria-selected={studioTab === 'grade'}
+            aria-controls="grade-panel"
+            onClick={() => setStudioTab('grade')}>
+            Sky grade
+          </button>
+          <button
+            id="scene-tab"
+            role="tab"
+            aria-selected={studioTab === 'scene'}
+            aria-controls="scene-panel"
+            onClick={() => setStudioTab('scene')}>
+            Scene & print
+          </button>
+        </div>
+        <div
+          id="grade-panel"
+          className="studio-grade-panel"
+          role="tabpanel"
+          aria-labelledby="grade-tab"
+          hidden={studioTab !== 'grade'}>
+          <div className="studio-grade-host" ref={setEditorHost} />
+          <footer className="studio-footer">
+            <span>One grade colours the sky, sea and distance.</span>
+            <button type="button" onClick={() => session.current?.editor.loadGrade(createPrintGrade(0.5).toJSON())}>
+              Restore Fuji grade
+            </button>
+          </footer>
+        </div>
+        <div
+          id="scene-panel"
+          className="studio-scene-panel leva-wrap"
+          role="tabpanel"
+          aria-labelledby="scene-tab"
+          hidden={studioTab !== 'scene'}>
+          <Leva
+            fill
+            hidden={false}
+            collapsed={false}
+            titleBar={false}
+            theme={{
+              colors: {
+                elevation1: '#eae3d2',
+                elevation2: '#f2eddf',
+                elevation3: '#dad2bf',
+                accent1: '#7d4333',
+                accent2: '#98523d',
+                accent3: '#ab674c',
+                highlight1: '#746c5b',
+                highlight2: '#393d36',
+                highlight3: '#262d28',
+              },
+              sizes: { rootWidth: '100%', controlWidth: '160px' },
+              radii: { xs: '1px', sm: '2px', lg: '3px' },
+            }}
+          />
+        </div>
+      </aside>
+      <output id="frame-meter" className="frame-meter" aria-label="Rendering performance">
+        WEBGPU · SKY 0.6
+      </output>
+    </>
+  )
+}

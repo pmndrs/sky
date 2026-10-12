@@ -21,9 +21,12 @@ export const abs: any
 export const acos: any
 export const asin: any
 export const add: any
+export const attribute: any
 export const cameraPosition: any
 export const cameraProjectionMatrix: any
+export const cameraViewMatrix: any
 export const clamp: any
+export const color: any
 export const cos: any
 export const cross: any
 export const cubeTexture: any
@@ -33,6 +36,7 @@ export const exp: any
 export const float: any
 export const floor: any
 export const fract: any
+export const fwidth: any
 export const instanceIndex: any
 export const instancedBufferAttribute: any
 export const int: any
@@ -49,7 +53,9 @@ export const mix: any
 export const modelViewProjection: any
 export const modelWorldMatrix: any
 export const mul: any
+export const mx_noise_float: any
 export const normalize: any
+export const normalWorld: any
 export const pass: any
 export const positionLocal: any
 export const positionWorld: any
@@ -76,6 +82,7 @@ export const textureLoad: any
 export const textureSize: any
 export const textureStore: any
 export const time: any
+export const transformDirection: any
 export const uint: any
 export const uniform: any
 export const uniformArray: any

@@ -22,3 +22,6 @@ jobs:
 
       - name: Build, typecheck, lint, test, format
         run: pnpm run ci
+
+      - name: Fuji example build and tests
+        run: pnpm --filter @pmndrs/sky-example-fuji build && pnpm --filter @pmndrs/sky-example-fuji test

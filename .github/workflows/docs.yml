@@ -80,6 +80,11 @@ jobs:
         env:
           BASE_PATH: ${{ steps.set-base-path.outputs.BASE_PATH }}/examples/
 
+      - name: Build Fuji grade showcase
+        run: pnpm --filter @pmndrs/sky-example-fuji build
+        env:
+          BASE_PATH: ${{ steps.set-base-path.outputs.BASE_PATH }}/examples/fuji/
+
       # --- 3. Merge: copy the examples build into the docs output under
       # /examples/. One directory tree, one Pages artifact below.
       - name: Merge examples build into docs output
@@ -88,6 +93,8 @@ jobs:
           test -d out # fail loudly if the docs build didn't land where expected
           mkdir -p out/examples
           cp -r examples/vanilla/dist/. out/examples/
+          mkdir -p out/examples/fuji
+          cp -r examples/fuji/dist/. out/examples/fuji/
 
       - uses: actions/upload-pages-artifact@v3
         with:

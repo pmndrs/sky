@@ -71,14 +71,6 @@ jobs:
           LOGO: /logo.png
           GITHUB: pmndrs/sky
           DISCORD: https://discord.gg/poimandres
-          THEME_PRIMARY: '#323e48'
-          THEME_SCHEME: tonalSpot
-          THEME_CONTRAST: '0'
-          THEME_NOTE: '#1f6feb'
-          THEME_TIP: '#238636'
-          THEME_IMPORTANT: '#8957e5'
-          THEME_WARNING: '#d29922'
-          THEME_CAUTION: '#da3633'
           CONTRIBUTORS_PAT: ${{ secrets.GITHUB_TOKEN }}
 
       # --- 2. Examples gallery, built with a /examples/ sub-base so its

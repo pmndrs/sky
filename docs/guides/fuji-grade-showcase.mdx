@@ -32,6 +32,8 @@ One starting `SkyGrade` is supplied to the sky. Light editions change the physic
 
 Grade changes reach the sky's IBL and the app's cached reflection captures through the existing bake listener. The scene's paper finish runs after haze and tone mapping, preserving the grade's linear-light operation.
 
+`SkySun.attach(scene)` also adds the visible sun disc, with terrain depth hiding it as it sets. The demo calls `sky.setSunDisc({ intensity: 2 })` to keep the disc warm and visible against the exposed cream sky. This adjusts the visible source independently of the sunlight illuminating the water; the disc is excluded from reflection captures to avoid duplicating the direct-light highlight.
+
 The coastal geometry is composed, rather than surveyed. Distant land is excluded from water captures as art direction for the reference composition. Nearby rocks and structures still reflect; terrain visibility still removes the direct sun highlight as the sun sets. Water simulation retains Tidewater's MIT attribution.
 
 See [Embedded Sky Editor](./sky-editor) for the public API and [Sky grades](./sky-grades) for the grade data format.

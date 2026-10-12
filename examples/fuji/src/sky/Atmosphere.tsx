@@ -112,6 +112,10 @@ function SkyLighting({ settings }: { settings: Settings }) {
   useEffect(() => {
     if (!sky) return
     const sun = sky.createSun({ physical: true, intensity: 0.75, castShadow: false })
+    // The scene disc attaches with SkySun. Give this pale, exposed print a
+    // warm visible source instead of clipping the disc into its cream sky.
+    // Disc radiance is independent of the light driving the water highlight.
+    sky.setSunDisc({ intensity: 2 })
     const ambient = sky.createAmbient()
     sun.attach(scene)
     ambient.attach(scene)

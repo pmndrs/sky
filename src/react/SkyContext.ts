@@ -16,7 +16,9 @@ export interface SkyContextValue {
   setDayOfYear(dayOfYear: number): void
   setSunDirection(sunDirection: any): void
   setExposure(exposure: number): void
-  setSunDisc(sunDisc: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number }): void
+  setSunDisc(
+    sunDisc: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number; intensity?: number },
+  ): void
   setNorth(north: SkyNorth): void
   setTurbidity(turbidity: number): void
   setGroundAlbedo(groundAlbedo: any): void

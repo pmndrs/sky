@@ -1,40 +1,17 @@
 /**
- * Sky grade editor. Top: the scene, graded live (sky, haze, IBL, ambient).
- * Middle: the time-of-day timeline with the grade's keyframes. Bottom: the
- * whole sky dome flattened (azimuth from the sun × elevation) with zone
- * guides, and the keyframe inspector.
- *
- * Everything here goes through the public API — `SkyGrade` for the data,
- * `sky.setGrade` to apply it, `SkyGradePreview` for the dome view — so a
- * consumer app can build its own version of any panel.
+ * The demo owns its scene, haze, lighting and camera. The same optional
+ * Sky Editor that consumer apps import supplies the floating authoring UI.
  */
 
 import * as THREE from 'three/webgpu'
 import { pass, renderOutput } from 'three/tsl'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-import {
-  Sky,
-  SkyGrade,
-  SkyGradePreview,
-  ditherOutput,
-  grades,
-  horizonToZenith,
-  resolveGrade,
-  resolveGradeKey,
-  solarPosition,
-  solidSky,
-} from '@pmndrs/sky'
+import { Sky, SkyGradePreview, ditherOutput } from '@pmndrs/sky'
+import { createSkyEditor } from '@pmndrs/sky/editor'
 
-import { Timeline } from './timeline.js'
-import { Inspector } from './inspector.js'
-import { LutOverlay } from './overlay.js'
-
-const STORAGE_KEY = 'pmndrs-sky-grade-editor'
 const LATITUDE = 37.7
 const DAY_OF_YEAR = 172
-/** Within this many degrees of a keyframe, the playhead counts as on it. */
-const ON_KEY_TOLERANCE = 0.25
 
 const $ = (id) => document.getElementById(id)
 
@@ -146,448 +123,70 @@ function setDither(on) {
   pipeline.needsUpdate = true
 }
 
-// ---- the grade --------------------------------------------------------------
-
-function loadStored() {
-  try {
-    const text = localStorage.getItem(STORAGE_KEY)
-    return text ? SkyGrade.fromJSON(text) : null
-  } catch {
-    return null
-  }
-}
-
-const grade = loadStored() ?? resolveGrade('storybook')
-sky.setGrade(grade)
-
-// ---- dome preview on its own canvas -----------------------------------------
-
-const preview = new SkyGradePreview(sky, { mode: 'split', elevationRange: [-12, 90] })
-const lutCanvas = $('lutGpu')
-const lutTarget = new THREE.CanvasTarget(lutCanvas)
-lutTarget.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-// Resized only while it is the active canvas target: the renderer resizes the
-// depth buffer that goes with a canvas target from that target's resize event,
-// which it only listens to on the active one.
-let lutSize = null
-new ResizeObserver(() => (lutSize = [lutCanvas.clientWidth, lutCanvas.clientHeight])).observe(lutCanvas)
-
-const mainTarget = renderer.getCanvasTarget()
+// The app supplies its scene, helpers and output pipeline. All authoring UI
+// comes from the optional editor entry, the same tool consumer apps import.
+sky.setGrade('storybook')
 const view = $('view')
+const editor = createSkyEditor({
+  sky,
+  renderer,
+  container: view,
+  storageKey: 'pmndrs-sky-grade-editor',
+  capabilities: { ambient: true, haze: true },
+  onFocusChange: (focused) => {
+    controls.enabled = !focused
+  },
+})
+$('edit').addEventListener('click', () => editor.toggle())
+for (const button of $('camera').querySelectorAll('button[data-look]')) {
+  const looks = { sun: [0, 12], away: [Math.PI, 12], up: [0, 70], down: [0, -25] }
+  button.addEventListener('click', () => lookToward(...looks[button.dataset.look]))
+}
 new ResizeObserver(() => {
-  const w = view.clientWidth
-  const h = view.clientHeight
-  renderer.setSize(w, h, false)
-  camera.aspect = w / h
+  const width = view.clientWidth
+  const height = view.clientHeight
+  renderer.setSize(width, height, false)
+  camera.aspect = width / height
   camera.updateProjectionMatrix()
 }).observe(view)
-
-// ---- time / elevation -------------------------------------------------------
-
-const solar = (t) => solarPosition({ timeOfDay: t, latitude: LATITUDE, dayOfYear: DAY_OF_YEAR })
-
-/** Solar noon (highest sun) by golden-section search. */
-function findNoon() {
-  let a = 10
-  let b = 14
-  for (let i = 0; i < 40; i++) {
-    const m1 = b - (b - a) / 1.618
-    const m2 = a + (b - a) / 1.618
-    if (solar(m1).elevation > solar(m2).elevation) b = m2
-    else a = m1
-  }
-  return (a + b) / 2
-}
-const NOON = findNoon()
-const NOON_ELEVATION = solar(NOON).elevation
-const MIDNIGHT_ELEVATION = solar(NOON + 12).elevation
-
-/** Afternoon/evening time at which the sun stands at `elevation` (clamped to the reachable range). */
-function timeForElevation(elevation) {
-  if (elevation >= NOON_ELEVATION) return NOON
-  if (elevation <= MIDNIGHT_ELEVATION) return NOON + 12
-  let a = NOON
-  let b = NOON + 12
-  for (let i = 0; i < 50; i++) {
-    const m = (a + b) / 2
-    if (solar(m).elevation > elevation) a = m
-    else b = m
-  }
-  return (a + b) / 2
-}
-
-const state = { time: 18.9, playing: false, speed: 1, bypass: false, mode: 'split' }
-
-function setTime(t) {
-  state.time = ((t % 24) + 24) % 24
-  sky.setTimeOfDay(state.time)
-  $('time').value = state.time
-  $('timeOut').textContent = formatTime(state.time)
-  syncSelection()
-}
-
-/** Put the sun at `elevation` — through the time of day when reachable, directly otherwise. */
-function setElevation(elevation) {
-  if (elevation > NOON_ELEVATION + 1e-3 || elevation < MIDNIGHT_ELEVATION - 1e-3) {
-    sky.setSunDirection({ elevation, azimuth: sky.sunAzimuth })
-    syncSelection()
-    return
-  }
-  setTime(timeForElevation(elevation))
-}
-
-function formatTime(t) {
-  const h = Math.floor(t)
-  const m = Math.floor((t - h) * 60)
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-}
-
-// ---- selection: the inspector edits what the playhead is on -----------------
-
-let selected = null
-/** The settings shown and edited: the selected keyframe, or the interpolated ones. */
-let viewKey = null
-let inspectorStamp = ''
-
-function syncSelection() {
-  const e = sky.sunElevation
-  // A one-keyframe grade holds all day (a fixed sky), so it is edited
-  // wherever the playhead is; auto-keying would quietly make it time-varying.
-  selected = grade.keys.length === 1 ? grade.keys[0] : grade.keyAt(e, ON_KEY_TOLERANCE)
-  refreshInspector()
-}
-
-function refreshInspector(force = false) {
-  const e = sky.sunElevation
-  const stamp = `${grade.revision}|${selected ? grade.keys.indexOf(selected) : 'g' + e.toFixed(2)}`
-  if (!force && stamp === inspectorStamp) return
-  inspectorStamp = stamp
-  if (selected) {
-    viewKey = selected
-    inspector.show({
-      key: selected,
-      ghost: false,
-      elevation: e,
-      index: grade.keys.indexOf(selected),
-      count: grade.keys.length,
-    })
-  } else {
-    viewKey = resolveGradeKey(grade.interpolatedKeyInput(e))
-    inspector.show({ key: viewKey, ghost: true, elevation: e, count: grade.keys.length })
-  }
-}
-
-// ---- undo -------------------------------------------------------------------
-
-const history = { stack: [JSON.stringify(grade)], index: 0 }
-
-function commit() {
-  const snap = JSON.stringify(grade)
-  if (snap === history.stack[history.index]) return
-  history.stack.length = history.index + 1
-  history.stack.push(snap)
-  if (history.stack.length > 200) history.stack.shift()
-  history.index = history.stack.length - 1
-  updateUndoButtons()
-}
-
-function restore(snap) {
-  const loaded = SkyGrade.fromJSON(snap)
-  grade.name = loaded.name
-  $('name').value = grade.name
-  grade.setKeys(loaded.keys)
-  syncSelection()
-}
-
-function undo() {
-  if (history.index === 0) return
-  history.index--
-  restore(history.stack[history.index])
-  updateUndoButtons()
-}
-
-function redo() {
-  if (history.index >= history.stack.length - 1) return
-  history.index++
-  restore(history.stack[history.index])
-  updateUndoButtons()
-}
-
-function updateUndoButtons() {
-  $('undo').disabled = history.index === 0
-  $('redo').disabled = history.index >= history.stack.length - 1
-}
-
-// Autosave.
-let saveTimer = 0
-grade.onChange(() => {
-  clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(grade))
-    } catch {
-      /* private mode: no autosave */
-    }
-  }, 300)
-})
-
-// ---- panels -----------------------------------------------------------------
-
-function editKey(patch, { commit: doCommit }) {
-  if (!selected) {
-    if (grade.keys.length >= 16) return toast('16 keyframes is the maximum')
-    selected = grade.insertKeyAt(Math.round(sky.sunElevation * 10) / 10)
-  }
-  selected = grade.updateKey(selected, patch)
-  refreshInspector()
-  if (doCommit) commit()
-}
-
-const inspector = new Inspector($('inspector'), {
-  onEdit: editKey,
-  onAddKey: () => {
-    selected = grade.insertKeyAt(Math.round(sky.sunElevation * 10) / 10)
-    commit()
-    refreshInspector(true)
-  },
-  onDelete: () => deleteSelected(),
-  onElevation: (e) => {
-    if (!selected) return
-    selected = grade.updateKey(selected, { elevation: e })
-    commit()
-    setElevation(e)
-  },
-})
-
-function deleteSelected() {
-  if (!selected) return
-  grade.removeKey(selected)
-  selected = null
-  commit()
-  syncSelection()
-}
-
-const timeline = new Timeline($('timelineCanvas'), {
-  grade: () => grade,
-  elevation: () => sky.sunElevation,
-  selected: () => selected,
-  onScrub: (e) => {
-    stopPlaying()
-    setElevation(e)
-  },
-  onSelectKey: (key) => {
-    stopPlaying()
-    setElevation(key.elevation)
-  },
-  onMoveKey: (key, e) => {
-    const moved = grade.updateKey(key, { elevation: e })
-    setElevation(e)
-    selected = moved
-    refreshInspector(true)
-    return moved
-  },
-  onMoveKeyEnd: () => commit(),
-  onInsertKey: (e) => {
-    if (grade.keys.length >= 16) return toast('16 keyframes is the maximum')
-    grade.insertKeyAt(e)
-    commit()
-    setElevation(e)
-  },
-})
-
-const overlay = new LutOverlay($('lutOverlay'), $('lutHover'), {
-  preview: () => preview,
-  key: () => viewKey,
-  sunElevation: () => sky.sunElevation,
-  mode: () => state.mode,
-  onPickZone: (zone) => inspector.flashZone(zone),
-})
-
-// ---- toolbar ----------------------------------------------------------------
-
-$('time').addEventListener('input', (e) => {
-  stopPlaying()
-  setTime(+e.target.value)
-})
-
-function stopPlaying() {
-  state.playing = false
-  $('play').textContent = '▶'
-}
-$('play').addEventListener('click', () => {
-  state.playing = !state.playing
-  $('play').textContent = state.playing ? '❚❚' : '▶'
-})
-$('speed').addEventListener('change', (e) => (state.speed = +e.target.value))
-
-function setBypass(on) {
-  state.bypass = on
-  sky.setGrade(on ? null : grade)
-  const b = $('bypass')
-  b.classList.toggle('on', !on)
-  b.textContent = on ? 'Physical (bypass)' : 'Grade on'
-}
-$('bypass').addEventListener('click', () => setBypass(!state.bypass))
-
-const presetSelect = $('preset')
-// Helper-made starting points next to the registered grades.
-const HELPER_PRESETS = {
-  __gradient: ['Gradient (horizon → zenith)', () => horizonToZenith('#f3c98f', '#4f8fdb', { name: 'gradient' })],
-  __tinted: [
-    'Tinted gradient (keeps physical light)',
-    () => horizonToZenith('#ffc9a0', '#5a7fd0', { replace: 0, name: 'tinted gradient' }),
-  ],
-  __solid: ['Solid colour', () => solidSky('#7f9fd0', { name: 'solid' })],
-}
-presetSelect.append(new Option('Start from…', ''), new Option('Physical (no keyframes)', '__empty'))
-for (const [value, [label]] of Object.entries(HELPER_PRESETS)) presetSelect.append(new Option(label, value))
-for (const name of Object.keys(grades)) presetSelect.append(new Option(name, name))
-presetSelect.addEventListener('change', () => {
-  const v = presetSelect.value
-  presetSelect.value = ''
-  if (!v) return
-  const src = v === '__empty' ? new SkyGrade() : HELPER_PRESETS[v] ? HELPER_PRESETS[v][1]() : resolveGrade(v)
-  grade.name = v === '__empty' ? '' : src.name || v
-  $('name').value = grade.name
-  grade.setKeys(src.keys)
-  commit()
-  syncSelection()
-  toast(v === '__empty' ? 'Cleared — physical sky' : `Loaded “${grade.name}”`)
-})
-
-$('new').addEventListener('click', () => {
-  grade.setKeys([])
-  commit()
-  syncSelection()
-})
-$('undo').addEventListener('click', undo)
-$('redo').addEventListener('click', redo)
-
-$('name').value = grade.name
-$('name').addEventListener('change', (e) => {
-  grade.name = e.target.value.trim()
-  commit()
-})
-
-$('save').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(grade, null, 2)], { type: 'application/json' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `${(grade.name || 'sky-grade').replace(/[^\w.-]+/g, '-')}.json`
-  a.click()
-  URL.revokeObjectURL(a.href)
-})
-$('copy').addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(grade, null, 2))
-    toast('Grade JSON copied')
-  } catch {
-    toast('Clipboard unavailable — use Save')
-  }
-})
-$('load').addEventListener('click', () => $('file').click())
-$('file').addEventListener('change', async (e) => {
-  const file = e.target.files?.[0]
-  e.target.value = ''
-  if (!file) return
-  try {
-    restore(await file.text())
-    commit()
-    toast(`Loaded ${file.name}`)
-  } catch (err) {
-    toast(`Not a sky grade: ${err.message}`)
-  }
-})
-
-for (const b of $('lutTabs').querySelectorAll('button[data-mode]')) {
-  b.addEventListener('click', () => {
-    state.mode = b.dataset.mode
-    preview.setMode(state.mode)
-    for (const o of $('lutTabs').querySelectorAll('button[data-mode]')) o.classList.toggle('on', o === b)
-  })
-}
-$('guides').addEventListener('change', (e) => (overlay.showGuides = e.target.checked))
-
-const LOOKS = { sun: [0, 12], away: [Math.PI, 12], up: [0, 70], down: [0, -25] }
-for (const b of $('camera').querySelectorAll('button')) {
-  b.addEventListener('click', () => lookToward(...LOOKS[b.dataset.look]))
-}
-
-let toastTimer = 0
-function toast(text) {
-  const t = $('toast')
-  t.textContent = text
-  t.classList.add('show')
-  clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => t.classList.remove('show'), 1600)
-}
-
-window.addEventListener('keydown', (e) => {
-  const tag = document.activeElement?.tagName
-  const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA'
-  const mod = e.metaKey || e.ctrlKey
-  if (mod && e.key.toLowerCase() === 'z') {
-    e.preventDefault()
-    if (e.shiftKey) redo()
-    else undo()
-    return
-  }
-  if (typing) return
-  if (e.key === ' ') {
-    e.preventDefault()
-    $('play').click()
-  } else if (e.key === 'b' || e.key === 'B') {
-    setBypass(!state.bypass)
-  } else if (e.key === 'k' || e.key === 'K') {
-    inspector.h.onAddKey()
-  } else if (e.key === 'Backspace' || e.key === 'Delete') {
-    deleteSelected()
-  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-    stopPlaying()
-    setTime(state.time + (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 0.5 : 0.05))
-  }
-})
-
-// ---- loop -------------------------------------------------------------------
-
-setTime(state.time)
 lookToward(0, 12)
-updateUndoButtons()
 
-// Scripted checks / console poking.
-Object.assign(window, { __sky: sky, __grade: grade, __renderer: renderer, __preview: preview, __THREE: THREE })
-window.__editor = { setTime, setElevation, setBypass, setDither, lookToward, state, ambient }
-
+// Numeric grading checks use the same preview mapping as the packaged tool.
+Object.assign(window, {
+  __sky: sky,
+  __renderer: renderer,
+  __THREE: THREE,
+  __tool: editor,
+  __SkyGradePreview: SkyGradePreview,
+})
+Object.defineProperty(window, '__grade', { get: () => sky.grade })
+window.__editor = {
+  setElevation: (elevation) => sky.setSunDirection({ elevation, azimuth: sky.sunAzimuth }),
+  setTime: (time) => sky.setTimeOfDay(time),
+  setDither,
+  lookToward,
+}
 let last = performance.now()
 renderer.setAnimationLoop(() => {
   const now = performance.now()
   const dt = Math.min(0.1, (now - last) / 1000)
   last = now
-  if (state.playing) setTime(state.time + dt * state.speed)
-
-  timeline.setRange(
-    Math.floor(Math.min(MIDNIGHT_ELEVATION, ...grade.keys.map((k) => k.elevation)) - 2),
-    Math.ceil(Math.max(NOON_ELEVATION, ...grade.keys.map((k) => k.elevation)) + 2),
-  )
-  refreshInspector()
-
+  editor.update(dt)
   sky.update(camera)
   sky.updateAerialPerspective()
   controls.update()
   pipeline.render()
-
-  renderer.setCanvasTarget(lutTarget)
-  if (lutSize) {
-    lutTarget.setSize(lutSize[0], lutSize[1], false)
-    lutSize = null
-  }
-  preview.render(renderer)
-  renderer.setCanvasTarget(mainTarget)
-
-  timeline.draw()
-  overlay.draw()
-
-  const k = selected ? `keyframe ${grade.keys.indexOf(selected) + 1}/${grade.keys.length}` : 'between keyframes'
-  $('status').textContent =
-    `${formatTime(state.time)} · sun ${sky.sunElevation.toFixed(1)}° · ${k}` + (state.bypass ? ' · BYPASS' : '')
+  editor.render()
 })
+addEventListener(
+  'pagehide',
+  () => {
+    editor.dispose()
+    controls.dispose()
+    ambient.dispose()
+    sun.dispose()
+    sky.dispose()
+    renderer.dispose()
+  },
+  { once: true },
+)

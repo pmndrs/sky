@@ -103,6 +103,9 @@ export const lodToRoughness = (lod: number, maxLod: number) => (maxLod > 0 ? 1 -
  * `PmremScheduler`, which is only created then.
  */
 export class SkyPmrem {
+  get needsUpdate(): boolean {
+    return this._fallback ? this._fallback.needsUpdate : this._pending
+  }
   /** Which path is live: ours (`'sky'`) or three's generator. */
   mode: 'three' | 'sky' = 'three'
   /** The PMREM layout our path writes. */

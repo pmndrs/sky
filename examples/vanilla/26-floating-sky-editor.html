@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>@pmndrs/sky — floating editor in an app</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        font: 14px system-ui;
+        background: #111;
+        color: white;
+      }
+      #game {
+        position: relative;
+        width: 100%;
+        height: 100%;
+      }
+      canvas {
+        display: block;
+      }
+      #hud {
+        position: absolute;
+        left: 16px;
+        top: 16px;
+        background: #111b;
+        padding: 12px;
+        border-radius: 8px;
+      }
+      #hud p {
+        margin: 0 0 8px;
+      }
+      #hud button {
+        font: inherit;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game">
+      <div id="hud">
+        <p>Your app scene, with its own day/night clock.</p>
+        <button id="edit">Sky Editor</button>
+      </div>
+    </div>
+    <script type="module">
+      import * as THREE from 'three/webgpu'
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+      import { Sky } from '@pmndrs/sky'
+      import { createSkyEditor } from '@pmndrs/sky/editor'
+
+      const game = document.getElementById('game')
+      const renderer = new THREE.WebGPURenderer({ antialias: true })
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+      renderer.setSize(innerWidth, innerHeight)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      game.prepend(renderer.domElement)
+      await renderer.init()
+      const scene = new THREE.Scene()
+      const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 10000)
+      camera.position.set(12, 4, 16)
+      const controls = new OrbitControls(camera, renderer.domElement)
+      controls.target.set(0, 1.5, 0)
+      controls.update()
+      const sky = new Sky(renderer, { timeOfDay: 17, exposure: 40 })
+      sky.attach(scene)
+      await sky.compileAsync()
+      const sun = sky.createSun({ intensity: 3 })
+      sun.attach(scene)
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(1000, 1000),
+        new THREE.MeshStandardMaterial({ color: '#767c66', roughness: 1 }),
+      )
+      ground.rotation.x = -Math.PI / 2
+      scene.add(ground)
+      for (let i = 0; i < 5; i++) {
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(1, 48, 24),
+          new THREE.MeshStandardMaterial({
+            color: i % 2 ? '#c49478' : '#eeeeee',
+            metalness: i / 4,
+            roughness: 0.08 + i * 0.18,
+          }),
+        )
+        mesh.position.set((i - 2) * 3, 1, 0)
+        scene.add(mesh)
+      }
+
+      let time = 17
+      let editingSun = false
+      const editor = createSkyEditor({
+        sky,
+        renderer,
+        container: game,
+        open: false,
+        acquireSunControl: () => {
+          editingSun = true
+          return () => {
+            time = sky.getSettings().sun.timeOfDay
+            editingSun = false
+          }
+        },
+        onFocusChange: (focused) => {
+          controls.enabled = !focused
+        },
+        onCommit: ({ grade }) => {
+          window.__lastSavedGrade = grade
+        },
+        onSettingsCommit: ({ settings }) => {
+          window.__lastSavedSettings = settings
+        },
+      })
+      document.getElementById('edit').addEventListener('click', () => editor.toggle())
+      addEventListener('resize', () => {
+        renderer.setSize(innerWidth, innerHeight)
+        camera.aspect = innerWidth / innerHeight
+        camera.updateProjectionMatrix()
+      })
+      let last = performance.now()
+      renderer.setAnimationLoop(() => {
+        const now = performance.now()
+        const dt = Math.min((now - last) / 1000, 0.1)
+        last = now
+        if (!editingSun) {
+          time = (time + dt * 0.01) % 24
+          sky.setTimeOfDay(time)
+        }
+        editor.update(dt)
+        sky.update(camera)
+        renderer.render(scene, camera)
+        editor.render()
+      })
+      window.addEventListener(
+        'pagehide',
+        () => {
+          editor.dispose()
+          controls.dispose()
+          sun.dispose()
+          sky.dispose()
+          renderer.dispose()
+        },
+        { once: true },
+      )
+      Object.assign(window, {
+        __sky: sky,
+        __tool: editor,
+        __renderer: renderer,
+        __THREE: THREE,
+        __controls: controls,
+        __createSkyEditor: createSkyEditor,
+      })
+    </script>
+  </body>
+</html>

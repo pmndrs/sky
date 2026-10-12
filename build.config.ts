@@ -3,13 +3,14 @@ import { defineBuildConfig } from 'unbuild'
 /**
  * Unbuild configuration for @pmndrs/sky
  *
- * Three entry points:
+ * Four entry points:
  * - `.`                 → src/index.ts   (vanilla core, samples the TSL LUTs)
  * - `./react`           → src/react/     (R3F <Sky> component + hooks)
  * - `./react/auto-haze` → src/react/AutoHaze  (kept separate so its
  *                         `useRenderPipeline` import stays out of the main
  *                         `./react` bundle — <Sky> then works on r3f builds
  *                         that don't yet export the hook)
+ * - `./editor`        → src/editor/index (optional vanilla authoring UI)
  *
  * Each entry emits .mjs, .cjs and .d.ts. Three.js, React and R3F are
  * externalized (they are peer deps) so the published bundle carries none of
@@ -17,7 +18,7 @@ import { defineBuildConfig } from 'unbuild'
  * `three/addons/*`, `@react-three/fiber/webgpu`).
  */
 export default defineBuildConfig({
-  entries: ['src/index', 'src/react', 'src/react/AutoHaze'],
+  entries: ['src/index', 'src/react', 'src/react/AutoHaze', 'src/editor/index'],
   outDir: 'dist',
   clean: true,
   declaration: true,

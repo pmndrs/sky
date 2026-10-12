@@ -56,6 +56,11 @@
       "import": "./dist/react/AutoHaze.mjs",
       "require": "./dist/react/AutoHaze.cjs"
     },
+    "./editor": {
+      "types": "./dist/editor/index.d.ts",
+      "import": "./dist/editor/index.mjs",
+      "require": "./dist/editor/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

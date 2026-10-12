@@ -36,6 +36,8 @@ export interface GradeUniforms {
   matrix: any
   /** `1 / toneMappingExposure` — the sky mesh's `displayScale`. `uniform<float>` */
   displayScale: any
+  /** Artistic moonlight scales only the night fill, without re-uploading grade tables. */
+  fillScale: any
   /** Float bake, reused between uploads. */
   bake: SkyGradeBake | null
   /** Slices currently holding keyframe data (the rest are identity). */
@@ -72,6 +74,7 @@ export function createGradeUniforms(displayScale: any = uniform(1)): GradeUnifor
     w: uniform(0.5 / MAX_GRADE_KEYS),
     matrix: uniform(new Matrix3()),
     displayScale,
+    fillScale: uniform(1),
     bake: null,
     uploadedKeys: 0,
   }

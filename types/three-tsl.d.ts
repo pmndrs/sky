@@ -77,6 +77,7 @@ export const sqrt: any
 export const step: any
 export const sub: any
 export const texture: any
+export const tan: any
 export const texture3D: any
 export const textureLoad: any
 export const textureSize: any

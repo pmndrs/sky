@@ -1,14 +1,20 @@
 import { Box3, Color, DirectionalLight, MathUtils, Object3D, Vector3 } from 'three/webgpu'
 
 import { compassToTheta } from './compass'
+import { SkyCelestialDisc } from './SkyCelestialDisc'
+import { horizonCosZenith, sunDiscVisibleFraction } from '../core/sunTransmittance'
 
-interface SkyMoonOptions {
+export interface SkyMoonOptions {
   color?: number
   intensity?: number
   distance?: number
   target?: Object3D | null
   followSun?: boolean
   phase?: number
+  /** Artistic phase brightness and crescent mask. Default false for compatibility. */
+  phaseLighting?: boolean
+  /** Automatically wash the disc into the local sky in daylight/haze. Default true. */
+  daylightFade?: boolean
   showDisc?: boolean
   discIntensity?: number
   discAngularDiameter?: number
@@ -37,10 +43,9 @@ interface SkyMoonOptions {
  *    follow-sun and stays where you put it (turning with `sky.setNorth`).
  *    Use for cinematic shots.
  *
- * The moon does NOT feed the atmosphere LUTs (the Hillaire integrator only
- * supports one light, and lunar irradiance is six orders of magnitude below
- * solar — atmospheric in-scatter from moonlight is sub-perceptible). It is a
- * pure scene light.
+ * The moon does not feed the atmosphere LUTs. `phaseLighting: true` adds a
+ * crescent mask, scales light intensity by the squared illuminated fraction
+ * (an artistic curve), and uses the camera's local planet horizon.
  *
  * Auto-fade: intensity scales by `smoothstep(-2°, 0°, moonElevation)` so the
  * light cleanly switches off as the moon dips below the horizon. The target
@@ -62,6 +67,7 @@ export class SkyMoon {
   phase: number
   _mesh: any
   light: DirectionalLight
+  readonly disc: SkyCelestialDisc
   target: Object3D
   _targetIntensity: number
   _scene: Object3D | null
@@ -71,6 +77,9 @@ export class SkyMoon {
   /** Last `setDirection` input, re-placed when the sky's north changes. */
   _manual: { elevation: number; azimuth: number } | null = null
   _onNorthChanged: () => void
+  _phaseLighting: boolean
+  _changeListeners = new Set<() => void>()
+  _unsubscribeBake: (() => void) | null
 
   constructor(
     sky: any,
@@ -82,10 +91,12 @@ export class SkyMoon {
 
       followSun = true,
       phase = 0.5,
+      phaseLighting = false,
+      daylightFade = true,
 
-      // Visible moon disc on the sky mesh (parallels SkySun-but-on-mesh).
+      // Visible moon mesh outside the cube bake.
       // Default ON because the moon's disc is its main visual feature.
-      // Always full — no phase-shaded crescent (v1 simplification).
+      // Legacy default is full; phaseLighting opts into crescent shading.
       showDisc = true,
       discIntensity = 1.0,
       discAngularDiameter = 0.00935, // ~0.535° matches Earth-Moon
@@ -102,11 +113,18 @@ export class SkyMoon {
     this.sky = sky
     this.distance = distance
     this.followSun = followSun
-    this.phase = phase
+    this.phase = phase - Math.floor(phase)
+    this._phaseLighting = phaseLighting
 
     this._mesh = sky.baker.sky
 
     this.light = new DirectionalLight(color, intensity)
+    this.disc = new SkyCelestialDisc(sky.baker, 'moon')
+    this.light.add(this.disc)
+    this._mesh.moonDiscOnSky.value = 0
+    this._mesh.moonPhase.value = this.phase
+    this._mesh.moonPhaseShading.value = phaseLighting ? 1 : 0
+    this._mesh.moonDaylightFade.value = daylightFade ? 1 : 0
     this.light.castShadow = castShadow
     this.light.shadow.mapSize.width = shadowMapSize
     this.light.shadow.mapSize.height = shadowMapSize
@@ -145,6 +163,7 @@ export class SkyMoon {
     // so toggling back on picks up immediately on the next setSunDirection.
     this._onSunChanged = (sunVec: Vector3) => this._syncFromSun(sunVec)
     this._unsubscribe = sky.baker.addSunListener(this._onSunChanged)
+    this._unsubscribeBake = sky.baker.addBakeListener?.(() => this._applyHorizonFade()) ?? null
     this._onNorthChanged = () => {
       if (!this.followSun && this._manual) this.setDirection(this._manual)
     }
@@ -189,13 +208,52 @@ export class SkyMoon {
 
   /**
    * Set the lunar phase. 0 = new moon (moon co-located with sun, no
-   * visible moonlight), 0.5 = full (anti-sun), 1 = new again.
-   * Wraps modulo 1.
+   * visible moonlight with phaseLighting), 0.5 = full (anti-sun), 1 = new
+   * again. Wraps modulo 1. Legacy mode changes only the direction.
    */
   setPhase(phase: number) {
     this.phase = phase - Math.floor(phase)
-    if (this.followSun) this._syncFromSun(this.sky.baker._sunVec)
+    this._mesh.moonPhase.value = this.phase
+    if (this.followSun) {
+      this._syncFromSun(this.sky.baker._sunVec)
+    } else {
+      this._applyHorizonFade()
+      this._notifyChange()
+    }
     return this
+  }
+
+  /** Squared illuminated fraction: full = 1, quarter = 0.25, new = 0. */
+  get phaseBrightness() {
+    return this._phaseLighting ? Math.pow((1 - Math.cos(this.phase * Math.PI * 2)) * 0.5, 2) : 1
+  }
+
+  /** Fraction visible above the horizon used by the light. */
+  get visibility() {
+    if (!this._phaseLighting) return _smoothstep(-2, 0, MathUtils.radToDeg(Math.asin(clamp1(this._moonVec.y))))
+    const params = this.sky.baker.atmosphereParams
+    const height = Math.max(this._mesh.viewHeight.value, params.bottomRadius + 0.01)
+    const elevation = Math.asin(clamp1(this._moonVec.dot(this._mesh.upVector.value)))
+    const horizon = Math.asin(horizonCosZenith(height, params.bottomRadius))
+    return sunDiscVisibleFraction(elevation - horizon, Math.acos(clamp1(this._mesh.moonDiscCos.value)))
+  }
+
+  setPhaseLighting(enabled: boolean) {
+    this._phaseLighting = enabled
+    this._mesh.moonPhaseShading.value = enabled ? 1 : 0
+    this._applyHorizonFade()
+    this._notifyChange()
+    return this
+  }
+
+  /** Direction/phase changes, including manual placement and north rotation. */
+  addChangeListener(listener: () => void) {
+    this._changeListeners.add(listener)
+    return () => this._changeListeners.delete(listener)
+  }
+
+  _notifyChange() {
+    for (const listener of this._changeListeners) listener()
   }
 
   /**
@@ -250,7 +308,7 @@ export class SkyMoon {
     const cam = this.light.shadow.camera
     this.light.target.updateMatrixWorld()
     this.light.updateMatrixWorld()
-    cam.updateMatrixWorld()
+    this.light.shadow.updateMatrices(this.light)
 
     const corners = [
       new Vector3(box3.min.x, box3.min.y, box3.min.z),
@@ -302,8 +360,12 @@ export class SkyMoon {
       this._unsubscribe = null
     }
     this.sky._northListeners?.delete(this._onNorthChanged)
+    this._unsubscribeBake?.()
+    this._unsubscribeBake = null
+    this._changeListeners.clear()
 
     this.detach()
+    this.disc.dispose()
     this.light.dispose()
   }
 
@@ -355,6 +417,12 @@ export class SkyMoon {
     return this
   }
 
+  /** Artistic contrast adaptation against the local graded sky, without a time cutoff. */
+  setDaylightFade(enabled: boolean) {
+    this._mesh.moonDaylightFade.value = enabled ? 1 : 0
+    return this
+  }
+
   setDiscIntensity(value: number) {
     this._mesh.moonIntensity.value = value
     return this
@@ -390,16 +458,18 @@ export class SkyMoon {
 
     // Push the moon direction into the sky mesh so the disc tracks too.
     this._mesh.moonDirection.value.copy(this._moonVec)
+    this._notifyChange()
   }
 
   _applyHorizonFade() {
-    // Smooth fade across a 2° band centred just above the horizon. This
-    // hides the directional light pop as the moon crosses the horizon
-    // without making the transition visible.
-    const elevDeg = MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, this._moonVec.y))))
-    const fade = _smoothstep(-2, 0, elevDeg)
-    this.light.intensity = this._targetIntensity * fade
+    // Legacy mode keeps its 2° ramp. Phase lighting follows the visible
+    // disc across the camera's local planet horizon instead.
+    this.light.intensity = this._targetIntensity * this.visibility * this.phaseBrightness
   }
+}
+
+function clamp1(value: number) {
+  return Math.max(-1, Math.min(1, value))
 }
 
 function _smoothstep(edge0: number, edge1: number, x: number) {

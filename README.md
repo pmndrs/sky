@@ -218,6 +218,23 @@ scene.add(skybox)
 skybox.followCamera(camera)
 ```
 
+### Moonlit nights (optional)
+
+```js
+const moonlight = sky.createMoonlight({ phase: 0.5 }).attach(scene)
+renderer.shadowMap.enabled = true
+moonlight.fitShadowToBox(foregroundBounds)
+moonlight.setPhase(0.25) // quarter moon
+```
+
+This coordinates the visible moon and its shadow-casting light, gentle ambient
+fill, and a blue night sky grade. Lighting fades with phase, moonset, and dawn;
+a small adjustable fill keeps moonless nights readable. The night fill also
+reaches reflections through the existing sky bake. Renderer exposure stays under
+your control. Pass `skyFill: false` to keep a custom grade, and dispose the
+helper when done. See [Night sky](./docs/guides/night-sky.mdx) and the
+[moonlit landscape example](./examples/vanilla/14-night-sky.html).
+
 ## Demo gallery
 
 ### Embedded Sky Editor

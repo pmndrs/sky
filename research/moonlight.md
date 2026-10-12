@@ -112,3 +112,45 @@ disc (horizon reddening) rides along with the 4.2 sun-disc rework, not here.
    but neutral reads "cleaner" against expectations. Memo assumes warm.
 3. Is the v2 Purkinje/stylize knob (`sky.setNightTint(strength)`?) wanted at
    all, or do we declare tonemapping out of scope permanently?
+
+## Scene discs and Ghost of Tsushima reference (2026-10-11)
+
+Sun and moon now have emissive meshes in the main scene, outside the cube
+bake. The sun mesh is parented to `SkySun.light`; `Sky.attach` supplies a
+standalone sun for background-only usage. `SkyMoon.disc` is parented to its
+light. Both use the transmittance LUT per fragment and the planet mask, with
+fixed angular sizes, anti-aliased rims, no camera parallax and terrain depth
+occlusion. Disc radiance stays independent of directional-light intensity.
+The moon remains a full circle; phase shading and phase-driven brightness
+are still future work.
+
+Jasmin Patry's Sucker Punch presentation,
+[Real-Time Samurai Cinema](https://www.glowybits.com/talks/real-time_samurai_cinema/real-time_samurai_cinema.pdf),
+provides a concrete reference: slides 82–87 describe atmospheric LUT lighting
+using sun and moon angles; slides 32–33 describe approximate indirect bounce
+from both sources. Slides 160–173 explain their low-light Purkinje color shift
+in tonemapping. Our proposed next step is a moon atmospheric source plus
+explicit night exposure/tonemapping controls, building on the second-SkyView
+plan above. A visible disc alone does not supply that night lighting.
+
+## Artistic first pass (2026-10-12)
+
+`sky.createMoonlight()` now coordinates the existing directional moon light,
+hemisphere fill, and a temporary night grade. Direct light fades with night,
+moon visibility, and the square of the illuminated phase fraction; a tunable
+15% fill floor keeps moonless scenes readable. This is an artistic curve,
+not a photometric lunar phase model. The moon mesh has an optional analytic
+crescent mask; legacy `createMoon()` stays unchanged unless `phaseLighting`
+is enabled. Stars now compare their contrast with the graded sky too.
+
+The night grade's fill is scaled through a uniform, avoiding table re-uploads
+as the moon moves. It reaches the background, PMREM, and reflections via the
+existing cube bake. The helper restores the previous grade on detach while
+respecting later user grade assignments. It does not mutate renderer exposure.
+Shadows can be fitted to a foreground box and follow subsequent moon moves.
+
+The night demo includes shadow-casting trees and rocks, phase/strength/fill
+controls, and a fixed exposure for comparison. GPU verification checks phase
+area, lighting changes, moonset, and daytime fading. Moon-driven atmospheric
+scattering and low-light vision tonemapping remain the later physical layer
+outlined above.

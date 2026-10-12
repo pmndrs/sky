@@ -5,9 +5,12 @@ import { SkyAtmosphereBaker } from './sky/SkyAtmosphereBaker'
 import { GroundedSkybox } from './sky/GroundedSkybox'
 import { SkyGround } from './sky/SkyGround'
 import { SkyMoon } from './sky/SkyMoon'
+import { SkyMoonlight } from './sky/SkyMoonlight'
+import type { SkyMoonlightOptions } from './sky/SkyMoonlight'
 import { SkyNight } from './sky/SkyNight'
 import { celestialOrientation } from './sky/stars/celestial'
 import { SkySun } from './sky/SkySun'
+import { SkyCelestialDisc } from './sky/SkyCelestialDisc'
 import { compassToTheta, northHeading } from './sky/compass'
 import { mergeAtmosphereParams } from './core/AtmosphereParams'
 import { LUT_RESOLUTIONS } from './core/resolutions'
@@ -150,6 +153,10 @@ export class Sky {
   /** Height-fog knobs, created by `applyFog` or `setFog`. */
   _fog?: FogState
   _night?: SkyNight
+  /** Visible sun for the baked background, even without a lighting helper. */
+  readonly sunDisc: SkyCelestialDisc
+  /** Attached sunlight helpers replace the background's standalone disc. */
+  _sunHelpers = new Set<SkySun>()
   /** Called after `setNorth` changes the heading (a manual `SkyMoon` re-places itself). */
   _northListeners = new Set<() => void>()
 
@@ -204,6 +211,9 @@ export class Sky {
     this._presetName = atmosphere ? null : preset
     this._quality = QUALITY_PRESETS[quality] ? quality : 'medium'
     this._cubeSize = cubeSize
+    this.sunDisc = new SkyCelestialDisc(this._baker, 'sun')
+    this._baker.sky.sunDiscOnSky.value = 0
+    this._baker._onLiveMeshChanged = () => this._syncSunDiscAttachment()
     this._scene = null
     this._timeOfDay = timeOfDay
     this._latitude = latitude
@@ -329,6 +339,7 @@ export class Sky {
   _releaseBackground(scene: any) {
     if (this._ownsBackground && scene.background === this._baker.texture) scene.background = null
     this._ownsBackground = false
+    this.sunDisc.removeFromParent()
   }
 
   /** Clear `scene.environment` if this sky claimed it and it still holds the sky's IBL. */
@@ -383,7 +394,29 @@ export class Sky {
     }
     // Stars are sprites in the main scene, not part of the bake.
     this._night?._attachStars()
+    this._syncSunDiscAttachment()
     return this
+  }
+
+  /** @internal Keep a single visible sun when the light helper is in this scene. */
+  _syncSunDiscAttachment() {
+    this.sunDisc.removeFromParent()
+    if (this._disposed) return
+    const occupied = new Set()
+    for (const sun of this._sunHelpers) {
+      const root = sceneRoot(sun._scene)
+      sun.disc.visible = !occupied.has(root)
+      occupied.add(root)
+    }
+    for (const disc of this._baker._liveSunDiscs) {
+      const root = sceneRoot(disc.parent)
+      // A mesh that hasn't joined a scene yet must not suppress its sun.
+      if (root === disc.parent) continue
+      disc.visible = !occupied.has(root)
+      occupied.add(root)
+    }
+    if (!this._scene || !this._ownsBackground || occupied.has(sceneRoot(this._scene))) return
+    this._scene.add(this.sunDisc)
   }
 
   detach() {
@@ -494,10 +527,10 @@ export class Sky {
    * radians; default ~0.00935 rad (~0.535°). `edgeSoftness` is the fraction
    * of the disc's angular *radius* the rim ramps over (default 0.1 = 10%);
    * see `SkyAtmosphereMesh.setSunAngularRadius`. The disc itself renders
-   * in-shader on the sky mesh, tinted by transmittance-to-space, so it
-   * reddens and dims naturally near the horizon and disappears once the
-   * view ray intersects the planet — there is no separate sun sprite/mesh
-   * to manage. `intensity` scales disc radiance independently of scene light.
+   * on a scene mesh, tinted by transmittance-to-space, so it reddens and
+   * dims near the horizon and sets behind the planet. `attach` adds it
+   * automatically; an attached `SkySun` parents its disc to the light.
+   * `intensity` controls disc radiance separately from scene illumination.
    */
   setSunDisc(
     visible: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number; intensity?: number },
@@ -897,6 +930,11 @@ export class Sky {
     return new SkyMoon(this, opts)
   }
 
+  /** Artistic moon light, night fill and sky grade. Caller-owned; call attach(scene). */
+  createMoonlight(opts?: SkyMoonlightOptions) {
+    return new SkyMoonlight(this, opts)
+  }
+
   /**
    * Opt into the night sky: resolved stars (PSF sprites added to the attached
    * scene) and the Milky Way (a glow map baked into the cube with the rest of
@@ -957,7 +995,7 @@ export class Sky {
    * haze uniforms. Idempotent and terminal: afterwards access to `baker` and
    * methods that rely on it throw, while the haze and star setters become
    * no-ops. Helpers from `createSun` / `createGround` /
-   * `createGroundedSkybox` / `createMoon` / `createAmbient` are caller-owned and not disposed
+   * `createGroundedSkybox` / `createMoon` / `createMoonlight` / `createAmbient` are caller-owned and not disposed
    * here.
    */
   dispose() {
@@ -965,6 +1003,8 @@ export class Sky {
     this._releaseScene()
     // Mark the instance terminal before resource disposal can emit callbacks.
     this._disposed = true
+    this.sunDisc.dispose()
+    this._sunHelpers.clear()
     if (this._night) {
       this._night.dispose()
       this._night = undefined
@@ -994,6 +1034,11 @@ export class Sky {
 }
 
 const _orientation = new Matrix4()
+
+function sceneRoot(object: any) {
+  while (object?.parent) object = object.parent
+  return object
+}
 
 function applyShortcutScalars(base: any, { turbidity, groundAlbedo }: { turbidity?: number; groundAlbedo?: any }) {
   if (turbidity == null && groundAlbedo == null) return base

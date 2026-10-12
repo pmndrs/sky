@@ -111,6 +111,8 @@
         exposure: 40,
         sunDisc: true,
         turbidity: 1.0,
+        sunDiscDiameter: 0.535,
+        sunDiscIntensity: 20,
         groundAlbedo: 0.1, // the preset default (EARTH.groundAlbedo); the slider applies it
         toneExposure: renderer.toneMappingExposure,
         // Sky grade: 'physical' = none; a built-in grade follows the sun;
@@ -138,6 +140,10 @@
       gui.add(state, 'north', 0, 360, 0.5).onChange((v) => sky.setNorth(v))
       gui.add(state, 'exposure', 0, 200, 0.5).onChange((v) => sky.setExposure(v))
       gui.add(state, 'sunDisc').onChange((v) => sky.setSunDisc(v))
+      gui.add(state, 'sunDiscDiameter', 0.1, 3, 0.01).onChange((v) => {
+        sky.setSunDisc({ angularDiameter: THREE.MathUtils.degToRad(v) })
+      })
+      gui.add(state, 'sunDiscIntensity', 0, 100, 0.1).onChange((v) => sky.setSunDisc({ intensity: v }))
       gui.add(state, 'turbidity', 0, 4, 0.01).onChange((v) => sky.setTurbidity(v))
       gui.add(state, 'groundAlbedo', 0, 1, 0.01).onChange((v) => sky.setGroundAlbedo(v))
       gui.add(state, 'toneExposure', 0, 2, 0.001).onChange((v) => {

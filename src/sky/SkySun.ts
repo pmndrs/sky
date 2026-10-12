@@ -1,6 +1,7 @@
 import { Box3, Color, DirectionalLight, Object3D, Vector3 } from 'three/webgpu'
 
 import { horizonCosZenith, sunDiscVisibleFraction, transmittanceToSun } from '../core/sunTransmittance'
+import { SkyCelestialDisc } from './SkyCelestialDisc'
 
 interface SkySunOptions {
   color?: number
@@ -94,8 +95,9 @@ interface SkySunOptions {
  * flat-world horizon with `horizonFade` on, the planet's true horizon from the
  * camera's altitude with it off.
  *
- * The sun *disc* visibility lives on the sky mesh and stays orthogonal — call
- * `sky.setSunDisc(true)` separately if you want the visible disc as well.
+ * `disc` is an emissive mesh parented to `light`, drawn at screen resolution.
+ * Its visibility, size, brightness and source colour follow `sky.setSunDisc`
+ * and the sky uniforms; atmospheric transmittance supplies the sunset tint.
  *
  * Usage:
  * ```js
@@ -112,6 +114,7 @@ export class SkySun {
   sky: any
   distance: number
   light: DirectionalLight
+  readonly disc: SkyCelestialDisc
   baseColor: Color
   target: Object3D
   /** Requested intensity (`sun.intensity`); `light.intensity` is the effective value. */
@@ -155,6 +158,8 @@ export class SkySun {
     this._physical = physical
     this._transmittance = [1, 1, 1]
     this.light = new DirectionalLight(color, intensity)
+    this.disc = new SkyCelestialDisc(sky.baker, 'sun', this.baseColor)
+    this.light.add(this.disc)
     this.light.castShadow = castShadow
     this.light.shadow.mapSize.width = shadowMapSize
     this.light.shadow.mapSize.height = shadowMapSize
@@ -274,6 +279,8 @@ export class SkySun {
     this._scene = scene
     scene.add(this.light)
     scene.add(this.target)
+    this.sky._sunHelpers?.add(this)
+    this.sky._syncSunDiscAttachment?.()
     return this
   }
 
@@ -283,6 +290,8 @@ export class SkySun {
       this._scene.remove(this.target)
       this._scene = null
     }
+    this.sky._sunHelpers?.delete(this)
+    this.sky._syncSunDiscAttachment?.()
 
     return this
   }
@@ -366,6 +375,7 @@ export class SkySun {
     }
 
     this.detach()
+    this.disc.dispose()
     this.light.dispose()
   }
 

@@ -41,8 +41,72 @@ blurry blob several pixels wide.
 
 ## Lighting the night
 
-The physical night is close to black, so a night scene rendered with it is
-black too. Two opt-in tools make it read as a moonlit blue instead:
+For a coordinated game-style night, use the opt-in moonlighting helper:
+
+```js
+const moonlight = sky.createMoonlight({ phase: 0.5 }).attach(scene)
+moonlight.fitShadowToBox(landscapeBounds) // Box3 around the area that needs shadows
+renderer.shadowMap.enabled = true
+
+moonlight.setPhase(0.25) // quarter: a half-disc, with weaker lighting
+moonlight.setIntensity(1.5) // overall light and fill strength
+```
+
+It owns a shadow-casting moon directional light and its visible disc, a gentle
+hemisphere fill, and a temporary blue night sky grade. They fade through dawn
+and follow moon phase and visibility. The night grade also reaches reflections
+and environment lighting through the existing cube bake; no second atmospheric
+LUT is needed. Star visibility follows the graded sky, so faint stars emerge
+as the moonlight fades.
+
+`moonlight.moon` exposes the underlying `SkyMoon`, including disc color, size,
+and brightness. Its phase mask shows waxing and waning crescents, full moon,
+and a dark new moon. Light strength uses the **square of the illuminated
+fraction**, an artistic curve: full moon = 1, quarter = 0.25, new = 0.
+Moonrise and moonset use the visible disc and the camera's local planet horizon.
+
+The default moonless floor retains 15% of the fill so shadows remain readable.
+It is an artistic choice, adjustable with `setMoonlessFloor(0..1)`. Direct
+moonlight turns off when the moon sets; the floor remains. `setMoonIntensity`,
+`setAmbientIntensity`, and `setSkyBrightness` adjust the three layers separately.
+Disc radiance remains independently adjustable with `moonlight.moon.setDiscIntensity`.
+
+The helper temporarily replaces the assigned grade and restores it on
+`detach()` or `dispose()`, provided it still owns that assignment. Pass
+`skyFill: false` to keep a custom sky grade. It does not change the renderer's
+exposure; use `toneMappingExposure` to tune the scene. The helper is caller-owned:
+dispose it before disposing the sky. Fit shadow bounds around the foreground
+area, rather than including a giant ground or sky mesh; the bounds automatically
+follow moon direction changes.
+
+`examples/vanilla/14-night-sky.html` is the moonlit landscape demo. Run
+`pnpm example:vanilla` to compare phases, moonset, and the original dark sky.
+The demo starts at midnight with automatic moon movement, like the API.
+Editing moon elevation or azimuth switches to manual placement; `followSun`
+restores the automatic orbit, and `lookAtMoon` points the camera at it.
+The demo uses a larger 1.2° disc for visibility; the API defaults to 0.535°.
+
+### Moon visibility in daylight
+
+The moon can be visible during the day, especially near quarter phase;
+its visibility depends on phase, time of year and location
+([NASA's moon phase guide](https://science.nasa.gov/moon/moon-phases/)).
+Automatic placement keeps the full moon opposite the sun and places quarters
+around 90° away. The current orbit is a phase-based approximation, not a lunar
+ephemeris; date and latitude follow the solar model, while you author phase.
+
+`daylightFade` is enabled by default. The disc retains the baked sky color
+in front of its surface and reduces its cinematic brightness boost in daylight.
+Its opacity follows contrast with the local sky, so it remains pale and visible
+in clear conditions and washes out in bright haze. Transmittance and the planet
+mask still handle reddening, dimming and moonset. There is no clock-hour cutoff.
+This is artistic contrast adaptation, not a physical eye or lunar-reflectance model.
+
+For a deliberately glowing moon, use `moon.setDaylightFade(false)` or the
+`daylightFade` demo toggle. Disc intensity and color remain independently tunable.
+
+For independent artistic controls, the existing ambient and grade helpers
+remain available:
 
 ```js
 sky.createAmbient().attach(scene) // hemisphere fill light, fades in after sunset
@@ -52,6 +116,29 @@ sky.setGrade('blue-night') // a deep-blue sky fill, keyed on the sun, in the cub
 Both are covered in [Sky grades](./sky-grades#ambient-light). Stars and the
 Milky Way fade against the sky behind them, so a filled sky keeps the
 brightest stars and holds back the faint ones, as a real moonlit sky does.
+
+## Visible moon
+
+```js
+const moon = sky.createMoon({ intensity: 0.15, phase: 0.5 }).attach(scene)
+moon.setDiscIntensity(2)
+moon.setDiscAngularDiameter(0.00935) // radians, about 0.535°
+```
+
+`moon.disc` is a mesh attached to `moon.light`. It stays sharp regardless of
+sky cube resolution and follows the moon direction with no camera parallax.
+Atmospheric transmittance tints and dims it at moonrise; the planet and
+scene geometry occlude it. `moon.setDiscVisible(false)` hides the visual
+while keeping moonlight. Disc brightness and light intensity are separate.
+
+Standalone `createMoon` preserves its full-circle disc and constant requested
+intensity by default. Pass `phaseLighting: true` (or call `setPhaseLighting(true)`)
+for the same crescent mask, artistic phase brightness, and planet horizon
+used by `createMoonlight`.
+
+This setup does not make the moon illuminate the atmospheric LUTs or simulate
+low-light vision in tonemapping. Those remain separate enhancements; the
+current blue fill and direct lighting are intentionally authored for readability.
 
 ## Driven by the sky's time and place
 

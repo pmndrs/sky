@@ -28,6 +28,7 @@ Thumbs.db
 # Local resources (not distributed)
 resources/egsr2020.pdf
 .claude/
+.worktrees/
 
 # Slang + UnrealEngineSkyAtmosphere checkout used by scripts/build-sebh-wgsl.mjs
 examples/vanilla/.cache/

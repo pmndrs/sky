@@ -70,5 +70,5 @@ export function applyGrade({
   const c1 = max(grade.matrix.mul(color), vec3(0.0))
   const avg = dot(c1, vec3(1.0 / 3.0))
   const c2 = c1.mul(float(1.0).sub(colorize.a)).add(colorize.rgb.mul(avg))
-  return c2.mul(fillGain.a).add(fillGain.rgb.mul(grade.displayScale).mul(fillWeight))
+  return c2.mul(fillGain.a).add(fillGain.rgb.mul(grade.displayScale).mul(grade.fillScale).mul(fillWeight))
 }

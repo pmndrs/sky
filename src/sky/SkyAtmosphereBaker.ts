@@ -23,6 +23,7 @@ import { SkyViewLUT } from './luts/SkyViewLUT'
 import { AerialPerspectiveLUT } from './luts/AerialPerspectiveLUT'
 import { uniform } from 'three/tsl'
 import { SKY_RENDER_ORDER, SkyAtmosphereMesh } from './SkyAtmosphereMesh'
+import { SkyCelestialDisc } from './SkyCelestialDisc'
 import { SkyPmrem } from './pmrem/SkyPmrem'
 import { compileIntoTarget } from './compileAsync'
 import { beginSkyDraw, createSkyDrawState, endSkyDraw } from './drawState'
@@ -98,6 +99,9 @@ export class SkyAtmosphereBaker {
   apKmPerSlice: number
   skyScene: Scene
   sky: SkyAtmosphereMesh
+  /** Sun meshes belonging to caller-created live skies; resources are baker-owned. */
+  _liveSunDiscs = new Set<SkyCelestialDisc>()
+  _onLiveMeshChanged?: () => void
   cubeRenderTarget: CubeRenderTarget
   cubeCamera: CubeCamera
   _mirrorBelowHorizon: boolean
@@ -587,6 +591,7 @@ export class SkyAtmosphereBaker {
     this._gradeUnsubscribe = null
     this._grade = grade
     const u = this.sky.gradeUniforms
+    u.fillScale.value = 1
     uploadGrade(u, grade)
     if (grade) {
       this._gradeUnsubscribe = grade.onChange(() => {
@@ -706,8 +711,8 @@ export class SkyAtmosphereBaker {
    * filtered `baker.environmentTexture` remains the recommended
    * `scene.environment`.
    *
-   * Sun disc is enabled by default on the live mesh (cube bake still
-   * temporarily forces it off during the bake to keep PMREM clean).
+   * Sun disc is enabled by default as a child mesh, outside the cube bake.
+   * Its geometry/material are owned by the baker and released on disposal.
    *
    * @param {object} [opts]
    * @param {number} [opts.scale=450000] uniform scale of the sky box.
@@ -725,6 +730,15 @@ export class SkyAtmosphereBaker {
     // it hides before shading (see `SkyAtmosphereMesh`). Transparent objects
     // are a later list in three and still draw over the sky.
     mesh.renderOrder = SKY_RENDER_ORDER
+
+    // A live sky also gets a screen-resolution sun mesh. High-level Sky and
+    // SkySun coordinate these with their background/light discs on attachment.
+    const disc = new SkyCelestialDisc(this, 'sun')
+    mesh.add(disc)
+    this._liveSunDiscs.add(disc)
+    this.sky.sunDiscOnSky.value = 0
+    mesh.addEventListener('added', () => this._onLiveMeshChanged?.())
+    mesh.addEventListener('removed', () => this._onLiveMeshChanged?.())
 
     if (showSunDisc) this.sky.showSunDisc.value = 1.0
 
@@ -952,6 +966,9 @@ export class SkyAtmosphereBaker {
 
   dispose(): void {
     this._disposed = true
+    this._onLiveMeshChanged = undefined
+    for (const disc of this._liveSunDiscs) disc.dispose()
+    this._liveSunDiscs.clear()
     this.transmittanceLUT.dispose()
     this.multiScatterLUT.dispose()
     this.skyViewLUT.dispose()

@@ -110,6 +110,8 @@ export class SkyAtmosphereMesh extends Mesh {
   sunDirection: any
   upVector: any
   showSunDisc: any
+  sunDiscOnSky = uniform(1)
+  moonDiscOnSky = uniform(1)
   mirrorBelowHorizon: any
   sunDiscIntensity: any
   sunDiscCos: any
@@ -119,6 +121,9 @@ export class SkyAtmosphereMesh extends Mesh {
   moonIntensity: any
   moonDiscCos: any
   moonColor: any
+  moonPhase = uniform(0.5)
+  moonPhaseShading = uniform(0)
+  moonDaylightFade = uniform(1)
   viewHeight: any
   luminanceScale: any
   displayScale: any
@@ -680,7 +685,7 @@ export class SkyAtmosphereMesh extends Mesh {
       // Ground occlusion: the sun must set behind the horizon rather than
       // shine through the planet — reuse the same `intersectsGround` test
       // the sky colour and stars already use (`skyMask` = 1 above horizon).
-      const sunDiscMask = sunAngularMask.mul(showSunDiscU).mul(skyMask)
+      const sunDiscMask = sunAngularMask.mul(showSunDiscU).mul(this.sunDiscOnSky).mul(skyMask)
 
       // Transmittance tint IS the limb-reddening effect: near the horizon
       // the long grazing path through the atmosphere absorbs/scatters blue
@@ -695,7 +700,9 @@ export class SkyAtmosphereMesh extends Mesh {
       // circle that tracks the moon direction).
       const moonDir = normalize(moonDirU)
       const cosMoon = dot(viewDir, moonDir)
-      const moonDiscMask = smoothstep(moonDiscCosU, moonDiscCosU.add(float(0.00002)), cosMoon).mul(showMoonDiscU)
+      const moonDiscMask = smoothstep(moonDiscCosU, moonDiscCosU.add(float(0.00002)), cosMoon)
+        .mul(showMoonDiscU)
+        .mul(this.moonDiscOnSky)
 
       const moonContribution = moonColorU.mul(moonDiscMask).mul(moonIntensityU)
 

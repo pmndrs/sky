@@ -23,6 +23,7 @@ export const asin: any
 export const add: any
 export const cameraPosition: any
 export const cameraProjectionMatrix: any
+export const cameraViewMatrix: any
 export const clamp: any
 export const cos: any
 export const cross: any
@@ -33,6 +34,7 @@ export const exp: any
 export const float: any
 export const floor: any
 export const fract: any
+export const fwidth: any
 export const instanceIndex: any
 export const instancedBufferAttribute: any
 export const int: any
@@ -71,6 +73,7 @@ export const sqrt: any
 export const step: any
 export const sub: any
 export const texture: any
+export const tan: any
 export const texture3D: any
 export const textureLoad: any
 export const textureSize: any

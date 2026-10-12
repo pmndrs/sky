@@ -38,9 +38,10 @@
   </head>
   <body>
     <div id="info">
-      <b>14 — Night sky.</b> Stars are pixel-sharp sprites in the scene; the Milky Way is a glow map baked into the sky
-      cube. Both are placed from time, date and latitude, dim toward the horizon, and fade in through twilight against
-      the sky behind them. Scrub <b>timeOfDay</b> or tick <b>play</b> for a time-lapse from sunset.<br />
+      <b>14 — Moonlit night.</b> Moonlight casts shadows while a gentle blue fill keeps the landscape readable. Change
+      <b>moonPhase</b> to compare full, crescent and moonless nights; switch <b>moon</b> off for the original dark sky.
+      The moon follows time, date, latitude and phase. Scrub <b>timeOfDay</b> or tick <b>play</b> to watch it rise and
+      set. <b>lookAtMoon</b> brings it into view; editing its elevation or azimuth switches to manual placement.<br />
       <span id="clock"></span>
     </div>
     <script type="module">
@@ -70,6 +71,7 @@
         renderer.setSize(window.innerWidth, window.innerHeight)
         renderer.toneMapping = THREE.ACESFilmicToneMapping
         renderer.toneMappingExposure = 1.0
+        renderer.shadowMap.enabled = true
         renderer.inspector = new Inspector()
         document.body.appendChild(renderer.domElement)
         markStage(1, 'running')
@@ -77,10 +79,10 @@
         await logStage('renderer.init()', () => renderer.init())
         markStage(2, 'running')
 
-        // Mid-July, mid-northern latitude, late evening: the summer Milky Way
-        // core sits low in the south (camera looks south, north = +Z).
+        // Midnight keeps the automatic full moon in the same southern view
+        // as the previous manual demo placement (north = +Z).
         const state = {
-          timeOfDay: 21.25,
+          timeOfDay: 0,
           dayOfYear: 196,
           latitude: 38,
           play: false,
@@ -95,9 +97,18 @@
           count: 9000,
           milkyWay: 0.25,
           milkyWayContrast: 20,
-          moon: false,
-          moonIntensity: 0.15,
+          moon: true,
+          moonStrength: 1,
+          moonIntensity: 1.2,
           moonPhase: 0.5,
+          ambientIntensity: 0.65,
+          moonlessFloor: 0.15,
+          skyBrightness: 1,
+          followSun: true,
+          moonElevation: 35,
+          moonAzimuth: 180,
+          moonDiameter: 1.2,
+          daylightFade: true,
         }
 
         const sky = await logStage('Sky construct + first update()', async () => {
@@ -120,12 +131,13 @@
         sky.attach(scene) // background + environment, and adds the star sprites
 
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 2_000_000)
-        camera.position.set(0, 1.7, 0)
+        camera.position.set(0, 4, 10)
 
         // Landscape: a large dark ground and a ring of distant ridgelines, so
         // stars and the Milky Way set behind real silhouettes (depth-tested).
-        sky.createGround({ mode: 'plane', size: 60_000, color: 0x15130f, roughness: 0.95 }).attach(scene)
-        const ridgeMat = new THREE.MeshStandardMaterial({ color: 0x1d1a15, roughness: 1 })
+        const ground = sky.createGround({ mode: 'plane', size: 60_000, color: 0x48534e, roughness: 0.95 }).attach(scene)
+        ground.mesh.receiveShadow = true
+        const ridgeMat = new THREE.MeshStandardMaterial({ color: 0x616d65, roughness: 1 })
         const ridgeGeo = new THREE.ConeGeometry(1, 1, 7)
         for (let i = 0; i < 40; i++) {
           const a = (i / 40) * Math.PI * 2 + Math.sin(i * 12.9898) * 0.05
@@ -137,13 +149,44 @@
           scene.add(ridge)
         }
 
-        const sun = sky.createSun({ intensity: 3 }).attach(scene)
-        const moon = sky.createMoon({ intensity: state.moonIntensity, phase: state.moonPhase, followSun: true })
-        moon.setDiscVisible(false)
+        // Foreground rocks and trees make the moon's directional shading and
+        // shadows visible, instead of testing only silhouettes against the sky.
+        const stoneMat = new THREE.MeshStandardMaterial({ color: 0x9b9b89, roughness: 0.95 })
+        const leavesMat = new THREE.MeshStandardMaterial({ color: 0x7c977e, roughness: 1 })
+        const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6f5941, roughness: 1 })
+        for (const [x, z] of [
+          [-16, -35],
+          [-6, -55],
+          [9, -45],
+          [18, -65],
+        ]) {
+          const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(2.8, 0), stoneMat)
+          rock.position.set(x + 3, 1.5, z + 5)
+          rock.scale.set(1.4, 0.8, 1)
+          rock.castShadow = rock.receiveShadow = true
+          const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.5, 7, 8), trunkMat)
+          trunk.position.set(x, 3.5, z)
+          trunk.castShadow = trunk.receiveShadow = true
+          const leaves = new THREE.Mesh(new THREE.ConeGeometry(3.2, 9, 9), leavesMat)
+          leaves.position.set(x, 8, z)
+          leaves.castShadow = leaves.receiveShadow = true
+          scene.add(rock, trunk, leaves)
+        }
+
+        const shadowBox = new THREE.Box3(new THREE.Vector3(-45, -1, -85), new THREE.Vector3(45, 18, 20))
+        const sun = sky.createSun({ intensity: 3, shadowMapSize: 1024 }).attach(scene).fitShadowToBox(shadowBox)
+        const moonlight = sky.createMoonlight({
+          phase: state.moonPhase,
+          moonIntensity: state.moonIntensity,
+          followSun: state.followSun,
+          discAngularDiameter: THREE.MathUtils.degToRad(state.moonDiameter),
+        })
+        moonlight.attach(scene).fitShadowToBox(shadowBox)
+        const moon = moonlight.moon
 
         const controls = new OrbitControls(camera, renderer.domElement)
         // Orbit a point a few metres ahead so dragging looks around the sky.
-        controls.target.set(0, 1.7 + Math.tan(0.3) * 5, -5)
+        controls.target.set(0, 4 + Math.tan(THREE.MathUtils.degToRad(12)) * 15, -5)
         controls.enablePan = false
         controls.enableZoom = false
         controls.rotateSpeed = -0.35
@@ -154,6 +197,7 @@
         // --- GUI ---
         const setTime = () => {
           sky.setTimeOfDay(state.timeOfDay)
+          sun.fitShadowToBox(shadowBox)
           updateClock()
         }
         const timeGroup = renderer.inspector.createParameters('Time & place')
@@ -162,9 +206,14 @@
         timeGroup.add(state, 'hoursPerSecond', 0.05, 3, 0.05)
         timeGroup.add(state, 'dayOfYear', 1, 365, 1).onChange(() => {
           sky.setDayOfYear(state.dayOfYear)
+          sun.fitShadowToBox(shadowBox)
           updateClock()
         })
-        timeGroup.add(state, 'latitude', -90, 90, 0.1).onChange(() => sky.setLatitude(state.latitude))
+        timeGroup.add(state, 'latitude', -90, 90, 0.1).onChange(() => {
+          sky.setLatitude(state.latitude)
+          sun.fitShadowToBox(shadowBox)
+          updateClock()
+        })
         timeGroup.add(state, 'exposure', 0, 3, 0.01).onChange(() => (renderer.toneMappingExposure = state.exposure))
 
         const starsGroup = renderer.inspector.createParameters('Stars')
@@ -186,12 +235,40 @@
 
         const moonGroup = renderer.inspector.createParameters('Moon')
         moonGroup.add(state, 'moon').onChange(() => {
-          if (state.moon) moon.attach(scene)
-          else moon.detach()
-          moon.setDiscVisible(state.moon)
+          if (state.moon) moonlight.attach(scene)
+          else moonlight.detach()
         })
-        moonGroup.add(state, 'moonIntensity', 0, 1, 0.01).onChange(() => moon.setIntensity(state.moonIntensity))
-        moonGroup.add(state, 'moonPhase', 0, 1, 0.01).onChange(() => moon.setPhase(state.moonPhase))
+        moonGroup.add(state, 'moonStrength', 0, 3, 0.01).onChange((v) => moonlight.setIntensity(v))
+        moonGroup.add(state, 'moonIntensity', 0, 3, 0.01).onChange((v) => moonlight.setMoonIntensity(v))
+        moonGroup.add(state, 'moonPhase', 0, 1, 0.01).onChange((v) => moonlight.setPhase(v))
+        moonGroup.add(state, 'ambientIntensity', 0, 1, 0.01).onChange((v) => moonlight.setAmbientIntensity(v))
+        moonGroup.add(state, 'moonlessFloor', 0, 1, 0.01).onChange((v) => moonlight.setMoonlessFloor(v))
+        moonGroup.add(state, 'skyBrightness', 0, 3, 0.01).onChange((v) => moonlight.setSkyBrightness(v))
+        moonGroup.add(state, 'daylightFade').onChange((v) => moon.setDaylightFade(v))
+        moonGroup
+          .add(state, 'moonDiameter', 0.2, 3, 0.01)
+          .onChange((v) => moon.setDiscAngularDiameter(THREE.MathUtils.degToRad(v)))
+        const placeMoon = () => {
+          state.followSun = false
+          moonlight
+            .setDirection({ elevation: state.moonElevation, azimuth: state.moonAzimuth })
+            .fitShadowToBox(shadowBox)
+        }
+        moonGroup
+          .add(state, 'followSun')
+          .onChange((v) => moonlight.setFollowSun(v).fitShadowToBox(shadowBox))
+          .listen?.()
+        const elevationControl = moonGroup.add(state, 'moonElevation', -90, 90, 0.1).onChange(placeMoon)
+        const azimuthControl = moonGroup.add(state, 'moonAzimuth', 0, 360, 0.5).onChange(placeMoon)
+        moonGroup.add(
+          {
+            lookAtMoon() {
+              controls.target.copy(camera.position).addScaledVector(moon._moonVec, 15)
+              controls.update()
+            },
+          },
+          'lookAtMoon',
+        )
 
         // --- HUD clock ---
         const clockEl = document.getElementById('clock')
@@ -199,9 +276,23 @@
           const h = ((state.timeOfDay % 24) + 24) % 24
           const hh = String(Math.floor(h)).padStart(2, '0')
           const mm = String(Math.floor((h % 1) * 60)).padStart(2, '0')
-          clockEl.textContent = `${hh}:${mm} local solar time · day ${state.dayOfYear} · sun ${sky.sunElevation.toFixed(1)}°`
+          clockEl.textContent = `${hh}:${mm} local solar time · day ${state.dayOfYear} · sun ${sky.sunElevation.toFixed(1)}° · moon ${state.moonElevation.toFixed(1)}°`
         }
-        updateClock()
+        const syncMoonPosition = () => {
+          state.moonElevation = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(moon._moonVec.y, -1, 1)))
+          const theta = THREE.MathUtils.radToDeg(Math.atan2(moon._moonVec.x, moon._moonVec.z))
+          state.moonAzimuth = (((-theta - sky.north) % 360) + 360) % 360
+          state.followSun = moon.followSun
+          // Inspector.listen dispatches onChange for programmatic updates.
+          // Mirror these readouts silently to preserve the automatic orbit.
+          elevationControl.slider.value = state.moonElevation
+          elevationControl.numberInput.value = state.moonElevation.toFixed(1)
+          azimuthControl.slider.value = state.moonAzimuth
+          azimuthControl.numberInput.value = state.moonAzimuth.toFixed(1)
+          updateClock()
+        }
+        moon.addChangeListener(syncMoonPosition)
+        syncMoonPosition()
 
         window.addEventListener('resize', () => {
           camera.aspect = window.innerWidth / window.innerHeight
@@ -210,6 +301,7 @@
         })
 
         const timer = new THREE.Timer()
+        await Promise.all([sky.compileAsync(), renderer.compileAsync(scene, camera)])
         renderer.setAnimationLoop(() => {
           timer.update()
           if (state.play) {
@@ -233,6 +325,11 @@
         window.stars = stars
         window.scene = scene
         window.sun = sun
+        window.moonlight = moonlight
+        window.moon = moon
+        window.renderer = renderer
+        window.camera = camera
+        window.controls = controls
       })
     </script>
   </body>

@@ -3,6 +3,7 @@
 // The 90% surface — most users only need these:
 export { Sky, SUN_COLORS } from './Sky'
 export type { SkyState, SkyAttachOptions, SkyNorth } from './Sky'
+export type { SkySettings, SkyAtmosphereSettings } from './settings'
 export { SkySun } from './sky/SkySun'
 export { SkyMoon } from './sky/SkyMoon'
 export { SkyGround } from './sky/SkyGround'

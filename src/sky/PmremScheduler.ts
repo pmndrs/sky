@@ -82,6 +82,10 @@ export class PmremScheduler {
     return this.target ? this.target.texture : null
   }
 
+  get needsUpdate(): boolean {
+    return this._pending || this._nextLevel > 0
+  }
+
   /** The source cube changed; schedule a refresh. */
   markDirty(): void {
     this._pending = true

@@ -29,6 +29,7 @@ import type { FogOptions, FogState } from './sky/FogPostProcess'
 
 import type { SkyNightOptions } from './sky/SkyNight'
 import type { SkyNorth } from './sky/compass'
+import type { SkySettings, SkyAtmosphereSettings } from './settings'
 
 export type { SkyNorth }
 
@@ -50,7 +51,7 @@ interface SkyOptions {
   atmosphere?: any
   exposure?: number
   north?: SkyNorth
-  sunDisc?: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number }
+  sunDisc?: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number; intensity?: number }
   timeOfDay?: number
   latitude?: number
   dayOfYear?: number
@@ -125,6 +126,12 @@ export class Sky {
   _azimuth!: number
   /** Whether the last `setSunDirection` bypassed the north rotation. */
   _sunRaw = false
+  _sunMode: 'time' | 'manual' = 'time'
+  _presetName: string | null
+  _quality: string
+  _cubeSize: number
+  _planetFrame = false
+  _gradeFacadeListeners = new Set<(grade: SkyGrade | null) => void>()
   /** Mie coefficients at turbidity 1, so `setTurbidity` is absolute. */
   _baseMie!: { scattering: Vector3; extinction: Vector3; absorption: Vector3 }
   _apDistanceScale: any = null
@@ -194,6 +201,9 @@ export class Sky {
     })
 
     this._renderer = renderer
+    this._presetName = atmosphere ? null : preset
+    this._quality = QUALITY_PRESETS[quality] ? quality : 'medium'
+    this._cubeSize = cubeSize
     this._scene = null
     this._timeOfDay = timeOfDay
     this._latitude = latitude
@@ -244,6 +254,69 @@ export class Sky {
   get state(): SkyState {
     if (this._disposed) return 'disposed'
     return this._scene ? 'attached' : 'detached'
+  }
+
+  /** Read live settings without exposing mutable uniforms or parameter vectors. */
+  getSettings(): SkySettings {
+    const baker = this.baker
+    const mesh = baker.sky
+    const atmosphere = Object.fromEntries(
+      Object.entries(baker.atmosphereParams).map(([key, value]) => [
+        key,
+        value instanceof Vector3 ? value.toArray() : value,
+      ]),
+    ) as SkyAtmosphereSettings
+    return {
+      preset: this._presetName,
+      quality: this._quality,
+      cubeSize: this._cubeSize,
+      exposure: mesh.luminanceScale.value,
+      turbidity: this._turbidity,
+      atmosphere,
+      baseMie: {
+        scattering: this._baseMie.scattering.toArray() as [number, number, number],
+        extinction: this._baseMie.extinction.toArray() as [number, number, number],
+        absorption: this._baseMie.absorption.toArray() as [number, number, number],
+      },
+      mirrorBelowHorizon: !!mesh.mirrorBelowHorizon.value,
+      sun: {
+        mode: this._sunMode,
+        timeOfDay: this._timeOfDay,
+        latitude: this._latitude,
+        dayOfYear: this._dayOfYear,
+        north: this._north,
+        elevation: this._elevation,
+        azimuth: this._azimuth,
+        raw: this._sunRaw,
+        color: mesh.sunColor.value.toArray(),
+        disc: {
+          visible: !!mesh.showSunDisc.value,
+          angularDiameter: 2 * Math.acos(Math.max(-1, Math.min(1, mesh.sunDiscCos.value))),
+          edgeSoftness: mesh._sunEdgeSoftness,
+          intensity: mesh.sunDiscIntensity.value,
+        },
+      },
+      evaluatedElevation:
+        (Math.asin(Math.max(-1, Math.min(1, mesh.sunDirection.value.dot(baker.cameraUp)))) * 180) / Math.PI,
+      planetFrame: this._planetFrame,
+      viewHeightKm: mesh.viewHeight.value,
+    }
+  }
+
+  /** Grade assignment and edits, including edits performed outside the editor. */
+  onGradeChange(listener: (grade: SkyGrade | null) => void): () => void {
+    const unsubscribe = this.baker.addGradeListener(listener)
+    this._gradeFacadeListeners.add(listener)
+    return () => {
+      unsubscribe()
+      this._gradeFacadeListeners.delete(listener)
+    }
+  }
+
+  /** True while another host update is needed to finish a bake or IBL refresh. */
+  get needsUpdate(): boolean {
+    const b = this.baker
+    return !!(b.atmosDirty || b.sunDirty || b.cameraDirty || b.cubeDirty || b.pmrem.needsUpdate)
   }
 
   /** The underlying `SkyAtmosphereBaker`. Throws once the Sky is disposed. */
@@ -346,6 +419,7 @@ export class Sky {
    * from +Z toward +X).
    */
   setSunDirection({ elevation, azimuth, raw = false }: { elevation: number; azimuth: number; raw?: boolean }) {
+    this._sunMode = 'manual'
     this._elevation = elevation
     this._azimuth = azimuth
     this._sunRaw = raw
@@ -367,7 +441,11 @@ export class Sky {
    */
   setGrade(grade: string | SkyGrade | SkyGradeInput | SkyGradeKeyInput[] | SkyGradeJSON | null): SkyGrade | null {
     const resolved = grade === null ? null : resolveGrade(grade)
+    const previous = this.baker.grade
     this.baker.setGrade(resolved)
+    // A repeated clear is still a host assignment. Editors comparing with the
+    // physical sky must observe it and relinquish their temporary null slot.
+    if (previous === resolved) for (const listener of this._gradeFacadeListeners) listener(resolved)
     return resolved
   }
 
@@ -390,7 +468,9 @@ export class Sky {
     this._north = heading
     // Re-emit the current azimuth through the new heading — unless the last
     // sun was set `raw`, in which case there is no north to apply.
+    const mode = this._sunMode
     this.setSunDirection({ elevation: this._elevation, azimuth: this._azimuth, raw: this._sunRaw })
+    this._sunMode = mode
     this._refreshStarOrientation()
     for (const fn of this._northListeners) fn()
     return this
@@ -417,13 +497,16 @@ export class Sky {
    * in-shader on the sky mesh, tinted by transmittance-to-space, so it
    * reddens and dims naturally near the horizon and disappears once the
    * view ray intersects the planet — there is no separate sun sprite/mesh
-   * to manage.
+   * to manage. `intensity` scales disc radiance independently of scene light.
    */
-  setSunDisc(visible: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number }) {
+  setSunDisc(
+    visible: boolean | { visible?: boolean; angularDiameter?: number; edgeSoftness?: number; intensity?: number },
+  ) {
     if (typeof visible === 'object' && visible !== null) {
       if (typeof visible.angularDiameter === 'number') {
         this.baker.sky.setSunAngularRadius(visible.angularDiameter * 0.5, visible.edgeSoftness)
       }
+      if (typeof visible.intensity === 'number') this.baker.sky.sunDiscIntensity.value = visible.intensity
 
       if (typeof visible.visible === 'boolean') {
         this.baker.sky.showSunDisc.value = visible.visible ? 1.0 : 0.0
@@ -475,6 +558,7 @@ export class Sky {
   }
 
   setAtmosphere(partial: any) {
+    this._presetName = null
     // Explicit Mie values define a new turbidity-1 baseline. Merge them onto
     // the current baseline, not the live (turbidity-scaled) values: otherwise
     // a partial like `{ mieScattering }` keeps extinction/absorption at the
@@ -590,6 +674,7 @@ export class Sky {
     this.baker.setAtmosphereParams(params)
     this._captureBaseMie(params)
     this._turbidity = 1.0
+    this._presetName = name
     return this
   }
 
@@ -627,6 +712,7 @@ export class Sky {
    */
   update(camera: any, opts: any = {}) {
     if (camera) {
+      this._planetFrame = !!opts.planetCenter
       this.baker.setCamera(camera, opts)
 
       if (this._cameraFar) this._cameraFar.value = camera.far
@@ -892,6 +978,7 @@ export class Sky {
     this._hazeApplied = false
     this._fog = undefined
     this._northListeners.clear()
+    this._gradeFacadeListeners.clear()
   }
 
   _refreshSunFromTime() {
@@ -901,6 +988,7 @@ export class Sky {
       dayOfYear: this._dayOfYear,
     })
     this.setSunDirection({ elevation, azimuth })
+    this._sunMode = 'time'
     this._refreshStarOrientation()
   }
 }

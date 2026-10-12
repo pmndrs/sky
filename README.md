@@ -220,6 +220,21 @@ skybox.followCamera(camera)
 
 ## Demo gallery
 
+### Embedded Sky Editor
+
+Open the grade authoring tool and physical atmosphere controls over your own scene:
+
+```js
+import { createSkyEditor } from '@pmndrs/sky/editor'
+
+const editor = createSkyEditor({ sky, renderer, open: false })
+editSkyButton.addEventListener('click', () => editor.toggle())
+// In the existing loop: editor.update(dt) before sky.update(camera),
+// then editor.render() after your scene render.
+```
+
+The optional editor entry includes the timeline, dome preview, undo/redo, grade import/export, sun controls and physical atmosphere settings. See the [integration guide](./docs/guides/sky-editor.mdx) and [floating editor example](./examples/vanilla/26-floating-sky-editor.html).
+
 Every example lives in [`examples/vanilla`](./examples/vanilla) and is
 published at **[sky.docs.pmnd.rs/examples](https://sky.docs.pmnd.rs/examples/)** —
 baked sky, aerial-perspective haze, planet-scale ground-to-orbit, individual

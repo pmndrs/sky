@@ -1,0 +1,158 @@
+---
+title: Embedded Sky Editor
+description: Open a floating vanilla editor over your own scene to author grades and tune the physical atmosphere.
+---
+
+Import `@pmndrs/sky/editor` to open a Sky Editor over your app's existing scene. It includes the grade timeline, dome preview, zone controls, gradients, night fill, undo/redo and grade files, plus controls for the physical sun and atmosphere.
+
+The editor uses your existing `Sky` and initialized WebGPU renderer. Your app keeps its camera, rendering, lighting and post-processing. The editor entry has no React dependency and importing it does not create DOM elements.
+
+## Add the editor
+
+```js
+import { createSkyEditor } from '@pmndrs/sky/editor'
+
+// sky and renderer already belong to your app.
+const editor = createSkyEditor({
+  sky,
+  renderer,
+  container: document.getElementById('game'), // optional; defaults to body
+  open: false,
+})
+
+document.getElementById('edit-sky').addEventListener('click', () => editor.toggle())
+
+// Inside your existing animation loop:
+editor.update(dtSeconds)
+sky.update(camera)
+// Keep sky.updateAerialPerspective() here if your app uses AP haze.
+renderYourScene()
+editor.render()
+
+// When this view is destroyed:
+editor.dispose()
+```
+
+The window can move, resize and collapse. Set `layout: 'embedded'` to mount it in a sidebar instead. Closing retains authored changes, stops editor playback and releases sun control. Disposing removes editor resources and leaves your sky and renderer alive.
+
+The **Grade** tab authors the color treatment. **Sun and Atmosphere** tunes the physical environment: planet preset, sky exposure, turbidity, RGB ground albedo, multi-scattering, sun color and disc appearance, latitude, date and north. Its advanced section exposes scattering and absorption coefficients, density profiles and planet/atmosphere radii with their units. Mie coefficient fields edit the turbidity-1 baseline and reset turbidity to 1.
+
+Use **Physical** to temporarily bypass the grade and compare the underlying simulation. The dome switches to Physical during this comparison; Save grade still exports the authored grade.
+
+## Coordinate with an app clock
+
+The editor initially follows the app's sun without writing time or direction. Time scrubbing, manual elevation navigation and Play day acquire sun control. If your app animates the sun, pause its writes during that session:
+
+```js
+let editingSun = false
+const editor = createSkyEditor({
+  sky,
+  renderer,
+  acquireSunControl: () => {
+    editingSun = true
+    return () => {
+      editingSun = false
+      // Optionally update your simulation clock from sky.getSettings().sun.
+    }
+  },
+})
+
+// In the app loop, before editor.update:
+if (!editingSun) sky.setTimeOfDay(appTime)
+```
+
+Return `false` from `acquireSunControl` when navigation is unavailable. Call `editor.followApp()` to revoke editor control. Closing and collapsing also release it.
+
+Time mode uses the sky's solar time, latitude and day of year. Timeline scrubbing enters manual elevation mode because grade keys are stored by sun elevation, and a latitude/date combination cannot reach every elevation. For a planet-frame camera, selection follows the sun's elevation against local up; manual navigation is unavailable until the host supplies a local-to-world navigation integration.
+
+## Save grades and physical settings
+
+Save grade and Copy JSON use the existing `pmndrs-sky-grade` version 1 format. The file includes the authored colors and keyframes. It can be loaded through `sky.setGrade`, the demo, or React's `grade` prop.
+
+Physical atmosphere and sun configuration are separate from the grade file. Connect the callbacks to your own project storage:
+
+```js
+const editor = createSkyEditor({
+  sky,
+  renderer,
+  onCommit: ({ grade }) => saveGradeInProject(grade),
+  onSettingsCommit: ({ settings }) => saveEnvironmentInProject(settings),
+  storageKey: 'my-project:sky-draft', // optional local grade draft
+})
+
+const gradeJSON = editor.getGradeJSON()
+editor.loadGrade(gradeJSON) // validates, applies and records one undo step
+```
+
+`onCommit` fires once per completed grade gesture, import, preset change, rename or undo/redo. Time navigation does not create grade commits. `onSettingsCommit` receives a detached settings snapshot when a physical settings control is committed. This snapshot is readback; your app applies saved environment settings through the corresponding `Sky` setters.
+
+Local draft storage is opt-in. A cached draft is offered through **Restore draft** and never automatically overwrites the app's grade. Storage and clipboard failures do not prevent editing; download remains available.
+
+The editor edits the assigned `SkyGrade` by reference. If several skies share that grade, they all see the edits. To author independently, assign `sky.setGrade(sky.grade.clone())` first when a grade is present. External grade changes establish a fresh undo baseline, and a host replacement is respected even during physical comparison.
+
+## Render on demand
+
+Supply `requestRender` if your app does not have a continuous animation loop. Schedule a host frame rather than rendering synchronously inside the callback:
+
+```js
+let pending = false
+let previous = performance.now()
+
+function requestRender() {
+  if (pending) return
+  pending = true
+  requestAnimationFrame((now) => {
+    pending = false
+    editor.update((now - previous) / 1000)
+    previous = now
+    sky.update(camera)
+    renderYourScene()
+    editor.render()
+  })
+}
+
+const editor = createSkyEditor({ sky, renderer, requestRender })
+requestRender()
+```
+
+The editor requests additional frames for playback, UI changes and pending sky/environment work. Hidden or collapsed editor windows do not draw the dome. Preview resolution is capped, and an unchanged preview is not redrawn.
+
+The dome follows renderer tone mapping and output color space. A custom final post-process can make your app scene look different; use the app scene as the reference for the final look.
+
+## Input and host effects
+
+Styles stay inside the editor's Shadow DOM. Shortcuts work while the editor has focus and do not replace normal text editing. Canvas operations have equivalent keyframe controls and a zone selector.
+
+If the app listens for global game input, use `onFocusChange` to suspend it while the editor is focused:
+
+```js
+createSkyEditor({
+  sky,
+  renderer,
+  onFocusChange: (focused) => {
+    controls.enabled = !focused
+  },
+  capabilities: { ambient: true, haze: true },
+})
+```
+
+Capabilities describe effects the app has already connected. The editor does not create lights, enable stars, or insert haze. Ambient keys only affect scene lighting when a sky ambient helper is connected. Construction choices such as quality and cube size remain with the host app.
+
+Theme the host element using `--sky-editor-bg`, `--sky-editor-panel`, `--sky-editor-line`, `--sky-editor-text` and `--sky-editor-accent` CSS properties. The host element is available as `editor.element`.
+
+## Editor handle
+
+| Member                          | Purpose                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------ |
+| `element`, `isOpen`             | Mount element and current visibility                                     |
+| `open()`, `close()`, `toggle()` | Show or hide the tool                                                    |
+| `followApp()`                   | Stop playback and release editor sun control                             |
+| `update(dtSeconds)`             | Synchronize state and apply playback/queued settings before `sky.update` |
+| `render()`                      | Draw the visible dome after the app render, restoring renderer state     |
+| `getGradeJSON()`                | Detached authored grade JSON, including during comparison                |
+| `loadGrade(json)`               | Load a saved grade as one undoable transaction                           |
+| `dispose()`                     | Release editor resources; safe to call again                             |
+
+`sky.getSettings()` exposes typed detached readback, `sky.onGradeChange(listener)` observes assignments and edits and returns an unsubscribe function, and `sky.needsUpdate` reports pending bake/environment work.
+
+See `26-floating-sky-editor.html` for a small app with its own clock, or `25-sky-grade-editor.html` for the tool over a scene with haze, stars and ambient lighting.

@@ -49,6 +49,7 @@ export default defineConfig({
   server: { port: 5173, open: false },
   resolve: {
     alias: [
+      { find: /^@pmndrs\/sky\/editor$/, replacement: resolve(repoSrc, 'editor/index.ts') },
       { find: '@pmndrs/sky', replacement: resolve(repoSrc, 'index.ts') },
       { find: /^@sky\//, replacement: `${repoSrc}/` },
       ...threeAliases,

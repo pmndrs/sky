@@ -77,9 +77,12 @@ await settle(page, 30)
 await page.evaluate((def) => {
   window.__renderer.toneMapping = window.__THREE.NoToneMapping
   window.__grade.setKeys(def.keys)
-  document.querySelector('#lutTabs button[data-mode=grade]').click()
-  document.getElementById('guides').click() // hide the guides
-  document.getElementById('lutOverlay').style.display = 'none'
+  const root = window.__tool.element.shadowRoot
+  const mode = root.querySelector('[aria-label="Dome preview mode"]')
+  mode.value = 'grade'
+  mode.dispatchEvent(new Event('change', { bubbles: true }))
+  root.querySelector('.overlay').style.display = 'none'
+  window.__preview = new window.__SkyGradePreview(window.__sky, { mode: 'grade', elevationRange: [-12, 90] })
 }, TEST_GRADE)
 
 const srgb = (c) => {
@@ -92,7 +95,7 @@ for (const sunElevation of [0, 10]) {
   await page.evaluate((e) => window.__editor.setElevation(e), sunElevation)
   await settle(page, 40)
   const actualSun = await page.evaluate(() => window.__sky.sunElevation)
-  const el = await page.$('#lutGpu')
+  const el = await page.$('[data-sky-editor] >> canvas[aria-label="Sky dome preview"]')
   const box = await el.boundingBox()
   const png = PNG.sync.read(await el.screenshot())
   fs.writeFileSync(`${OUT}grade-dome-${sunElevation}.png`, PNG.sync.write(png))
@@ -100,7 +103,14 @@ for (const sunElevation of [0, 10]) {
   // Sample a grid, skipping the edges of zones (bilinear table vs analytic twin).
   const samples = []
   for (let gy = 0.04; gy < 0.97; gy += 0.035) {
-    for (let gx = 0.02; gx < 0.99; gx += 0.04) samples.push([gx, gy])
+    // Compare the actual pixel centers. The embedded dome can be much smaller
+    // than the original page, so a one-pixel offset is a sizable angular error.
+    for (let gx = 0.02; gx < 0.99; gx += 0.04) {
+      samples.push([
+        (Math.min(png.width - 1, Math.round(gx * png.width)) + 0.5) / png.width,
+        (Math.min(png.height - 1, Math.round(gy * png.height)) + 0.5) / png.height,
+      ])
+    }
   }
   const expected = await page.evaluate(
     ({ samples, sun }) => {
@@ -127,8 +137,8 @@ for (const sunElevation of [0, 10]) {
     const nearEdge =
       Math.abs(e.elevation) < 3 || Math.abs(e.elevation - 30) < 3 || Math.abs(az - 60) < 6 || Math.abs(az - 120) < 6
     if (nearEdge) continue
-    const px = Math.min(png.width - 1, Math.round(x * png.width))
-    const py = Math.min(png.height - 1, Math.round(y * png.height))
+    const px = Math.min(png.width - 1, Math.floor(x * png.width))
+    const py = Math.min(png.height - 1, Math.floor(y * png.height))
     const o = (py * png.width + px) * 4
     for (let c = 0; c < 3; c++) {
       const err = Math.abs(png.data[o + c] - srgb(e.rgb[c]))

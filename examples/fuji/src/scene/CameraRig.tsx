@@ -2,23 +2,23 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber/webgpu'
 import { Vector3, PerspectiveCamera } from 'three/webgpu'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import type { Settings } from '../settings'
+import type { Settings, PrintLayout } from '../settings'
+import { printFraming } from '../print/framing'
 
 const home = new Vector3(0, 8, 75)
-export function CameraRig({ settings }: { settings: Settings }) {
+export function CameraRig({ settings, layout }: { settings: Settings; layout: PrintLayout }) {
   const { camera, renderer: gl, size } = useThree()
   const aim = useMemo(() => {
     const aspect = size.width / Math.max(size.height, 1)
     // Preserve the full bay in a portrait print, rather than cropping to Fuji alone.
-    const tangent = Math.max(Math.tan((33 * Math.PI) / 360), Math.tan((43 * Math.PI) / 360) / aspect)
-    return new Vector3(0, 8 + tangent * 0.54 * 2575, -2500)
-  }, [size.width, size.height])
+    return new Vector3(0, printFraming(aspect, layout).aimHeight, -2500)
+  }, [size.width, size.height, layout])
   useEffect(() => {
     if (!(camera instanceof PerspectiveCamera)) return
     const aspect = size.width / Math.max(size.height, 1)
-    camera.fov = Math.max(33, (Math.atan(Math.tan((43 * Math.PI) / 360) / aspect) * 360) / Math.PI)
+    camera.fov = printFraming(aspect, layout).fov
     camera.updateProjectionMatrix()
-  }, [camera, size.width, size.height])
+  }, [camera, size.width, size.height, layout])
   const pointer = useRef({ x: 0, y: 0 })
   const manual = useRef<OrbitControls | null>(null)
   const target = useRef(aim.clone())

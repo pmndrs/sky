@@ -1,4 +1,5 @@
 export type Preset = 'dusk' | 'haze' | 'night'
+export type PrintLayout = 'auto' | 'landscape' | 'portrait'
 export const waterDefaults = {
   waveStrength: 0.65,
   waterChoppiness: 0.68,
@@ -35,13 +36,14 @@ export const shadowDefaults = {
   shadowDistance: 90000,
 }
 export const lensDefaults = {
-  cameraExposure: 0.2,
+  cameraExposure: 1,
   sunDiscDiameter: 0.535,
   sunDiscBrightness: 100,
   bloomEnabled: true,
   bloomStrength: 0.08,
   bloomRadius: 0.35,
   bloomThreshold: 2,
+  bloomSoftness: 1,
   glareEnabled: true,
   glareStrength: 0.04,
   glareRadius: 2,
@@ -54,6 +56,7 @@ type FogSettings = typeof fogDefaults
 type LensSettings = typeof lensDefaults
 export interface Settings extends WaterSettings, FogSettings, ShadowSettings, LensSettings {
   preset: Preset
+  timeOfDay: number
   elevation: number
   azimuth: number
   haze: number
@@ -73,6 +76,7 @@ export const presets: Record<Preset, Settings> = {
     ...shadowDefaults,
     ...lensDefaults,
     preset: 'dusk',
+    timeOfDay: 17.575,
     elevation: -1.5,
     azimuth: 256,
     haze: 0.7,
@@ -90,7 +94,9 @@ export const presets: Record<Preset, Settings> = {
     ...fogDefaults,
     ...shadowDefaults,
     ...lensDefaults,
+    cameraExposure: 0.2,
     preset: 'haze',
+    timeOfDay: 17.12,
     elevation: 4,
     azimuth: 256,
     haze: 1.1,
@@ -109,6 +115,7 @@ export const presets: Record<Preset, Settings> = {
     ...shadowDefaults,
     ...lensDefaults,
     preset: 'night',
+    timeOfDay: 18.026,
     elevation: -7,
     azimuth: 280,
     haze: 1.1,

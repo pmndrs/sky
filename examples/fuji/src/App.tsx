@@ -15,11 +15,12 @@ import {
   presets,
   type Preset,
   type Settings,
+  type PrintLayout,
 } from './settings'
 import type { SkySettings } from '@pmndrs/sky'
 import { GradeEditor, type EditorSession } from './sky/GradeEditor'
 import { SceneSkyControls } from './sky/SceneSkyControls'
-import { blendLight, lightSettings, type LightSettings } from './sky/lightTransition'
+import { blendLight, lightSettings, lightTransitionDuration, type LightSettings } from './sky/lightTransition'
 import { createPrintGrade } from './sky/grade'
 
 const fixedWaterKeys = new Set(['waterSlick', 'waterFoam', 'waterFoamBias', 'waterFoamColor'])
@@ -68,6 +69,7 @@ function FrameMeter() {
 
 export function App() {
   const [preset, setPreset] = useState<Preset>('dusk')
+  const [layout, setLayout] = useState<PrintLayout>('auto')
   const [controlsOpen, setControlsOpen] = useState(false)
   const [studioTab, setStudioTab] = useState<'grade' | 'scene'>('scene')
   const [editorHost, setEditorHost] = useState<HTMLDivElement | null>(null)
@@ -91,6 +93,7 @@ export function App() {
       azimuth: { value: presets.dusk.azimuth, render: () => false },
       exposure: { value: presets.dusk.exposure, render: () => false },
       turbidity: { value: presets.dusk.turbidity, render: () => false },
+      timeOfDay: { value: presets.dusk.timeOfDay, render: () => false },
       'Atmospheric depth': folder({
         haze: { value: presets.dusk.haze, min: 0, max: 1.5, step: 0.05, label: 'Distance haze' },
         stars: { value: true, label: 'Stars' },
@@ -123,6 +126,7 @@ export function App() {
           bloomStrength: { value: lensDefaults.bloomStrength, min: 0, max: 1, step: 0.01, label: 'Bloom strength' },
           bloomRadius: { value: lensDefaults.bloomRadius, min: 0, max: 1, step: 0.01, label: 'Bloom spread' },
           bloomThreshold: { value: lensDefaults.bloomThreshold, min: 0, max: 20, step: 0.1, label: 'Bloom threshold' },
+          bloomSoftness: { value: lensDefaults.bloomSoftness, min: 0.05, max: 5, step: 0.05, label: 'Bloom softness' },
           glareEnabled: { value: lensDefaults.glareEnabled, label: 'Sun glare / offscreen' },
           glareStrength: {
             value: lensDefaults.glareStrength,
@@ -301,8 +305,7 @@ export function App() {
       ...renderedLight.current,
       ...(current
         ? {
-            elevation: current.sun.elevation,
-            azimuth: current.sun.azimuth,
+            timeOfDay: current.sun.timeOfDay,
             exposure: current.exposure,
             turbidity: current.turbidity,
           }
@@ -313,7 +316,8 @@ export function App() {
     const lightValues = Object.fromEntries(
       Object.entries(nextValues).filter(
         ([key]) =>
-          !(key in waterDefaults) && !(key in fogDefaults) && !(key in shadowDefaults) && !(key in lensDefaults),
+          key === 'cameraExposure' ||
+          (!(key in waterDefaults) && !(key in fogDefaults) && !(key in shadowDefaults) && !(key in lensDefaults)),
       ),
     )
     set(lightValues)
@@ -344,9 +348,10 @@ export function App() {
   useEffect(() => {
     if (!transition) return
     const started = performance.now()
+    const duration = lightTransitionDuration(transition.from.timeOfDay, transition.to.timeOfDay)
     let frame = 0
     const tick = (now: number) => {
-      const progress = Math.min(1, (now - started) / 1800)
+      const progress = Math.min(1, (now - started) / duration)
       setDisplayedLight(blendLight(transition.from, transition.to, progress))
       if (progress < 1) frame = requestAnimationFrame(tick)
       else {
@@ -391,11 +396,13 @@ export function App() {
         settings={settings}
         onPreset={choosePreset}
         controlsOpen={controlsOpen}
+        layout={layout}
+        onLayout={setLayout}
         onToggleControls={() => setControlsOpen((v) => !v)}>
         <SceneBoundary>
           {gpu === true ? (
             <WebGPUCanvas>
-              <CameraRig settings={settings} />
+              <CameraRig settings={settings} layout={layout} />
               <Atmosphere settings={settings} sceneOwnsSun={sceneOwnsSun}>
                 <Coast settings={settings} />
                 <GradeEditor
@@ -404,7 +411,10 @@ export function App() {
                   onReady={onEditorReady}
                   onClose={() => setControlsOpen(false)}
                   onFocus={setEditorFocused}
-                  onSunControl={stopTransition}
+                  onSunControl={() => {
+                    stopTransition()
+                    setSceneOwnsSun(true)
+                  }}
                   onSettingsCommit={onSettingsCommit}
                 />
               </Atmosphere>

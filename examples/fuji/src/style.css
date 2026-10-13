@@ -241,6 +241,48 @@ a {
   font-size: 8px;
   letter-spacing: 0.06em;
 }
+.print-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.print-layouts {
+  display: flex;
+  gap: 3px;
+}
+.print-layouts button {
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  border: 0;
+  background: none;
+  color: inherit;
+}
+.print-layouts button[aria-pressed='true'],
+.print-layouts button:hover {
+  color: var(--red);
+}
+.print-gallery[data-layout='landscape'] .print-image {
+  height: auto;
+  aspect-ratio: 12 / 5;
+}
+.print-gallery[data-layout='portrait'] {
+  max-width: 700px;
+}
+.print-gallery[data-layout='portrait'] .coastal-print {
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 2 / 3;
+}
+.print-gallery[data-layout='portrait'] .print-image {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+.print-gallery[data-layout='portrait'] .print-caption {
+  flex: none;
+}
 .print-presets {
   display: flex;
   align-items: center;
@@ -680,7 +722,31 @@ a {
     padding-top: 17px;
   }
   .print-location {
-    display: none;
+    display: inline;
+  }
+  .print-meta {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+  .print-gallery[data-layout='landscape'] .print-cartouche {
+    top: 12px;
+    right: 12px;
+    gap: 6px;
+  }
+  .print-gallery[data-layout='landscape'] .cartouche-title {
+    padding: 8px 6px;
+    gap: 7px;
+  }
+  .print-gallery[data-layout='landscape'] .cartouche-title span {
+    font-size: 13px;
+  }
+  .print-gallery[data-layout='landscape'] .cartouche-title span + span {
+    font-size: 7px;
+  }
+  .print-gallery[data-layout='landscape'] .cartouche-seal {
+    width: 22px;
+    height: 24px;
+    font-size: 7px;
   }
   .print-presets {
     padding-left: 8px;

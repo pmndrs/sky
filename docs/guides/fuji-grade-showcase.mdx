@@ -19,6 +19,8 @@ Sagami Bay is a practical example of an authored sky grade inside a styled app. 
 
 Select **Preview visible sun** at the top of Scene & print for a visible glowing disc: Haze, 4° elevation, 256° heading, 1.2° diameter, brightness 150 and Camera exposure 0.2. **Sun diameter (°)** adjusts the core's angular size, while glare radius adjusts the surrounding glow. Reset returns to 0.535°, the physical starting size; larger values are an artistic override for the wide composition. Dusk and Night normally place the sun below the horizon. Camera exposure and explicit ACES filmic output keep the core from disappearing into a pale, clipped background.
 
+**Bloom softness** smooths the brightness threshold, while Bloom spread changes the blur radius. The demo uses a broad threshold transition to avoid tracing a sharp colour contour through the smooth graded sky. These controls affect the final camera image; they leave the grade data and atmospheric scattering unchanged.
+
 ## Run it locally
 
 ```sh

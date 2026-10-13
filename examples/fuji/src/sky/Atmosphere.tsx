@@ -51,6 +51,7 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
       cameraExposure: uniform(settings.cameraExposure),
       radius: uniform(settings.bloomRadius),
       threshold: uniform(settings.bloomThreshold),
+      softness: uniform(settings.bloomSoftness),
       source: uniform(new Vector2()),
       sourceColor: uniform(new Vector3()),
       aspect: uniform(1),
@@ -76,6 +77,7 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
     lens.cameraExposure.value = settings.cameraExposure
     lens.radius.value = settings.bloomRadius
     lens.threshold.value = settings.bloomThreshold
+    lens.softness.value = settings.bloomSoftness
     lens.glareStrength.value = settings.glareStrength
     lens.veil.value = settings.glareVeil
   }, [
@@ -84,6 +86,7 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
     settings.bloomStrength,
     settings.bloomRadius,
     settings.bloomThreshold,
+    settings.bloomSoftness,
     settings.glareStrength,
     settings.glareVeil,
   ])
@@ -191,6 +194,10 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
       bloomPass.strength = lens.strength
       bloomPass.radius = lens.radius
       bloomPass.threshold = lens.threshold
+      // Three's default 0.01 transition acts almost like a switch through a
+      // smooth sky, tracing brightness contours. Feather it independently
+      // from the spatial blur radius to retain a continuous gradient.
+      bloomPass.smoothWidth = lens.softness
     }
     const developed = bloomPass ? vec4(hdr.rgb.add(bloomPass.rgb), hdr.a) : hdr
     // Explicit filmic output: the WebGPU root may use NoToneMapping. Raw HDR
@@ -346,8 +353,7 @@ export function Atmosphere({
       north={254}
       latitude={35.3}
       dayOfYear={284}
-      timeOfDay={18.5}
-      sunDirection={sceneOwnsSun ? undefined : { elevation: settings.elevation, azimuth: settings.azimuth }}
+      timeOfDay={sceneOwnsSun ? undefined : settings.timeOfDay}
       sunDisc
       exposure={settings.exposure}
       turbidity={settings.turbidity}

@@ -442,7 +442,7 @@ export function App() {
                 highlight2: '#393d36',
                 highlight3: '#262d28',
               },
-              sizes: { rootWidth: '100%', controlWidth: '160px' },
+              sizes: { rootWidth: '100%', controlWidth: '160px', numberInputMinWidth: '54px' },
               radii: { xs: '1px', sm: '2px', lg: '3px' },
             }}
           />

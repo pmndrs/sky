@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "allowJs": true,
+    "baseUrl": ".",
+    "paths": {
+      "@pmndrs/sky": ["../../src/index.ts"],
+      "@pmndrs/sky/react": ["../../src/react/index.ts"],
+      "@pmndrs/sky/editor": ["../../src/editor/index.ts"],
+      "three/tsl": ["../../types/three-tsl.d.ts"]
+    }
+  },
+  "include": ["src"]
+}

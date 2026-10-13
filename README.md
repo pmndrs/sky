@@ -239,6 +239,8 @@ helper when done. See [Night sky](./docs/guides/night-sky.mdx) and the
 
 ### Embedded Sky Editor
 
+The [Sagami Bay showcase](https://sky.docs.pmnd.rs/guides/fuji-grade-showcase) embeds the editor in a coastal print's sidebar. Run `pnpm example:fuji` to author one grade across the sky, sea lighting and distant haze; the Haze/Dusk/Night editions animate without resetting your grade.
+
 Open the grade authoring tool and physical atmosphere controls over your own scene:
 
 ```js

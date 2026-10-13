@@ -78,7 +78,8 @@
     "ci": "pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm format",
     "example": "pnpm --filter @pmndrs/sky-example-vanilla dev",
     "example:vanilla": "pnpm --filter @pmndrs/sky-example-vanilla dev",
-    "example:react": "pnpm --filter @pmndrs/sky-example-react dev"
+    "example:react": "pnpm --filter @pmndrs/sky-example-react dev",
+    "example:fuji": "pnpm --filter @pmndrs/sky-example-fuji dev"
   },
   "peerDependencies": {
     "@react-three/fiber": ">=10.0.0-0",

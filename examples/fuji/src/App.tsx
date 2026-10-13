@@ -18,6 +18,7 @@ import {
 } from './settings'
 import type { SkySettings } from '@pmndrs/sky'
 import { GradeEditor, type EditorSession } from './sky/GradeEditor'
+import { SceneSkyControls } from './sky/SceneSkyControls'
 import { blendLight, lightSettings, type LightSettings } from './sky/lightTransition'
 import { createPrintGrade } from './sky/grade'
 
@@ -71,6 +72,8 @@ export function App() {
   const [studioTab, setStudioTab] = useState<'grade' | 'scene'>('scene')
   const [editorHost, setEditorHost] = useState<HTMLDivElement | null>(null)
   const [editorFocused, setEditorFocused] = useState(false)
+  const [editorSession, setEditorSession] = useState<EditorSession | null>(null)
+  const [sceneOwnsSun, setSceneOwnsSun] = useState(false)
   const [gpu, setGpu] = useState<boolean | null>(null)
   const session = useRef<EditorSession | null>(null)
   const renderedLight = useRef(lightSettings(presets.dusk))
@@ -78,6 +81,7 @@ export function App() {
   const [transition, setTransition] = useState<{ from: LightSettings; to: LightSettings } | null>(null)
   const onEditorReady = useCallback((value: EditorSession | null) => {
     session.current = value
+    setEditorSession(value)
   }, [])
   const [values, set] = useControls(
     () => ({
@@ -87,32 +91,60 @@ export function App() {
       azimuth: { value: presets.dusk.azimuth, render: () => false },
       exposure: { value: presets.dusk.exposure, render: () => false },
       turbidity: { value: presets.dusk.turbidity, render: () => false },
-      'Sun & lens': folder({
-        sunDiscBrightness: {
-          value: lensDefaults.sunDiscBrightness,
-          min: 0,
-          max: 500,
-          step: 1,
-          label: 'Sun disc brightness',
-        },
-        bloomEnabled: { value: lensDefaults.bloomEnabled, label: 'Bloom' },
-        bloomStrength: { value: lensDefaults.bloomStrength, min: 0, max: 1, step: 0.01, label: 'Bloom strength' },
-        bloomRadius: { value: lensDefaults.bloomRadius, min: 0, max: 1, step: 0.01, label: 'Bloom spread' },
-        bloomThreshold: { value: lensDefaults.bloomThreshold, min: 0, max: 20, step: 0.1, label: 'Bloom threshold' },
-        glareEnabled: { value: lensDefaults.glareEnabled, label: 'Sun glare / offscreen' },
-        glareStrength: {
-          value: lensDefaults.glareStrength,
-          min: 0,
-          max: 0.5,
-          step: 0.001,
-          pad: 3,
-          label: 'Glare strength',
-        },
-        glareRadius: { value: lensDefaults.glareRadius, min: 0.25, max: 10, step: 0.25, label: 'Glare radius (°)' },
-        glareOffscreen: { value: lensDefaults.glareOffscreen, min: 0, max: 50, step: 1, label: 'Offscreen reach (%)' },
-        glareVeil: { value: lensDefaults.glareVeil, min: 0, max: 0.2, step: 0.001, pad: 3, label: 'Wide glare veil' },
-        'Reset sun & lens': button(() => set(lensDefaults)),
+      'Atmospheric depth': folder({
+        haze: { value: presets.dusk.haze, min: 0, max: 1.5, step: 0.05, label: 'Distance haze' },
+        stars: { value: true, label: 'Stars' },
       }),
+      'Sun & lens': folder(
+        {
+          cameraExposure: {
+            value: lensDefaults.cameraExposure,
+            min: 0.05,
+            max: 2,
+            step: 0.01,
+            label: 'Camera exposure',
+          },
+          sunDiscDiameter: {
+            value: lensDefaults.sunDiscDiameter,
+            min: 0.1,
+            max: 3,
+            step: 0.01,
+            pad: 3,
+            label: 'Sun diameter (°)',
+          },
+          sunDiscBrightness: {
+            value: lensDefaults.sunDiscBrightness,
+            min: 0,
+            max: 500,
+            step: 1,
+            label: 'Sun disc brightness',
+          },
+          bloomEnabled: { value: lensDefaults.bloomEnabled, label: 'Bloom' },
+          bloomStrength: { value: lensDefaults.bloomStrength, min: 0, max: 1, step: 0.01, label: 'Bloom strength' },
+          bloomRadius: { value: lensDefaults.bloomRadius, min: 0, max: 1, step: 0.01, label: 'Bloom spread' },
+          bloomThreshold: { value: lensDefaults.bloomThreshold, min: 0, max: 20, step: 0.1, label: 'Bloom threshold' },
+          glareEnabled: { value: lensDefaults.glareEnabled, label: 'Sun glare / offscreen' },
+          glareStrength: {
+            value: lensDefaults.glareStrength,
+            min: 0,
+            max: 0.5,
+            step: 0.001,
+            pad: 3,
+            label: 'Glare strength',
+          },
+          glareRadius: { value: lensDefaults.glareRadius, min: 0.25, max: 10, step: 0.25, label: 'Glare radius (°)' },
+          glareOffscreen: {
+            value: lensDefaults.glareOffscreen,
+            min: 0,
+            max: 50,
+            step: 1,
+            label: 'Offscreen reach (%)',
+          },
+          glareVeil: { value: lensDefaults.glareVeil, min: 0, max: 0.2, step: 0.001, pad: 3, label: 'Wide glare veil' },
+          'Reset sun & lens': button(() => set(lensDefaults)),
+        },
+        { collapsed: true },
+      ),
       'Shadowed haze': folder(
         {
           shadowHaze: { value: false, label: 'Enable haze shadows' },
@@ -123,10 +155,6 @@ export function App() {
         },
         { collapsed: true },
       ),
-      'Atmospheric depth': folder({
-        haze: { value: presets.dusk.haze, min: 0, max: 1.5, step: 0.05, label: 'Haze density' },
-        stars: { value: true, label: 'Stars' },
-      }),
       'Ground fog': folder(
         {
           groundFog: { value: fogDefaults.groundFog, label: 'Enable ground fog' },
@@ -266,6 +294,7 @@ export function App() {
     [preset],
   )
   function choosePreset(next: Preset) {
+    setSceneOwnsSun(false)
     session.current?.editor.followApp()
     const current = session.current?.sky.getSettings()
     const from = {
@@ -305,7 +334,12 @@ export function App() {
   function onSettingsCommit(settings: SkySettings) {
     stopTransition()
     // Sun navigation stays with the editor until an edition button acquires it.
-    set({ exposure: settings.exposure, turbidity: settings.turbidity, sunDiscBrightness: settings.sun.disc.intensity })
+    set({
+      exposure: settings.exposure,
+      turbidity: settings.turbidity,
+      sunDiscBrightness: settings.sun.disc.intensity,
+      sunDiscDiameter: (settings.sun.disc.angularDiameter * 180) / Math.PI,
+    })
   }
   useEffect(() => {
     if (!transition) return
@@ -362,7 +396,7 @@ export function App() {
           {gpu === true ? (
             <WebGPUCanvas>
               <CameraRig settings={settings} />
-              <Atmosphere settings={settings}>
+              <Atmosphere settings={settings} sceneOwnsSun={sceneOwnsSun}>
                 <Coast settings={settings} />
                 <GradeEditor
                   container={editorHost}
@@ -425,6 +459,28 @@ export function App() {
           role="tabpanel"
           aria-labelledby="scene-tab"
           hidden={studioTab !== 'scene'}>
+          <SceneSkyControls
+            session={editorSession}
+            active={controlsOpen && studioTab === 'scene'}
+            onNavigate={() => {
+              stopTransition()
+              setSceneOwnsSun(true)
+            }}
+            onSettingsCommit={onSettingsCommit}
+            onPreview={() => {
+              choosePreset('haze')
+              set({
+                cameraExposure: 0.2,
+                sunDiscDiameter: 1.2,
+                sunDiscBrightness: 150,
+                bloomEnabled: true,
+                bloomStrength: 0.12,
+                glareEnabled: true,
+                glareStrength: 0.04,
+                glareVeil: 0.005,
+              })
+            }}
+          />
           <Leva
             fill
             hidden={false}

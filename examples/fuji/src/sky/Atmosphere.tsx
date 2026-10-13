@@ -5,6 +5,7 @@ import { Sky, useSky } from '@pmndrs/sky/react'
 import type { SkySun } from '@pmndrs/sky'
 import {
   AdditiveBlending,
+  ACESFilmicToneMapping,
   Box3,
   RenderPipeline,
   Vector2,
@@ -47,6 +48,7 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
   const lens = useMemo(
     () => ({
       strength: uniform(settings.bloomStrength),
+      cameraExposure: uniform(settings.cameraExposure),
       radius: uniform(settings.bloomRadius),
       threshold: uniform(settings.bloomThreshold),
       source: uniform(new Vector2()),
@@ -71,12 +73,14 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
   )
   useEffect(() => {
     lens.strength.value = settings.bloomStrength
+    lens.cameraExposure.value = settings.cameraExposure
     lens.radius.value = settings.bloomRadius
     lens.threshold.value = settings.bloomThreshold
     lens.glareStrength.value = settings.glareStrength
     lens.veil.value = settings.glareVeil
   }, [
     lens,
+    settings.cameraExposure,
     settings.bloomStrength,
     settings.bloomRadius,
     settings.bloomThreshold,
@@ -189,7 +193,10 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
       bloomPass.threshold = lens.threshold
     }
     const developed = bloomPass ? vec4(hdr.rgb.add(bloomPass.rgb), hdr.a) : hdr
-    const antialiased = fxaa(renderOutput(developed))
+    // Explicit filmic output: the WebGPU root may use NoToneMapping. Raw HDR
+    // clipping makes both the surrounding sky and solar core the same white.
+    const exposed = vec4(developed.rgb.mul(lens.cameraExposure), developed.a)
+    const antialiased = fxaa(renderOutput(exposed, ACESFilmicToneMapping))
     const printed = paperFinish(antialiased as unknown as Node<'vec4'>, paper, ink)
     // Same triangular 8-bit dither as sky.ditherOutput, split around the paper
     // pass so grain is applied in display space and dither remains the final step.
@@ -238,8 +245,11 @@ function SkyLighting({ settings }: { settings: Settings }) {
   }, [sky, scene])
 
   useEffect(() => {
-    sky?.setSunDisc({ intensity: settings.sunDiscBrightness })
-  }, [sky, settings.sunDiscBrightness])
+    sky?.setSunDisc({
+      intensity: settings.sunDiscBrightness,
+      angularDiameter: (settings.sunDiscDiameter * Math.PI) / 180,
+    })
+  }, [sky, settings.sunDiscBrightness, settings.sunDiscDiameter])
 
   useEffect(() => {
     if (!sky || !sun) return
@@ -259,7 +269,7 @@ function SkyLighting({ settings }: { settings: Settings }) {
       removeSun()
       removeBake()
     }
-  }, [sky, sun, scene, renderer])
+  }, [sky, sun, scene, renderer, settings.sunDiscDiameter])
 
   useLayoutEffect(() => {
     if (!sky || !sun) return
@@ -311,7 +321,15 @@ function SkyLighting({ settings }: { settings: Settings }) {
   return sun ? <PrintPipeline settings={settings} sun={sun} /> : null
 }
 
-export function Atmosphere({ settings, children }: { settings: Settings; children: ReactNode }) {
+export function Atmosphere({
+  settings,
+  children,
+  sceneOwnsSun,
+}: {
+  settings: Settings
+  children: ReactNode
+  sceneOwnsSun: boolean
+}) {
   // One authored grade across every light. Editor edits and imported grades
   // persist when the visitor switches editions or adjusts scene controls.
   const grade = useMemo(() => createPrintGrade(0.5), [])
@@ -329,7 +347,7 @@ export function Atmosphere({ settings, children }: { settings: Settings; childre
       latitude={35.3}
       dayOfYear={284}
       timeOfDay={18.5}
-      sunDirection={{ elevation: settings.elevation, azimuth: settings.azimuth }}
+      sunDirection={sceneOwnsSun ? undefined : { elevation: settings.elevation, azimuth: settings.azimuth }}
       sunDisc
       exposure={settings.exposure}
       turbidity={settings.turbidity}

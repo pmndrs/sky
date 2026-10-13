@@ -35,6 +35,8 @@ export const shadowDefaults = {
   shadowDistance: 90000,
 }
 export const lensDefaults = {
+  cameraExposure: 0.2,
+  sunDiscDiameter: 0.535,
   sunDiscBrightness: 100,
   bloomEnabled: true,
   bloomStrength: 0.08,

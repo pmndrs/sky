@@ -14,7 +14,10 @@ Sagami Bay is a practical example of an authored sky grade inside a styled app. 
 3. Select a keyframe or navigate the sun in the editor, then adjust a zone colour or gradient. Watch the sky, reflected light and distant terrain together.
 4. Use **Physical** to compare the ungraded atmosphere. Undo/redo, grade presets, Load, Save grade and Copy JSON work through the same editor as the generic demos.
 5. Open **Scene & print** to tune paper, water and atmospheric depth. These edits leave your grade intact. **Restore Fuji grade** returns to the starting grade and can be undone.
+   Time of day, sun elevation/heading, sky brightness and haze/turbidity are at the top; distance haze follows immediately below. Time navigation uses the solar clock, while elevation/heading select a manual position. Choosing an edition returns solar control to the app.
 6. Open **Sun & lens** to tune the solar source. Disc brightness is separate from scene illumination. Bloom strength, spread and threshold affect the sun and bright water glints; glare strength, radius, offscreen reach and wide veil control the camera glow, including when the sun is just outside the frame. Offscreen reach is a percentage of the frame size beyond each edge; zero disables the offscreen extension. Bloom and glare have independent toggles and a shared reset. Edition changes retain these choices.
+
+Select **Preview visible sun** at the top of Scene & print for a visible glowing disc: Haze, 4° elevation, 256° heading, 1.2° diameter, brightness 150 and Camera exposure 0.2. **Sun diameter (°)** adjusts the core's angular size, while glare radius adjusts the surrounding glow. Reset returns to 0.535°, the physical starting size; larger values are an artistic override for the wide composition. Dusk and Night normally place the sun below the horizon. Camera exposure and explicit ACES filmic output keep the core from disappearing into a pale, clipped background.
 
 ## Run it locally
 

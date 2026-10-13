@@ -14,6 +14,7 @@ Sagami Bay is a practical example of an authored sky grade inside a styled app. 
 3. Select a keyframe or navigate the sun in the editor, then adjust a zone colour or gradient. Watch the sky, reflected light and distant terrain together.
 4. Use **Physical** to compare the ungraded atmosphere. Undo/redo, grade presets, Load, Save grade and Copy JSON work through the same editor as the generic demos.
 5. Open **Scene & print** to tune paper, water and atmospheric depth. These edits leave your grade intact. **Restore Fuji grade** returns to the starting grade and can be undone.
+6. Open **Sun & lens** to tune the solar source. Disc brightness is separate from scene illumination. Bloom strength, spread and threshold affect the sun and bright water glints; glare strength, radius, offscreen reach and wide veil control the camera glow, including when the sun is just outside the frame. Offscreen reach is a percentage of the frame size beyond each edge; zero disables the offscreen extension. Bloom and glare have independent toggles and a shared reset. Edition changes retain these choices.
 
 ## Run it locally
 
@@ -32,7 +33,7 @@ One starting `SkyGrade` is supplied to the sky. Light editions change the physic
 
 Grade changes reach the sky's IBL and the app's cached reflection captures through the existing bake listener. The scene's paper finish runs after haze and tone mapping, preserving the grade's linear-light operation.
 
-`SkySun.attach(scene)` also adds the visible sun disc, with terrain depth hiding it as it sets. The demo calls `sky.setSunDisc({ intensity: 2 })` to keep the disc warm and visible against the exposed cream sky. This adjusts the visible source independently of the sunlight illuminating the water; the disc is excluded from reflection captures to avoid duplicating the direct-light highlight.
+`SkySun.attach(scene)` also adds the visible sun disc, with terrain depth hiding it as it sets. The demo gives this disc's material additive blending, retaining the background atmosphere beneath its emission without changing library shaders. Disc intensity starts at 100 to retain HDR headroom for bloom, independently of sunlight illuminating the water. The demo adds bloom and an optional sun-direction lens glare after haze/fog but before tone mapping and paper. The camera glare follows atmospheric attenuation and terrain visibility and fades beyond a small offscreen margin. These are camera effects; they do not alter the sky shader, atmospheric scattering, or cached water captures. The disc is excluded from reflection captures to avoid duplicating the direct-light highlight.
 
 The coastal geometry is composed, rather than surveyed. Distant land is excluded from water captures as art direction for the reference composition. Nearby rocks and structures still reflect; terrain visibility still removes the direct sun highlight as the sun sets. Water simulation retains Tidewater's MIT attribution.
 

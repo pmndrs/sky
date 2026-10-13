@@ -1,13 +1,23 @@
-import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as fiber from '@react-three/fiber/webgpu'
 import { setRenderOverride, useStore } from '@react-three/fiber'
 import { Sky, useSky } from '@pmndrs/sky/react'
 import type { SkySun } from '@pmndrs/sky'
-import { Box3, RenderPipeline, Vector3, type Node } from 'three/webgpu'
+import {
+  AdditiveBlending,
+  Box3,
+  RenderPipeline,
+  Vector2,
+  Vector3,
+  type Node,
+  type PerspectiveCamera,
+} from 'three/webgpu'
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js'
+import { bloom } from 'three/addons/tsl/display/BloomNode.js'
 import {
   abs,
   dot,
+  exp,
   float,
   fract,
   pass,
@@ -16,6 +26,7 @@ import {
   sign,
   sqrt,
   uniform,
+  screenUV,
   vec2,
   vec4,
 } from 'three/tsl'
@@ -23,6 +34,7 @@ import { paperFinish } from '../print/paper'
 import type { Settings } from '../settings'
 import { createPrintGrade } from './grade'
 import { terrainSunVisibility } from '../scene/terrainSunVisibility.js'
+import { projectSunGlare } from '../print/sunGlare'
 
 function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
   const sky = useSky()
@@ -32,6 +44,89 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
   const camera = fiber.useThree((state) => state.camera)
   const paper = useMemo(() => uniform(settings.paper), [])
   const ink = useMemo(() => uniform(settings.ink), [])
+  const lens = useMemo(
+    () => ({
+      strength: uniform(settings.bloomStrength),
+      radius: uniform(settings.bloomRadius),
+      threshold: uniform(settings.bloomThreshold),
+      source: uniform(new Vector2()),
+      sourceColor: uniform(new Vector3()),
+      aspect: uniform(1),
+      glareRadius: uniform(0.01),
+      glareStrength: uniform(settings.glareStrength),
+      veil: uniform(settings.glareVeil),
+    }),
+    [],
+  )
+  const latest = useRef(settings)
+  latest.current = settings
+  const visibility = useMemo(
+    () => ({
+      eye: new Vector3(NaN, NaN, NaN),
+      direction: new Vector3(),
+      radius: NaN,
+      fraction: 0,
+    }),
+    [],
+  )
+  useEffect(() => {
+    lens.strength.value = settings.bloomStrength
+    lens.radius.value = settings.bloomRadius
+    lens.threshold.value = settings.bloomThreshold
+    lens.glareStrength.value = settings.glareStrength
+    lens.veil.value = settings.glareVeil
+  }, [
+    lens,
+    settings.bloomStrength,
+    settings.bloomRadius,
+    settings.bloomThreshold,
+    settings.glareStrength,
+    settings.glareVeil,
+  ])
+  fiber.useFrame(
+    () => {
+      if (!sky) return
+      const settings = latest.current
+      const direction = sky.baker.sky.sunDirection.value
+      camera.updateMatrixWorld()
+      const projected = projectSunGlare(
+        camera as PerspectiveCamera,
+        direction,
+        settings.glareRadius,
+        settings.glareOffscreen,
+      )
+      // Camera optics use source visibility from this eye, rather than the
+      // bay-level visibility that gates illumination of the water.
+      const radius = Math.acos(sky.baker.sky.sunDiscCos.value)
+      if (
+        settings.glareEnabled &&
+        projected.visibility > 0 &&
+        sun.light.intensity > 0 &&
+        (!visibility.eye.equals(camera.position) ||
+          !visibility.direction.equals(direction) ||
+          visibility.radius !== radius)
+      ) {
+        visibility.fraction = terrainSunVisibility(scene, direction, camera.position, radius)
+        visibility.eye.copy(camera.position)
+        visibility.direction.copy(direction)
+        visibility.radius = radius
+      }
+      const visible =
+        settings.glareEnabled && sun.light.intensity > 0 && sky.baker.sky.showSunDisc.value > 0
+          ? visibility.fraction
+          : 0
+      const requested = sun.intensity
+      const exposure = sky.baker.sky.luminanceScale.value
+      const transmission = requested > 0 ? sun.light.intensity / (requested * Math.max(exposure, 1e-6)) : 0
+      const energy = sky.baker.sky.sunDiscIntensity.value * transmission * visible * projected.visibility
+      lens.source.value.set(projected.x, projected.y)
+      lens.glareRadius.value = projected.radius
+      lens.aspect.value = (camera as PerspectiveCamera).aspect
+      lens.sourceColor.value.set(sun.light.color.r, sun.light.color.g, sun.light.color.b).multiplyScalar(energy)
+      renderer.domElement.dataset.sunGlareVisibility = String(visible * projected.visibility)
+    },
+    { priority: -2 },
+  )
   useEffect(() => {
     paper.value = settings.paper
     ink.value = settings.ink
@@ -79,7 +174,22 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
       scenePass,
       logarithmicDepthBuffer: renderer.logarithmicDepthBuffer,
     })
-    const antialiased = fxaa(renderOutput(fogged))
+    // Preserve HDR headroom for the solar core and bright water reflections.
+    // Lens glare is camera-only: never added to atmosphere LUTs or water IBL.
+    const offset = screenUV.sub(lens.source).mul(vec2(lens.aspect, 1))
+    const d2 = dot(offset, offset).div(lens.glareRadius.mul(lens.glareRadius))
+    const halo = exp(d2.negate()).mul(lens.glareStrength)
+    const veil = exp(d2.mul(-0.04)).mul(lens.veil)
+    const glare = lens.sourceColor.mul(halo.add(veil))
+    const hdr = vec4(fogged.rgb.add(glare), fogged.a)
+    const bloomPass = settings.bloomEnabled ? bloom(hdr, 1, 0, 2) : null
+    if (bloomPass) {
+      bloomPass.strength = lens.strength
+      bloomPass.radius = lens.radius
+      bloomPass.threshold = lens.threshold
+    }
+    const developed = bloomPass ? vec4(hdr.rgb.add(bloomPass.rgb), hdr.a) : hdr
+    const antialiased = fxaa(renderOutput(developed))
     const printed = paperFinish(antialiased as unknown as Node<'vec4'>, paper, ink)
     // Same triangular 8-bit dither as sky.ditherOutput, split around the paper
     // pass so grain is applied in display space and dither remains the final step.
@@ -93,11 +203,12 @@ function PrintPipeline({ settings, sun }: { settings: Settings; sun: SkySun }) {
     return () => {
       if (store.getState().internal.renderOverride === render) setRenderOverride(store, null)
       renderPipeline.dispose()
+      bloomPass?.dispose()
       antialiased.textureNode.dispose()
       antialiased.dispose()
       scenePass.dispose()
     }
-  }, [sky, renderer, scene, camera, store, paper, ink, sun, settings.shadowHaze])
+  }, [sky, renderer, scene, camera, store, paper, ink, lens, sun, settings.shadowHaze, settings.bloomEnabled])
   return null
 }
 
@@ -112,10 +223,10 @@ function SkyLighting({ settings }: { settings: Settings }) {
   useEffect(() => {
     if (!sky) return
     const sun = sky.createSun({ physical: true, intensity: 0.75, castShadow: false })
-    // The scene disc attaches with SkySun. Give this pale, exposed print a
-    // warm visible source instead of clipping the disc into its cream sky.
-    // Disc radiance is independent of the light driving the water highlight.
-    sky.setSunDisc({ intensity: 2 })
+    // Demo-only compositing: retain the existing atmospheric background under
+    // the emissive source, including at low/zero brightness. Terrain depth
+    // still clips it. The library's sky and celestial shaders stay unchanged.
+    sun.disc.material.blending = AdditiveBlending
     const ambient = sky.createAmbient()
     sun.attach(scene)
     ambient.attach(scene)
@@ -125,6 +236,10 @@ function SkyLighting({ settings }: { settings: Settings }) {
       ambient.dispose()
     }
   }, [sky, scene])
+
+  useEffect(() => {
+    sky?.setSunDisc({ intensity: settings.sunDiscBrightness })
+  }, [sky, settings.sunDiscBrightness])
 
   useEffect(() => {
     if (!sky || !sun) return

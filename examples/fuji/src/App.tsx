@@ -7,7 +7,15 @@ import { Coast } from './scene/Coast'
 import { CameraRig } from './scene/CameraRig'
 import { PrintFrame } from './print/PrintFrame'
 import { PrintStudio } from './print/PrintStudio'
-import { waterDefaults, fogDefaults, shadowDefaults, presets, type Preset, type Settings } from './settings'
+import {
+  waterDefaults,
+  fogDefaults,
+  shadowDefaults,
+  lensDefaults,
+  presets,
+  type Preset,
+  type Settings,
+} from './settings'
 import type { SkySettings } from '@pmndrs/sky'
 import { GradeEditor, type EditorSession } from './sky/GradeEditor'
 import { blendLight, lightSettings, type LightSettings } from './sky/lightTransition'
@@ -79,6 +87,32 @@ export function App() {
       azimuth: { value: presets.dusk.azimuth, render: () => false },
       exposure: { value: presets.dusk.exposure, render: () => false },
       turbidity: { value: presets.dusk.turbidity, render: () => false },
+      'Sun & lens': folder({
+        sunDiscBrightness: {
+          value: lensDefaults.sunDiscBrightness,
+          min: 0,
+          max: 500,
+          step: 1,
+          label: 'Sun disc brightness',
+        },
+        bloomEnabled: { value: lensDefaults.bloomEnabled, label: 'Bloom' },
+        bloomStrength: { value: lensDefaults.bloomStrength, min: 0, max: 1, step: 0.01, label: 'Bloom strength' },
+        bloomRadius: { value: lensDefaults.bloomRadius, min: 0, max: 1, step: 0.01, label: 'Bloom spread' },
+        bloomThreshold: { value: lensDefaults.bloomThreshold, min: 0, max: 20, step: 0.1, label: 'Bloom threshold' },
+        glareEnabled: { value: lensDefaults.glareEnabled, label: 'Sun glare / offscreen' },
+        glareStrength: {
+          value: lensDefaults.glareStrength,
+          min: 0,
+          max: 0.5,
+          step: 0.001,
+          pad: 3,
+          label: 'Glare strength',
+        },
+        glareRadius: { value: lensDefaults.glareRadius, min: 0.25, max: 10, step: 0.25, label: 'Glare radius (°)' },
+        glareOffscreen: { value: lensDefaults.glareOffscreen, min: 0, max: 50, step: 1, label: 'Offscreen reach (%)' },
+        glareVeil: { value: lensDefaults.glareVeil, min: 0, max: 0.2, step: 0.001, pad: 3, label: 'Wide glare veil' },
+        'Reset sun & lens': button(() => set(lensDefaults)),
+      }),
       'Shadowed haze': folder(
         {
           shadowHaze: { value: false, label: 'Enable haze shadows' },
@@ -249,7 +283,8 @@ export function App() {
     // Keep the authored grade, water and local fog while comparing light.
     const lightValues = Object.fromEntries(
       Object.entries(nextValues).filter(
-        ([key]) => !(key in waterDefaults) && !(key in fogDefaults) && !(key in shadowDefaults),
+        ([key]) =>
+          !(key in waterDefaults) && !(key in fogDefaults) && !(key in shadowDefaults) && !(key in lensDefaults),
       ),
     )
     set(lightValues)
@@ -270,7 +305,7 @@ export function App() {
   function onSettingsCommit(settings: SkySettings) {
     stopTransition()
     // Sun navigation stays with the editor until an edition button acquires it.
-    set({ exposure: settings.exposure, turbidity: settings.turbidity })
+    set({ exposure: settings.exposure, turbidity: settings.turbidity, sunDiscBrightness: settings.sun.disc.intensity })
   }
   useEffect(() => {
     if (!transition) return

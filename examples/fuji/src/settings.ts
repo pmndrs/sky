@@ -34,10 +34,23 @@ export const shadowDefaults = {
   shadowResolution: 0.5,
   shadowDistance: 90000,
 }
+export const lensDefaults = {
+  sunDiscBrightness: 100,
+  bloomEnabled: true,
+  bloomStrength: 0.08,
+  bloomRadius: 0.35,
+  bloomThreshold: 2,
+  glareEnabled: true,
+  glareStrength: 0.04,
+  glareRadius: 2,
+  glareOffscreen: 20,
+  glareVeil: 0.005,
+}
 type ShadowSettings = typeof shadowDefaults
 type WaterSettings = typeof waterDefaults
 type FogSettings = typeof fogDefaults
-export interface Settings extends WaterSettings, FogSettings, ShadowSettings {
+type LensSettings = typeof lensDefaults
+export interface Settings extends WaterSettings, FogSettings, ShadowSettings, LensSettings {
   preset: Preset
   elevation: number
   azimuth: number
@@ -56,6 +69,7 @@ export const presets: Record<Preset, Settings> = {
     ...waterDefaults,
     ...fogDefaults,
     ...shadowDefaults,
+    ...lensDefaults,
     preset: 'dusk',
     elevation: -1.5,
     azimuth: 256,
@@ -73,6 +87,7 @@ export const presets: Record<Preset, Settings> = {
     ...waterDefaults,
     ...fogDefaults,
     ...shadowDefaults,
+    ...lensDefaults,
     preset: 'haze',
     elevation: 4,
     azimuth: 256,
@@ -90,6 +105,7 @@ export const presets: Record<Preset, Settings> = {
     ...waterDefaults,
     ...fogDefaults,
     ...shadowDefaults,
+    ...lensDefaults,
     preset: 'night',
     elevation: -7,
     azimuth: 280,
